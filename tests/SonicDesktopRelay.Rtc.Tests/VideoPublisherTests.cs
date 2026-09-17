@@ -39,6 +39,19 @@ public sealed class VideoPublisherTests
     }
 
     [Fact]
+    public async Task One_audio_encode_is_fanned_out_to_all_viewer_peers()
+    {
+        var harness = await Harness.StartedAsync();
+        await harness.Publisher.AddViewerAsync(ViewerA, CancellationToken.None);
+        await harness.Publisher.AddViewerAsync(ViewerB, CancellationToken.None);
+
+        harness.AudioCapture.Emit();
+
+        Assert.Equal(1, harness.AudioEncoder.EncodeCalls);
+        Assert.All(harness.Peers.Created, peer => Assert.Single(peer.SentAudioSamples));
+    }
+
+    [Fact]
     public async Task A_removed_viewer_stops_receiving_and_is_disposed()
     {
         var harness = await Harness.StartedAsync();
@@ -162,6 +175,9 @@ public sealed class VideoPublisherTests
         public required FakeCapture Capture { get; init; }
         public required FakeEncoder Encoder { get; init; }
         public required ScreenPublishPipeline Pipeline { get; init; }
+        public required FakeAudioCapture AudioCapture { get; init; }
+        public required FakeAudioEncoder AudioEncoder { get; init; }
+        public required AudioPublishPipeline AudioPipeline { get; init; }
         public required FakePeerFactory Peers { get; init; }
         public required FakeSignaling Signaling { get; init; }
         public required VideoPublisher Publisher { get; init; }
@@ -171,15 +187,25 @@ public sealed class VideoPublisherTests
             var capture = new FakeCapture();
             var encoder = new FakeEncoder();
             var pipeline = new ScreenPublishPipeline(capture, encoder);
+            var audioCapture = new FakeAudioCapture();
+            var audioEncoder = new FakeAudioEncoder();
+            var audioPipeline = new AudioPublishPipeline(
+                audioCapture,
+                audioEncoder,
+                new MediaSessionClock(TimeProvider.System));
             var peers = new FakePeerFactory();
             var signaling = new FakeSignaling();
-            var publisher = new VideoPublisher(pipeline, peers, signaling);
+            var publisher = new VideoPublisher(pipeline, peers, signaling, audioPipeline);
             await pipeline.StartAsync(Monitor, CancellationToken.None);
+            await audioPipeline.StartAsync(CancellationToken.None);
             return new Harness
             {
                 Capture = capture,
                 Encoder = encoder,
                 Pipeline = pipeline,
+                AudioCapture = audioCapture,
+                AudioEncoder = audioEncoder,
+                AudioPipeline = audioPipeline,
                 Peers = peers,
                 Signaling = signaling,
                 Publisher = publisher
@@ -218,6 +244,38 @@ public sealed class VideoPublisherTests
         }
 
         public void RequestKeyFrame() => KeyFrameRequests++;
+        public void Dispose() { }
+    }
+
+    private sealed class FakeAudioCapture : IAudioCaptureSource
+    {
+        public event Action<AudioFrame>? AudioCaptured;
+
+        public Task StartAsync(CancellationToken ct) => Task.CompletedTask;
+
+        public Task StopAsync() => Task.CompletedTask;
+
+        public void Emit() => AudioCaptured?.Invoke(new AudioFrame(
+            new byte[960 * 2 * sizeof(short)],
+            48_000,
+            2,
+            960,
+            TimeSpan.Zero));
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class FakeAudioEncoder : IAudioEncoder
+    {
+        public string Name => "fake-opus";
+        public int EncodeCalls { get; private set; }
+
+        public EncodedAudioSample? Encode(AudioFrame frame)
+        {
+            EncodeCalls++;
+            return new EncodedAudioSample(new byte[24], frame.SampleCount, frame.Duration, frame.Timestamp);
+        }
+
         public void Dispose() { }
     }
 

@@ -51,7 +51,7 @@ public sealed class SipSorceryViewerPeerConnectionTests
     }
 
     [Fact]
-    public async Task The_answer_accepts_the_publishers_opus_audio_track()
+    public async Task The_answer_accepts_opus_as_audio_first_and_recvonly()
     {
         var publisherFactory = new SipSorceryPeerConnectionFactory(Ice);
         await using var publisher = publisherFactory.Create(Guid.NewGuid());
@@ -61,9 +61,17 @@ public sealed class SipSorceryViewerPeerConnectionTests
         await using var viewer = viewerFactory.Create();
         var answer = await viewer.CreateAnswerAsync(offer, CancellationToken.None);
 
-        Assert.Contains("m=audio", answer);
-        Assert.DoesNotContain("m=audio 0", answer, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("OPUS", answer, StringComparison.OrdinalIgnoreCase);
+        var audioStart = answer.IndexOf("m=audio", StringComparison.OrdinalIgnoreCase);
+        var videoStart = answer.IndexOf("m=video", StringComparison.OrdinalIgnoreCase);
+
+        Assert.True(audioStart >= 0, "The answer must contain an audio m-line.");
+        Assert.True(videoStart >= 0, "The answer must contain a video m-line.");
+        Assert.True(audioStart < videoStart, "Audio must remain the BUNDLE-tagged first m-line.");
+
+        var audioSection = answer[audioStart..videoStart];
+        Assert.DoesNotContain("m=audio 0", audioSection, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("OPUS", audioSection, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("a=recvonly", audioSection, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

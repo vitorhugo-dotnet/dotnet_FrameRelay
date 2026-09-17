@@ -180,6 +180,16 @@ public sealed class MediaFoundationH264Decoder : IVideoDecoder
                     throw new NotSupportedException(
                         "asynchronous MFT requires the hardware event pump");
 
+                try
+                {
+                    attributes?.Set(SinkWriterAttributeKeys.LowLatency, true).CheckError();
+                }
+                catch (SharpGenException)
+                {
+                    // Optional on third-party decoders. Failure here must not discard an
+                    // otherwise usable software fallback.
+                }
+
                 var clsid = ReadClsid(activation);
                 _transform = transform;
                 transform = null;

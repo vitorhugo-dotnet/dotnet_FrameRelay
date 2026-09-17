@@ -43,7 +43,6 @@ public sealed class MediaFoundationH264Decoder : IVideoDecoder
     private byte[] _bgra = [];
     private bool _configured;
     private bool _disposed;
-    private bool _terminalFailure;
 
     public MediaFoundationH264Decoder()
     {
@@ -106,7 +105,7 @@ public sealed class MediaFoundationH264Decoder : IVideoDecoder
 
         lock (_gate)
         {
-            if (_terminalFailure || sample.Data.IsEmpty)
+            if (sample.Data.IsEmpty)
                 return null;
 
             try
@@ -115,10 +114,7 @@ public sealed class MediaFoundationH264Decoder : IVideoDecoder
                     Reconfigure(sample.Width, sample.Height);
 
                 using var input = CreateInputSample(sample);
-                var inputResult = _transform!.ProcessInput(0, input, 0);
-                if (inputResult.Failure)
-                    return null;
-
+                _transform!.ProcessInput(0, input, 0);
                 return DrainOutput(sample.Timestamp);
             }
             catch (Exception e) when (
@@ -221,7 +217,7 @@ public sealed class MediaFoundationH264Decoder : IVideoDecoder
 
         using var inputType = MediaFactory.MFCreateMediaType();
         SetVideoTypeCommon(inputType, VideoFormatGuids.H264, width, height);
-        _transform!.SetInputType(0, inputType, 0).CheckError();
+        _transform!.SetInputType(0, inputType, 0);
 
         _visibleWidth = width;
         _visibleHeight = height;
@@ -233,10 +229,10 @@ public sealed class MediaFoundationH264Decoder : IVideoDecoder
 
         _transform.ProcessMessage(
             TMessageType.MessageNotifyBeginStreaming,
-            UIntPtr.Zero).CheckError();
+            UIntPtr.Zero);
         _transform.ProcessMessage(
             TMessageType.MessageNotifyStartOfStream,
-            UIntPtr.Zero).CheckError();
+            UIntPtr.Zero);
         _configured = true;
     }
 
@@ -260,7 +256,7 @@ public sealed class MediaFoundationH264Decoder : IVideoDecoder
                 if (available.GetGUID(MediaTypeAttributeKeys.Subtype) != VideoFormatGuids.NV12)
                     continue;
 
-                _transform!.SetOutputType(0, available, 0).CheckError();
+                _transform!.SetOutputType(0, available, 0);
                 ReadOutputGeometry(available);
                 return;
             }

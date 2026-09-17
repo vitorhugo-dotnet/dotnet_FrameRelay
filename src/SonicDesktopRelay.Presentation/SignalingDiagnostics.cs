@@ -24,8 +24,18 @@ public sealed record SignalingDiagnosticEntry(
 
 public sealed class SignalingDiagnosticBuffer
 {
+    public const int DefaultCapacity = 200;
+
     private readonly object _gate = new();
-    private readonly List<SignalingDiagnosticEntry> _entries = [];
+    private readonly Queue<SignalingDiagnosticEntry> _entries;
+    private readonly int _capacity;
+
+    public SignalingDiagnosticBuffer(int capacity = DefaultCapacity)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(capacity, 1);
+        _capacity = capacity;
+        _entries = new Queue<SignalingDiagnosticEntry>(capacity);
+    }
 
     public event Action<SignalingDiagnosticEntry>? Added;
 
@@ -45,7 +55,10 @@ public sealed class SignalingDiagnosticBuffer
         Action<SignalingDiagnosticEntry>? added;
         lock (_gate)
         {
-            _entries.Add(entry);
+            if (_entries.Count == _capacity)
+                _entries.Dequeue();
+
+            _entries.Enqueue(entry);
             added = Added;
         }
 

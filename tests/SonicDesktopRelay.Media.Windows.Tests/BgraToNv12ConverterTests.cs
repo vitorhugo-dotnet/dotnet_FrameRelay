@@ -45,7 +45,7 @@ public sealed class BgraToNv12ConverterTests
     {
         using var converter = new BgraToNv12Converter();
 
-        Assert.Throws<ArgumentException>(() => converter.Convert(Frame(3, 2, 0, 0, 0)));
+        Assert.Throws<ArgumentException>(() => { converter.Convert(Frame(3, 2, 0, 0, 0)); });
     }
 
     private static VideoFrame Frame(int width, int height, byte b, byte g, byte r)

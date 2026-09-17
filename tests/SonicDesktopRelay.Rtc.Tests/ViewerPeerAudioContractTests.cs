@@ -14,7 +14,11 @@ public sealed class ViewerPeerAudioContractTests
         EncodedAudioSample? received = null;
         peer.AudioSampleReceived += sample => received = sample;
 
-        var expected = new EncodedAudioSample(new byte[] { 1, 2, 3 }, TimeSpan.FromMilliseconds(20), 48_000, 2, 960);
+        var expected = new EncodedAudioSample(
+            new byte[] { 1, 2, 3 },
+            SampleCount: 960,
+            Duration: TimeSpan.FromMilliseconds(20),
+            Timestamp: TimeSpan.Zero);
         fake.ReceiveAudio(expected);
 
         Assert.Equal(expected, received);
@@ -22,9 +26,25 @@ public sealed class ViewerPeerAudioContractTests
 
     private sealed class FakeViewerPeer : IViewerPeerConnection
     {
-        public event Action<string, string?, int?>? IceCandidateGathered;
-        public event Action<EncodedVideoSample>? VideoSampleReceived;
-        public event Action<EncodedAudioSample>? AudioSampleReceived;
+        private event Action<EncodedAudioSample>? AudioReceived;
+
+        public event Action<string, string?, int?>? IceCandidateGathered
+        {
+            add { }
+            remove { }
+        }
+
+        public event Action<EncodedVideoSample>? VideoSampleReceived
+        {
+            add { }
+            remove { }
+        }
+
+        public event Action<EncodedAudioSample>? AudioSampleReceived
+        {
+            add => AudioReceived += value;
+            remove => AudioReceived -= value;
+        }
 
         public Task<string> CreateAnswerAsync(string offerSdp, CancellationToken ct) => Task.FromResult("answer");
 
@@ -35,7 +55,7 @@ public sealed class ViewerPeerAudioContractTests
         {
         }
 
-        public void ReceiveAudio(EncodedAudioSample sample) => AudioSampleReceived?.Invoke(sample);
+        public void ReceiveAudio(EncodedAudioSample sample) => AudioReceived?.Invoke(sample);
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }

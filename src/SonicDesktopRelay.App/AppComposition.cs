@@ -35,9 +35,11 @@ public sealed class AppComposition
             BaseAddress = settings.BaseAddress
         };
 
-        // The publish host needs the very connection the runtime is using — offers and ICE go
-        // out over the same socket the answers come back on — so the factory hands a reference
-        // to whatever it most recently built.
+        // Both media roles need the very connection the runtime is using — offers, answers and
+        // ICE all travel over the same socket — so the factory hands out the decorated current
+        // connection and every outbound frame is observed at one boundary.
+        var signalingDiagnostics = new SignalingDiagnosticBuffer();
+        SessionRuntime? runtime = null;
         ISignalingConnection? current = null;
         var iceApi = new IceApiClient(sessionHttp);
         PublishHost = new RtcVideoPublishHost(iceApi, () => current);
@@ -47,14 +49,20 @@ public sealed class AppComposition
             new SessionApiAdapter(new SessionApiClient(sessionHttp)),
             () =>
             {
-                current = new SignalingConnection(
+                var connection = new SignalingConnection(
                     new ClientWebSocketAdapter(),
                     settings,
                     ct => Identity.GetAccessTokenAsync(deviceName, ct));
+                current = new DiagnosticSignalingConnection(
+                    connection,
+                    signalingDiagnostics,
+                    () => runtime?.Snapshot.Phase ?? SessionPhase.Idle);
                 return current;
             },
             PublishHost,
-            WatchHost);
+            WatchHost,
+            signalingDiagnostics);
+        runtime = Runtime;
     }
 
     public BackendSettings Settings { get; }

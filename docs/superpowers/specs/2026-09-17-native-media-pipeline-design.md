@@ -100,9 +100,15 @@ The clock is not reset by renegotiation or temporary track recovery. Video frame
 - WASAPI loopback capture and playback.
 - Windows-only media diagnostics.
 
-Prefer maintained managed bindings instead of hand-writing the entire COM surface. The implementation should use Vortice bindings for Direct3D/Media Foundation where available and a maintained WASAPI wrapper for endpoint I/O. Any new package must be pinned explicitly in the project file.
+Pinned Windows media dependencies for this implementation:
 
-For Opus, prefer SIPSorcery's existing managed audio codec support/Concentus path. Do not add a native Opus runtime dependency.
+- `Vortice.MediaFoundation` `3.8.3`;
+- upgrade the existing `Vortice.Direct3D11` reference from `3.6.2` to `3.8.3` so the Vortice family is aligned;
+- `NAudio.Wasapi` `3.1.0` for endpoint enumeration, loopback capture and playback;
+- use the modern NAudio 3 APIs (`WasapiRecorder` / `WasapiRecorderBuilder` and `WasapiPlayer` / `WasapiPlayerBuilder`) rather than the obsolete `WasapiLoopbackCapture` / `WasapiOut` APIs;
+- keep `SIPSorcery` at the repository's current `10.0.16` unless compilation proves a documented upstream API is unavailable.
+
+For Opus, prefer SIPSorcery's existing managed audio codec support/Concentus path. Do not add a native Opus runtime dependency. If direct compile-time use of Concentus is required, add an explicit managed package reference rather than depending silently on a transitive package.
 
 ## Video capture and frame bridge
 
@@ -226,13 +232,13 @@ Concrete names may vary, but Windows and SIPSorcery types must not appear in the
 
 ## WASAPI loopback capture
 
-Add a Windows implementation of `IAudioCaptureSource` using shared-mode WASAPI loopback against the current default render endpoint.
+Add a Windows implementation of `IAudioCaptureSource` using `NAudio.Wasapi 3.1.0` in shared-mode loopback against the current default render endpoint. Use the modern `WasapiRecorder` builder API rather than the obsolete NAudio 2-style capture classes.
 
 Normalized capture format for the media pipeline is 48 kHz PCM with an Opus-compatible channel layout. Device-native formats are converted inside the Windows adapter when necessary.
 
 Target framing is approximately 20 ms per encoded Opus packet. Capture callbacks may arrive at different buffer sizes, so a small accumulator assembles exact codec frames without blocking the callback thread.
 
-Default output-device changes are handled by disposing and reopening the loopback endpoint when practical. If recovery fails, audio enters a failed/muted state while video continues.
+Default output-device changes are handled through NAudio's notification APIs by disposing and reopening the loopback endpoint when practical. If recovery fails, audio enters a failed/muted state while video continues.
 
 No Stereo Mix, virtual cable or microphone device is required.
 
@@ -252,7 +258,7 @@ No additional native codec DLL is introduced.
 
 ## Audio playback
 
-Add a Windows `IAudioSink` backed by the normal default render endpoint through WASAPI-compatible playback.
+Add a Windows `IAudioSink` using `NAudio.Wasapi 3.1.0` and the modern `WasapiPlayer` API against the normal default render endpoint.
 
 The sink uses a bounded jitter/playback buffer. On underrun it outputs silence/recovers without blocking video. On sustained overflow it drops the oldest buffered audio rather than allowing unbounded latency growth.
 

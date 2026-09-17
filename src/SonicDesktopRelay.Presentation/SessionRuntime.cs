@@ -13,15 +13,25 @@ public sealed class SessionRuntime(
     ISessionApi api,
     Func<ISignalingConnection> connectionFactory,
     IVideoPublishHost? publishHost = null,
-    IVideoWatchHost? watchHost = null)
+    IVideoWatchHost? watchHost = null,
+    SignalingDiagnosticBuffer? signalingDiagnostics = null)
 {
+    private readonly SignalingDiagnosticBuffer _signalingDiagnostics = signalingDiagnostics ?? new();
     private ISignalingConnection? _connection;
     private bool _isOwner;
     private bool _watchHooked;
 
     public SessionSnapshot Snapshot { get; private set; } = SessionSnapshot.Idle;
 
+    public IReadOnlyList<SignalingDiagnosticEntry> SignalingDiagnostics => _signalingDiagnostics.Entries;
+
     public event Action<SessionSnapshot>? Changed;
+
+    public event Action<SignalingDiagnosticEntry>? SignalingDiagnosticAdded
+    {
+        add => _signalingDiagnostics.Added += value;
+        remove => _signalingDiagnostics.Added -= value;
+    }
 
     public async Task StartSharingAsync(MonitorInfo monitor, int maxViewers, CancellationToken ct)
     {
@@ -158,8 +168,20 @@ public sealed class SessionRuntime(
 
     private void OnFrame(SignalingEnvelope envelope)
     {
-        var sharing = Snapshot.Phase == SessionPhase.Sharing;
-        var watching = Snapshot.Phase == SessionPhase.Watching;
+        var phase = Snapshot.Phase;
+        var signaling = _connection?.State ?? Snapshot.Signaling;
+        var sharing = phase == SessionPhase.Sharing;
+        var watching = phase == SessionPhase.Watching;
+
+        _signalingDiagnostics.Add(new SignalingDiagnosticEntry(
+            DateTimeOffset.Now,
+            SignalingDirection.RX,
+            envelope.Type,
+            phase,
+            signaling,
+            envelope.From,
+            envelope.To,
+            IsHandled(envelope.Type, phase)));
 
         switch (envelope.Type)
         {
@@ -208,6 +230,27 @@ public sealed class SessionRuntime(
                 Publish(SessionSnapshot.Idle);
                 break;
         }
+    }
+
+    private bool IsHandled(string type, SessionPhase phase)
+    {
+        var sharing = phase == SessionPhase.Sharing;
+        var watching = phase == SessionPhase.Watching;
+
+        return type switch
+        {
+            SignalingMessageTypes.PublisherReady when watching => watchHost is not null,
+            SignalingMessageTypes.WebRtcOffer when watching => watchHost is not null,
+            SignalingMessageTypes.WebRtcIceCandidate when watching => watchHost is not null,
+            SignalingMessageTypes.SessionJoined when sharing => true,
+            SignalingMessageTypes.ParticipantReconnected when sharing => true,
+            SignalingMessageTypes.SessionLeft when sharing => true,
+            SignalingMessageTypes.ParticipantDisconnected when sharing => true,
+            SignalingMessageTypes.WebRtcAnswer when sharing => publishHost is not null,
+            SignalingMessageTypes.WebRtcIceCandidate when sharing => publishHost is not null,
+            SignalingMessageTypes.SessionEnded => true,
+            _ => false
+        };
     }
 
     private void AddViewer(SignalingEnvelope envelope)

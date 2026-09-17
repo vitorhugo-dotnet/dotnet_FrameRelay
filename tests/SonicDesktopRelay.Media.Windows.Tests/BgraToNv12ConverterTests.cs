@@ -41,6 +41,20 @@ public sealed class BgraToNv12ConverterTests
     }
 
     [Fact]
+    public void Scaling_produces_the_requested_even_nv12_dimensions()
+    {
+        using var converter = new BgraToNv12Converter();
+        var frame = Frame(4, 4, 0, 0, 0);
+
+        var converted = converter.Convert(frame, 2, 2);
+
+        Assert.Equal(2, converted.Width);
+        Assert.Equal(2, converted.Height);
+        Assert.Equal(6, converted.Length);
+        Assert.Equal(new byte[] {16,16,16,16,128,128}, converted.Buffer.AsSpan(0, converted.Length).ToArray());
+    }
+
+    [Fact]
     public void Odd_dimensions_are_rejected()
     {
         using var converter = new BgraToNv12Converter();

@@ -5,10 +5,9 @@ using SonicDesktopRelay.Media;
 namespace SonicDesktopRelay.Rtc;
 
 /// <summary>
-/// The viewer's connection, backed by SIPSorcery. The video track is <c>recvonly</c>: this
-/// side answers, receives and never sends media. Frames are taken still encoded from
-/// <c>OnVideoFrameReceived</c> — SIPSorcery reassembles the RTP packets into whole access
-/// units, and decoding them is this project's job, not the transport's.
+/// The viewer's connection, backed by SIPSorcery. Audio and video tracks are <c>recvonly</c>:
+/// this side answers, receives and never sends media. Both stay encoded at the transport
+/// boundary; decoding belongs to the independent media pipelines.
 /// </summary>
 public sealed class SipSorceryViewerPeerConnection : IViewerPeerConnection
 {
@@ -19,6 +18,7 @@ public sealed class SipSorceryViewerPeerConnection : IViewerPeerConnection
     private const uint VideoClockRate = 90_000;
 
     private readonly RTCPeerConnection _connection;
+    private readonly ReceivedAudioTimeline _audioTimeline = new();
     private readonly Lock _gate = new();
     private bool _closed;
 
@@ -33,6 +33,14 @@ public sealed class SipSorceryViewerPeerConnection : IViewerPeerConnection
         };
         _connection = new RTCPeerConnection(configuration);
 
+        // Keep audio first. SIPSorcery 10.0.16 currently places BUNDLE ICE candidates on the
+        // audio stream first, so matching the publisher's audio-first offer avoids issue #1763
+        // until upstream fixes candidate placement for video-first bundles.
+        var audioTrack = new MediaStreamTrack(
+            AudioCommonlyUsedFormats.OpusWebRTC,
+            MediaStreamStatusEnum.RecvOnly);
+        _connection.addTrack(audioTrack);
+
         // The same format the publisher offers. packetization-mode=1 is not optional: without
         // it the answer negotiates single-NAL mode and the first frame over an MTU is lost.
         var videoTrack = new MediaStreamTrack(
@@ -44,6 +52,13 @@ public sealed class SipSorceryViewerPeerConnection : IViewerPeerConnection
         {
             if (candidate is null) return;
             IceCandidateGathered?.Invoke(candidate.candidate, candidate.sdpMid, candidate.sdpMLineIndex);
+        };
+
+        _connection.OnAudioFrameReceived += frame =>
+        {
+            if (frame.EncodedAudio is null || frame.EncodedAudio.Length == 0) return;
+            AudioSampleReceived?.Invoke(
+                _audioTimeline.Map(frame.EncodedAudio, frame.DurationMilliSeconds));
         };
 
         _connection.OnVideoFrameReceived += (_, timestamp, frame, _) =>
@@ -72,14 +87,7 @@ public sealed class SipSorceryViewerPeerConnection : IViewerPeerConnection
 
     public event Action<EncodedVideoSample>? VideoSampleReceived;
 
-    // The contract exists before the SIPSorcery receive wiring on purpose. The next TDD step
-    // makes this event observable from OnAudioFrameReceived instead of implementing both
-    // contract and behavior in one unverified jump.
-    public event Action<EncodedAudioSample>? AudioSampleReceived
-    {
-        add { }
-        remove { }
-    }
+    public event Action<EncodedAudioSample>? AudioSampleReceived;
 
     public async Task<string> CreateAnswerAsync(string offerSdp, CancellationToken ct)
     {

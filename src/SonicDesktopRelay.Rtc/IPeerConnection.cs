@@ -25,6 +25,8 @@ public interface IPeerConnection : IAsyncDisposable
     Task AddIceCandidateAsync(string candidate, string? sdpMid, int? sdpMLineIndex, CancellationToken ct);
 
     void SendVideo(EncodedVideoSample sample);
+
+    void SendAudio(EncodedAudioSample sample);
 }
 
 public interface IPeerConnectionFactory

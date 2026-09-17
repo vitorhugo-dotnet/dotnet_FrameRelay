@@ -99,6 +99,19 @@ public sealed class MediaFoundationH264Decoder : IVideoDecoder
 
     public IReadOnlyList<string> RejectionLog => _rejections;
 
+    public NativeVideoDiagnostics Diagnostics => new(
+        "Media Foundation",
+        TransformInfo?.Name ?? Name,
+        TransformInfo?.Clsid ?? Guid.Empty,
+        TransformInfo?.IsHardware ?? false,
+        "H264",
+        "NV12",
+        _visibleWidth,
+        _visibleHeight,
+        0,
+        0,
+        _rejections.ToArray());
+
     public string? LastFailure { get; private set; }
 
     public VideoFrame? Decode(EncodedVideoSample sample)

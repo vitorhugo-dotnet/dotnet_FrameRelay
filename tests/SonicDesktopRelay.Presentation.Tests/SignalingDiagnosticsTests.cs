@@ -1,4 +1,3 @@
-using System.Collections;
 using SonicDesktopRelay.Media;
 using SonicDesktopRelay.Signaling;
 using Xunit;
@@ -30,23 +29,44 @@ public sealed class SignalingDiagnosticsTests
 
         await runtime.StartWatchingAsync("AB12CD", CancellationToken.None);
 
-        var diagnosticsProperty = typeof(SessionRuntime).GetProperty("SignalingDiagnostics");
-        Assert.NotNull(diagnosticsProperty);
+        var entry = Assert.Single(runtime.SignalingDiagnostics);
 
-        var diagnostics = Assert.IsAssignableFrom<IEnumerable>(diagnosticsProperty!.GetValue(runtime));
-        var entry = Assert.Single(diagnostics.Cast<object>());
-
-        Assert.Equal("RX", Read(entry, "Direction")?.ToString());
-        Assert.Equal(SignalingMessageTypes.WebRtcOffer, Read(entry, "Type"));
-        Assert.Equal(SessionPhase.Joining, Read(entry, "Phase"));
-        Assert.Equal(SignalingState.Connected, Read(entry, "Signaling"));
-        Assert.Equal(from, Read(entry, "From"));
-        Assert.Equal(to, Read(entry, "To"));
-        Assert.Equal(false, Read(entry, "Handled"));
+        Assert.Equal(SignalingDirection.RX, entry.Direction);
+        Assert.Equal(SignalingMessageTypes.WebRtcOffer, entry.Type);
+        Assert.Equal(SessionPhase.Joining, entry.Phase);
+        Assert.Equal(SignalingState.Connected, entry.Signaling);
+        Assert.Equal(from, entry.From);
+        Assert.Equal(to, entry.To);
+        Assert.False(entry.Handled);
     }
 
-    private static object? Read(object instance, string propertyName) =>
-        instance.GetType().GetProperty(propertyName)?.GetValue(instance);
+    [Fact]
+    public void Signaling_diagnostics_keep_only_the_newest_200_entries()
+    {
+        var buffer = new SignalingDiagnosticBuffer();
+
+        for (var i = 0; i < 200; i++)
+            buffer.Add(Diagnostic(i));
+
+        Assert.Equal(200, buffer.Entries.Count);
+
+        buffer.Add(Diagnostic(200));
+
+        Assert.Equal(200, buffer.Entries.Count);
+        Assert.Equal("type.1", buffer.Entries[0].Type);
+        Assert.Equal("type.200", buffer.Entries[^1].Type);
+    }
+
+    private static SignalingDiagnosticEntry Diagnostic(int index) =>
+        new(
+            DateTimeOffset.UnixEpoch.AddMilliseconds(index),
+            SignalingDirection.RX,
+            $"type.{index}",
+            SessionPhase.Watching,
+            SignalingState.Connected,
+            null,
+            null,
+            true);
 
     private sealed class FakeSessionApi : ISessionApi
     {

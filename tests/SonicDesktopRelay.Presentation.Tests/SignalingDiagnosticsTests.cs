@@ -84,7 +84,11 @@ public sealed class SignalingDiagnosticsTests
     {
         public string? DecoderName => "test";
 
-        public event Action<WatchState>? WatchStateChanged;
+        public event Action<WatchState>? WatchStateChanged
+        {
+            add { }
+            remove { }
+        }
 
         public Task StartAsync(CancellationToken ct) => Task.CompletedTask;
 

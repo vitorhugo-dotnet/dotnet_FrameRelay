@@ -102,6 +102,19 @@ public sealed class MediaFoundationH264Encoder : IVideoEncoder
 
     public IReadOnlyList<string> RejectionLog => _rejections;
 
+    public NativeVideoDiagnostics Diagnostics => new(
+        "Media Foundation",
+        TransformInfo?.Name ?? Name,
+        TransformInfo?.Clsid ?? Guid.Empty,
+        TransformInfo?.IsHardware ?? false,
+        "NV12",
+        "H264",
+        _width,
+        _height,
+        _fps,
+        _bitrate,
+        _rejections.ToArray());
+
     public EncodedVideoSample? Encode(VideoFrame frame, VideoQuality quality)
     {
         ArgumentNullException.ThrowIfNull(frame);

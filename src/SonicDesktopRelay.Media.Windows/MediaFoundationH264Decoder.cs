@@ -99,6 +99,8 @@ public sealed class MediaFoundationH264Decoder : IVideoDecoder
 
     public IReadOnlyList<string> RejectionLog => _rejections;
 
+    public string? LastFailure { get; private set; }
+
     public VideoFrame? Decode(EncodedVideoSample sample)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
@@ -107,6 +109,8 @@ public sealed class MediaFoundationH264Decoder : IVideoDecoder
         {
             if (sample.Data.IsEmpty)
                 return null;
+
+            LastFailure = null;
 
             try
             {
@@ -123,6 +127,7 @@ public sealed class MediaFoundationH264Decoder : IVideoDecoder
                     or InvalidOperationException
                     or ArgumentException)
             {
+                LastFailure = $"{e.GetType().Name}: {e.Message}";
                 // Packet loss/corruption is normal network weather. Keep the decoder alive and
                 // wait for the next clean access unit/keyframe rather than killing the viewer.
                 return null;
@@ -337,7 +342,10 @@ public sealed class MediaFoundationH264Decoder : IVideoDecoder
                 }
 
                 if (result.Failure)
+                {
+                    LastFailure = $"ProcessOutput failed: 0x{result.Code:X8}";
                     return last;
+                }
 
                 var decodedSample = output.Sample ?? allocated;
                 if (decodedSample is null)

@@ -38,11 +38,13 @@ public sealed class MediaFoundationH264Encoder : IVideoEncoder
     private readonly List<string> _rejections = [];
 
     private IMFTransform? _transform;
+    private MediaFoundationAsyncMftPump? _asyncPump;
     private int _width;
     private int _height;
     private int _fps;
     private int _bitrate;
     private bool _forceKeyFrame;
+    private bool _asyncInputReady;
     private bool _disposed;
 
     public MediaFoundationH264Encoder()
@@ -135,6 +137,40 @@ public sealed class MediaFoundationH264Encoder : IVideoEncoder
                 frame.Timestamp,
                 TimeSpan.FromTicks(TimeSpan.TicksPerSecond / quality.FramesPerSecond));
 
+            if (_asyncPump is not null)
+            {
+                if (!_asyncInputReady
+                    && !WaitForAsyncCredit(_asyncPump, static pump => pump.TryTakeInput(), 500))
+                {
+                    throw new InvalidOperationException(
+                        "Hardware H.264 encoder did not request another input sample.");
+                }
+
+                _asyncInputReady = false;
+                _transform!.ProcessInput(0, input, 0);
+
+                // Hardware MFTs signal output asynchronously. Keep any NeedInput event queued
+                // for the next frame while waiting for HaveOutput from this one.
+                if (!WaitForAsyncCredit(_asyncPump, static pump => pump.TryTakeOutput(), 250))
+                {
+                    _asyncPump.DrainAvailable();
+                    if (_asyncPump.InputCredits > 0)
+                    {
+                        _asyncInputReady = _asyncPump.TryTakeInput();
+                        return null;
+                    }
+
+                    throw new InvalidOperationException(
+                        "Hardware H.264 encoder produced neither output nor another input request.");
+                }
+
+                _asyncPump.DrainAvailable();
+                if (_asyncPump.InputCredits > 0)
+                    _asyncInputReady = _asyncPump.TryTakeInput();
+
+                return TryReadOutput(frame.Timestamp, width, height);
+            }
+
             _transform!.ProcessInput(0, input, 0);
             return TryReadOutput(frame.Timestamp, width, height);
         }
@@ -200,20 +236,44 @@ public sealed class MediaFoundationH264Encoder : IVideoEncoder
                 var isAsync = attributes.GetUInt32(TransformAttributeKeys.TransformAsync, out var asyncValue).Success
                               && asyncValue != 0;
 
+                MediaFoundationAsyncMftPump? asyncPump = null;
                 if (isAsync)
                 {
-                    // Hardware video MFTs are asynchronous. They need an IMFMediaEventGenerator
-                    // pump (NeedInput/HaveOutput), which is added in the next isolated TDD step.
-                    // Rejecting here is intentional so the synchronous software fallback remains
-                    // correct rather than illegally driving an async transform.
-                    throw new NotSupportedException(
-                        "asynchronous MFT requires the hardware event pump");
+                    attributes.Set(TransformAttributeKeys.TransformAsyncUnlock, true).CheckError();
+
+                    // MF_LOW_LATENCY is optional on vendor MFTs. Apply it when accepted but do
+                    // not reject a perfectly usable hardware encoder over an optional tuning
+                    // attribute.
+                    try
+                    {
+                        attributes.Set(SinkWriterAttributeKeys.LowLatency.Guid, true).CheckError();
+                    }
+                    catch (SharpGenException)
+                    {
+                    }
                 }
 
                 ConfigureTransform(transform, width, height, fps, bitrate);
 
+                if (isAsync)
+                {
+                    asyncPump = new MediaFoundationAsyncMftPump(
+                        new VorticeMediaFoundationAsyncEventSource(transform));
+                    if (!WaitForAsyncCredit(asyncPump, static pump => pump.TryTakeInput(), 500))
+                    {
+                        asyncPump.Dispose();
+                        throw new NotSupportedException(
+                            "asynchronous MFT did not request input after StartOfStream");
+                    }
+
+                    // The first input credit belongs to the first frame, so put it back as a
+                    // synthetic event source credit by retaining it in the encoder.
+                    _asyncInputReady = true;
+                }
+
                 var clsid = ReadClsid(activation);
                 _transform = transform;
+                _asyncPump = asyncPump;
                 transform = null;
                 _width = width;
                 _height = height;
@@ -270,6 +330,25 @@ public sealed class MediaFoundationH264Encoder : IVideoEncoder
             transform.ProcessMessage(TMessageType.MessageNotifyBeginStreaming, UIntPtr.Zero));
         RunConfigurationStep("MFT_MESSAGE_NOTIFY_START_OF_STREAM", () =>
             transform.ProcessMessage(TMessageType.MessageNotifyStartOfStream, UIntPtr.Zero));
+    }
+
+    private static bool WaitForAsyncCredit(
+        MediaFoundationAsyncMftPump pump,
+        Func<MediaFoundationAsyncMftPump, bool> takeCredit,
+        int timeoutMilliseconds)
+    {
+        var deadline = Environment.TickCount64 + timeoutMilliseconds;
+        while (true)
+        {
+            pump.DrainAvailable();
+            if (takeCredit(pump))
+                return true;
+
+            if (Environment.TickCount64 >= deadline)
+                return false;
+
+            Thread.Sleep(1);
+        }
     }
 
     private static void RunConfigurationStep(string step, Action action)
@@ -478,6 +557,10 @@ public sealed class MediaFoundationH264Encoder : IVideoEncoder
 
     private void ReleaseTransform()
     {
+        _asyncPump?.Dispose();
+        _asyncPump = null;
+        _asyncInputReady = false;
+
         if (_transform is null)
             return;
 

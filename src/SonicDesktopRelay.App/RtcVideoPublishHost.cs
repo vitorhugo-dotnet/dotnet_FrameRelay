@@ -9,13 +9,9 @@ using SonicDesktopRelay.Signaling;
 namespace SonicDesktopRelay.App;
 
 /// <summary>
-/// The real media stack behind <see cref="IVideoPublishHost"/>: one capture source, one
-/// encoder and one pipeline per session, with a <see cref="VideoPublisher"/> fanning the
-/// single encoded stream out to however many viewers turn up.
-/// <para>
-/// Built here rather than in Presentation because this is the only assembly that may know
-/// about Windows.Graphics.Capture, FFmpeg and SIPSorcery.
-/// </para>
+/// The real media stack behind <see cref="IVideoPublishHost"/>: one screen capture and H.264
+/// encoder plus one system-audio capture and Opus encoder per session. The resulting encoded
+/// streams are fanned out to every viewer over the same peer connection.
 /// </summary>
 [SupportedOSPlatform("windows10.0.19041.0")]
 public sealed class RtcVideoPublishHost(
@@ -25,14 +21,23 @@ public sealed class RtcVideoPublishHost(
     private readonly SemaphoreSlim _gate = new(1, 1);
 
     private ScreenPublishPipeline? _pipeline;
+    private AudioPublishPipeline? _audioPipeline;
+    private WasapiLoopbackAudioSource? _audioSource;
     private VideoPublisher? _publisher;
+    private string? _audioPipelineFailure;
 
     public string? EncoderName { get; private set; }
 
-    /// <summary>Why the media stack could not start, when it could not. Shown in Diagnostics.</summary>
+    public string? AudioEncoderName => _audioPipeline?.EncoderName;
+
+    public string? AudioCaptureEndpoint => _audioSource?.ActiveEndpointName;
+
+    public string? AudioDegradedReason => _audioPipelineFailure ?? _audioSource?.DegradedReason;
+
+    /// <summary>Why the required video media stack could not start, when it could not.</summary>
     public string? StartFailure { get; private set; }
 
-    /// <summary>Each encoder candidate that was rejected, with the reason FFmpeg gave.</summary>
+    /// <summary>Each video encoder candidate that was rejected, with the reason it supplied.</summary>
     public IReadOnlyList<string> EncoderRejections { get; private set; } = [];
 
     public async Task StartAsync(MonitorInfo monitor, CancellationToken ct)
@@ -43,10 +48,13 @@ public sealed class RtcVideoPublishHost(
             if (_pipeline is not null) return;
 
             StartFailure = null;
+            _audioPipelineFailure = null;
 
             var connection = signaling()
                              ?? throw new InvalidOperationException(
                                  "Signaling must be connected before publishing starts.");
+
+            var ice = await LoadIceAsync(ct);
 
             var encoder = new FFmpegH264Encoder();
             EncoderName = encoder.Name;
@@ -54,17 +62,45 @@ public sealed class RtcVideoPublishHost(
 
             var capture = new GraphicsCaptureScreenSource();
             var pipeline = new ScreenPublishPipeline(capture, encoder);
-            var publisher = new VideoPublisher(pipeline, new SipSorceryPeerConnectionFactory(
-                await LoadIceAsync(ct)), connection);
 
             await pipeline.StartAsync(monitor, ct);
             _pipeline = pipeline;
-            _publisher = publisher;
+
+            AudioPublishPipeline? audioPipeline = null;
+            var audioSource = new WasapiLoopbackAudioSource();
+            _audioSource = audioSource;
+
+            var candidateAudioPipeline = new AudioPublishPipeline(
+                audioSource,
+                new OpusAudioCodec(channels: 2),
+                new MediaSessionClock(TimeProvider.System));
+            candidateAudioPipeline.Failed += OnAudioPipelineFailed;
+
+            try
+            {
+                await candidateAudioPipeline.StartAsync(ct);
+                audioPipeline = candidateAudioPipeline;
+                _audioPipeline = candidateAudioPipeline;
+            }
+            catch (Exception e) when (e is not OperationCanceledException)
+            {
+                // System audio is optional to the survival of the screen share. A missing/removed
+                // endpoint or Opus failure is surfaced in Diagnostics while video keeps publishing.
+                _audioPipelineFailure = audioSource.DegradedReason ?? e.Message;
+                candidateAudioPipeline.Failed -= OnAudioPipelineFailed;
+                await candidateAudioPipeline.DisposeAsync();
+            }
+
+            _publisher = new VideoPublisher(
+                pipeline,
+                new SipSorceryPeerConnectionFactory(ice),
+                connection,
+                audioPipeline);
         }
         catch (Exception e) when (e is InvalidOperationException or PlatformNotSupportedException
                                       or HttpRequestException or ApiException)
         {
-            // Sharing without a working capture or encoder is not recoverable, but the session
+            // Sharing without a working capture or video encoder is not recoverable, but the session
             // itself is already up: record why and let Diagnostics say it out loud rather than
             // taking the app down.
             StartFailure = e.Message;
@@ -105,6 +141,9 @@ public sealed class RtcVideoPublishHost(
         _gate.Dispose();
     }
 
+    private void OnAudioPipelineFailed(Exception error)
+        => _audioPipelineFailure ??= error.Message;
+
     private async Task<IceServerSettings> LoadIceAsync(CancellationToken ct)
     {
         var response = await iceApi.GetIceServersAsync(ct);
@@ -121,6 +160,15 @@ public sealed class RtcVideoPublishHost(
             await _publisher.DisposeAsync();
             _publisher = null;
         }
+
+        if (_audioPipeline is not null)
+        {
+            _audioPipeline.Failed -= OnAudioPipelineFailed;
+            await _audioPipeline.DisposeAsync();
+            _audioPipeline = null;
+        }
+
+        _audioSource = null;
 
         if (_pipeline is not null)
         {

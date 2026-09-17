@@ -1,8 +1,8 @@
-# dotnet_SonicDesktopRelay
+# FrameRelay
 
-Share a Windows screen with other Windows machines over the SonicRelay backend. An Avalonia
-desktop app: pick a monitor, get a six-character code, and everyone who enters it watches the
-same encoded stream.
+FrameRelay shares a Windows screen and its system audio with other Windows machines over the shared [RelayControl](https://github.com/vitorhugo-dotnet/dotnet_SonicRelay) control plane. It is an Avalonia desktop app: pick a monitor, get a six-character code, and everyone who enters it watches the same encoded stream over WebRTC.
+
+FrameRelay is a separate product from **SonicRelay**. SonicRelay focuses on low-latency system-audio streaming to mobile viewers; FrameRelay focuses on desktop screen sharing while reusing the same device identity, session, signaling and TURN infrastructure.
 
 ## Requirements
 
@@ -30,6 +30,8 @@ dotnet test SonicDesktopRelay.sln
 dotnet run --project src/SonicDesktopRelay.App
 ```
 
+> The solution, project and namespace identifiers still use `SonicDesktopRelay.*` internally. The public product name is **FrameRelay**; renaming internal identifiers is intentionally outside this branding-only change.
+
 Tests that need a display skip themselves when there is none; everything else runs on fakes. The
 FFmpeg tests do not skip — the build hands them the same libraries the app ships.
 
@@ -50,6 +52,12 @@ The App carries a Windows TFM because MSBuild cannot reference a `net10.0-window
 a `net10.0` one, and the App is the only assembly that composes `Media.Windows`. Every library
 below it stays platform-neutral, which is what lets the whole presentation layer be tested
 without a GPU.
+
+## Related projects
+
+- [RelayControl](https://github.com/vitorhugo-dotnet/dotnet_SonicRelay) — shared device identity, pairing, sessions, signaling and TURN credentials.
+- [SonicRelay Desktop](https://github.com/vitorhugo-dotnet/desktop_dotnet_SonicRelay) — system-audio publisher for SonicRelay.
+- [SonicRelay Mobile](https://github.com/vitorhugo-dotnet/flutter_mobile-web_SonicRelay) — mobile SonicRelay audio viewer.
 
 ## Documentation
 

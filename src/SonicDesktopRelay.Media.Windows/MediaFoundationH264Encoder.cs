@@ -266,8 +266,6 @@ public sealed class MediaFoundationH264Encoder : IVideoEncoder
             SetVideoTypeCommon(inputType, VideoFormatGuids.NV12, width, height, fps));
         RunConfigurationStep("SetInputType(NV12)", () => transform.SetInputType(0, inputType, 0));
 
-        RunConfigurationStep("MFT_MESSAGE_COMMAND_FLUSH", () =>
-            transform.ProcessMessage(TMessageType.MessageCommandFlush, UIntPtr.Zero));
         RunConfigurationStep("MFT_MESSAGE_NOTIFY_BEGIN_STREAMING", () =>
             transform.ProcessMessage(TMessageType.MessageNotifyBeginStreaming, UIntPtr.Zero));
         RunConfigurationStep("MFT_MESSAGE_NOTIFY_START_OF_STREAM", () =>

@@ -105,6 +105,6 @@ public sealed class MediaFoundationH264DecoderTests
             if (decoded is not null) return decoded;
         }
 
-        throw new InvalidOperationException("Media Foundation decoder produced no frame.");
+        throw new InvalidOperationException($"Media Foundation decoder produced no frame. Last failure: {decoder.LastFailure ?? "none"}");
     }
 }

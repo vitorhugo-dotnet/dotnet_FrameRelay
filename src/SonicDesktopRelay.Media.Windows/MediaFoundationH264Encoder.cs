@@ -165,9 +165,11 @@ public sealed class MediaFoundationH264Encoder : IVideoEncoder
         if (TryCandidates(SoftwareFlags, isHardware: false, width, height, fps, bitrate, ref lastError))
             return;
 
+        var rejected = _rejections.Count == 0
+            ? lastError?.Message ?? "no candidates were enumerated"
+            : string.Join(" | ", _rejections);
         throw new InvalidOperationException(
-            "No Media Foundation H.264 encoder could be configured. "
-            + (lastError?.Message ?? string.Join(" | ", _rejections)));
+            "No Media Foundation H.264 encoder could be configured. Rejections: " + rejected);
     }
 
     private bool TryCandidates(
@@ -249,20 +251,39 @@ public sealed class MediaFoundationH264Encoder : IVideoEncoder
         int bitrate)
     {
         using var outputType = MediaFactory.MFCreateMediaType();
-        SetVideoTypeCommon(outputType, VideoFormatGuids.H264, width, height, fps);
-        outputType.Set(MediaTypeAttributeKeys.AvgBitrate, checked((uint)bitrate)).CheckError();
-        outputType.Set(MediaTypeAttributeKeys.Mpeg2Profile, checked((uint)BaselineProfile)).CheckError();
+        RunConfigurationStep("configure H.264 output attributes", () =>
+        {
+            SetVideoTypeCommon(outputType, VideoFormatGuids.H264, width, height, fps);
+            outputType.Set(MediaTypeAttributeKeys.AvgBitrate, checked((uint)bitrate)).CheckError();
+            outputType.Set(MediaTypeAttributeKeys.Mpeg2Profile, checked((uint)BaselineProfile)).CheckError();
+        });
 
         // Microsoft H.264 encoder requires output before input.
-        transform.SetOutputType(0, outputType, 0);
+        RunConfigurationStep("SetOutputType(H264)", () => transform.SetOutputType(0, outputType, 0));
 
         using var inputType = MediaFactory.MFCreateMediaType();
-        SetVideoTypeCommon(inputType, VideoFormatGuids.NV12, width, height, fps);
-        transform.SetInputType(0, inputType, 0);
+        RunConfigurationStep("configure NV12 input attributes", () =>
+            SetVideoTypeCommon(inputType, VideoFormatGuids.NV12, width, height, fps));
+        RunConfigurationStep("SetInputType(NV12)", () => transform.SetInputType(0, inputType, 0));
 
-        transform.ProcessMessage(TMessageType.MessageCommandFlush, UIntPtr.Zero);
-        transform.ProcessMessage(TMessageType.MessageNotifyBeginStreaming, UIntPtr.Zero);
-        transform.ProcessMessage(TMessageType.MessageNotifyStartOfStream, UIntPtr.Zero);
+        RunConfigurationStep("MFT_MESSAGE_COMMAND_FLUSH", () =>
+            transform.ProcessMessage(TMessageType.MessageCommandFlush, UIntPtr.Zero));
+        RunConfigurationStep("MFT_MESSAGE_NOTIFY_BEGIN_STREAMING", () =>
+            transform.ProcessMessage(TMessageType.MessageNotifyBeginStreaming, UIntPtr.Zero));
+        RunConfigurationStep("MFT_MESSAGE_NOTIFY_START_OF_STREAM", () =>
+            transform.ProcessMessage(TMessageType.MessageNotifyStartOfStream, UIntPtr.Zero));
+    }
+
+    private static void RunConfigurationStep(string step, Action action)
+    {
+        try
+        {
+            action();
+        }
+        catch (Exception e) when (e is SharpGenException or COMException or InvalidOperationException)
+        {
+            throw new InvalidOperationException($"{step}: {e.Message}", e);
+        }
     }
 
     private static void SetVideoTypeCommon(

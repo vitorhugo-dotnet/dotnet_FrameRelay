@@ -21,7 +21,8 @@
          and encodes through avcodec directly. -->
     <PackageReference Include="FFmpeg.AutoGen" Version="8.1.0" />
     <PackageReference Include="NAudio.Wasapi" Version="3.1.0" />
-    <PackageReference Include="Vortice.Direct3D11" Version="3.6.2" />
+    <PackageReference Include="Vortice.Direct3D11" Version="3.8.3" />
+    <PackageReference Include="Vortice.MediaFoundation" Version="3.8.3" />
   </ItemGroup>
 
   <!-- The single owner of the FFmpeg download: everything that embeds the runtime references

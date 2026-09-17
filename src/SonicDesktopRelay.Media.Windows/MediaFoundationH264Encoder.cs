@@ -246,7 +246,7 @@ public sealed class MediaFoundationH264Encoder : IVideoEncoder
                     // attribute.
                     try
                     {
-                        attributes.Set(SinkWriterAttributeKeys.LowLatency.Guid, true).CheckError();
+                        attributes.Set(SinkWriterAttributeKeys.LowLatency, true).CheckError();
                     }
                     catch (SharpGenException)
                     {

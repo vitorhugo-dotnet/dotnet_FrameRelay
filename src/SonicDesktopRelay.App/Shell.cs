@@ -21,8 +21,9 @@ public sealed class Shell : INotifyPropertyChanged
 {
     private const int DefaultMaxViewers = 3;
 
+    private readonly FileBackendAddressStore _backendAddressStore;
     private AppComposition? _composition;
-    private string _backendAddress = "https://localhost:5001";
+    private string _backendAddress;
     private string _deviceName = Environment.MachineName;
     private string? _shellError;
     private MonitorInfo? _selectedMonitor;
@@ -38,7 +39,12 @@ public sealed class Shell : INotifyPropertyChanged
 
     public MainWindowViewModel ViewModel { get; } = new();
 
-    public Shell() => RefreshMonitors();
+    public Shell()
+    {
+        _backendAddressStore = new FileBackendAddressStore(FileBackendAddressStore.DefaultPath);
+        _backendAddress = _backendAddressStore.Read();
+        RefreshMonitors();
+    }
 
     /// <summary>The Diagnostics page's session-runtime snapshot history.</summary>
     public ObservableCollection<string> Diagnostics { get; } = [];
@@ -53,6 +59,18 @@ public sealed class Shell : INotifyPropertyChanged
         {
             if (_backendAddress == value) return;
             _backendAddress = value;
+            if (BackendSettings.TryParse(value) is not null)
+            {
+                try
+                {
+                    _backendAddressStore.Write(value);
+                }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+                {
+                    ShellError = $"Could not save backend address: {e.Message}";
+                }
+            }
+
             // A changed address invalidates the clients built against the old one.
             _composition = null;
             Raise();

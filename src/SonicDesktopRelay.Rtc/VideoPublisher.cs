@@ -42,7 +42,12 @@ public sealed class VideoPublisher(
         peer.KeyFrameRequested += pipeline.RequestKeyFrame;
         peer.PacketLossReported += loss =>
         {
+            if (loss <= 0) return;
+
+            // Any reported loss can break an inter-frame decode chain, so recover immediately.
+            // Only sustained/high loss is allowed to reduce the global stream quality.
             if (loss >= PoorReceptionLossRatio) pipeline.ReportPoorReception();
+            else pipeline.RequestKeyFrame();
         };
 
         EnsureSubscribed();

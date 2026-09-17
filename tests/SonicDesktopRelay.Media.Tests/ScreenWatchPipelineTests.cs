@@ -46,6 +46,42 @@ public sealed class ScreenWatchPipelineTests
     }
 
     [Fact]
+    public void A_dropped_decode_after_receiving_asks_for_one_recovery_keyframe()
+    {
+        var decoder = new FakeDecoder();
+        using var pipeline = new ScreenWatchPipeline(decoder, new FakeTimeProvider(Start));
+        var requests = 0;
+        pipeline.KeyFrameNeeded += () => requests++;
+        pipeline.Submit(Sample());
+
+        decoder.ReturnNull = true;
+        pipeline.Submit(Sample());
+        pipeline.Submit(Sample());
+
+        Assert.Equal(1, requests);
+        Assert.Equal(WatchState.Receiving, pipeline.State);
+    }
+
+    [Fact]
+    public void A_good_frame_rearms_decode_loss_recovery()
+    {
+        var decoder = new FakeDecoder();
+        using var pipeline = new ScreenWatchPipeline(decoder, new FakeTimeProvider(Start));
+        var requests = 0;
+        pipeline.KeyFrameNeeded += () => requests++;
+        pipeline.Submit(Sample());
+
+        decoder.ReturnNull = true;
+        pipeline.Submit(Sample());
+        decoder.ReturnNull = false;
+        pipeline.Submit(Sample());
+        decoder.ReturnNull = true;
+        pipeline.Submit(Sample());
+
+        Assert.Equal(2, requests);
+    }
+
+    [Fact]
     public void No_frame_for_five_seconds_is_reported_as_stalled_not_as_disconnected()
     {
         var time = new FakeTimeProvider(Start);
@@ -151,7 +187,7 @@ public sealed class ScreenWatchPipelineTests
     {
         public string Name => "fake";
 
-        public bool ReturnNull { get; init; }
+        public bool ReturnNull { get; set; }
 
         public bool Throw { get; init; }
 

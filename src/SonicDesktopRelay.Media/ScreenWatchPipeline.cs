@@ -25,7 +25,8 @@ public sealed class ScreenWatchPipeline(IVideoDecoder decoder, TimeProvider time
     private static readonly TimeSpan StallAfter = TimeSpan.FromSeconds(4);
 
     private DateTimeOffset? _lastFrameAt;
-    private bool _keyFrameAsked;
+    private bool _decodeRecoveryAsked;
+    private bool _stallKeyFrameAsked;
     private WatchState _state = WatchState.Waiting;
 
     public event Action<VideoFrame>? FrameDecoded;
@@ -53,10 +54,23 @@ public sealed class ScreenWatchPipeline(IVideoDecoder decoder, TimeProvider time
             return;
         }
 
-        if (frame is null) return;
+        if (frame is null)
+        {
+            // Once decoding has started, a swallowed frame means the decoder lost sync. Ask
+            // immediately rather than waiting for the stall timer, but only once until a good
+            // frame proves recovery.
+            if (_state == WatchState.Receiving && !_decodeRecoveryAsked)
+            {
+                _decodeRecoveryAsked = true;
+                KeyFrameNeeded?.Invoke();
+            }
+
+            return;
+        }
 
         _lastFrameAt = time.GetUtcNow();
-        _keyFrameAsked = false;
+        _decodeRecoveryAsked = false;
+        _stallKeyFrameAsked = false;
         SetState(WatchState.Receiving);
         FrameDecoded?.Invoke(frame);
     }
@@ -72,8 +86,8 @@ public sealed class ScreenWatchPipeline(IVideoDecoder decoder, TimeProvider time
 
         // One PLI per stall, not one per tick: flooding the publisher with keyframe requests
         // is the worst thing to do to a link that is already failing to deliver.
-        if (_keyFrameAsked) return;
-        _keyFrameAsked = true;
+        if (_stallKeyFrameAsked) return;
+        _stallKeyFrameAsked = true;
         KeyFrameNeeded?.Invoke();
     }
 

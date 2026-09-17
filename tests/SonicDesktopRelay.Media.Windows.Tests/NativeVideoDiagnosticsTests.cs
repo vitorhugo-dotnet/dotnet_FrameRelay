@@ -34,4 +34,20 @@ public sealed class NativeVideoDiagnosticsTests
         Assert.DoesNotContain("https://", text, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("credential", text, StringComparison.OrdinalIgnoreCase);
     }
+
+    [Fact]
+    public void Decoder_diagnostics_project_the_live_selected_transform()
+    {
+        if (!MediaFoundationH264Decoder.IsSupported) return;
+
+        using var decoder = new MediaFoundationH264Decoder();
+
+        var diagnostics = decoder.Diagnostics;
+
+        Assert.Equal("Media Foundation", diagnostics.Backend);
+        Assert.False(string.IsNullOrWhiteSpace(diagnostics.TransformName));
+        Assert.Equal("H264", diagnostics.InputFormat);
+        Assert.Equal("NV12", diagnostics.OutputFormat);
+        Assert.Equal(decoder.RejectionLog, diagnostics.RejectionReasons);
+    }
 }

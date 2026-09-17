@@ -20,6 +20,7 @@
          for a code path this app never takes, since it captures through Windows.Graphics.Capture
          and encodes through avcodec directly. -->
     <PackageReference Include="FFmpeg.AutoGen" Version="8.1.0" />
+    <PackageReference Include="NAudio.Wasapi" Version="3.1.0" />
     <PackageReference Include="Vortice.Direct3D11" Version="3.6.2" />
   </ItemGroup>
 

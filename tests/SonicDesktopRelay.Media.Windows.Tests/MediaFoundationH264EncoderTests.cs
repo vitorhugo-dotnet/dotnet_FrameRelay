@@ -30,6 +30,20 @@ public sealed class MediaFoundationH264EncoderTests
         Assert.True(sample.Data.Span.StartsWith(new byte[] { 0, 0, 0, 1 }));
     }
 
+
+    [Fact]
+    public void The_first_keyframe_contains_sps_and_pps_for_a_fresh_decoder()
+    {
+        if (!MediaFoundationH264Encoder.IsSupported) return;
+
+        using var encoder = new MediaFoundationH264Encoder();
+
+        var sample = EncodeUntilOutput(encoder, 640, 360);
+
+        Assert.True(H264AccessUnit.ContainsSps(sample.Data.Span));
+        Assert.True(H264AccessUnit.ContainsPps(sample.Data.Span));
+    }
+
     [Fact]
     public void Encoding_honours_the_quality_height()
     {

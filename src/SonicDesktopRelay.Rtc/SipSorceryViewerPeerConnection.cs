@@ -72,6 +72,15 @@ public sealed class SipSorceryViewerPeerConnection : IViewerPeerConnection
 
     public event Action<EncodedVideoSample>? VideoSampleReceived;
 
+    // The contract exists before the SIPSorcery receive wiring on purpose. The next TDD step
+    // makes this event observable from OnAudioFrameReceived instead of implementing both
+    // contract and behavior in one unverified jump.
+    public event Action<EncodedAudioSample>? AudioSampleReceived
+    {
+        add { }
+        remove { }
+    }
+
     public async Task<string> CreateAnswerAsync(string offerSdp, CancellationToken ct)
     {
         SetDescriptionResultEnum result;

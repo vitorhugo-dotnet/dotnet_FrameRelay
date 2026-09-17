@@ -42,12 +42,13 @@ public sealed class ScreenPublishPipeline(IScreenCaptureSource capture, IVideoEn
     /// </summary>
     public void ReportPoorReception()
     {
+        // Loss means at least one decoder may have fallen out of sync. Request recovery even
+        // when quality is already at its floor.
+        encoder.RequestKeyFrame();
+
         var reduced = Quality.Reduced();
         if (reduced == Quality) return;
         Quality = reduced;
-        // The next sample changes dimensions; without a keyframe every viewer would decode
-        // garbage until one happened to arrive.
-        encoder.RequestKeyFrame();
     }
 
     private void OnFrame(VideoFrame frame)

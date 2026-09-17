@@ -255,6 +255,12 @@ public sealed class VideoSubscriberTests
 
         public event Action<EncodedVideoSample>? VideoSampleReceived;
 
+        public event Action<EncodedAudioSample>? AudioSampleReceived
+        {
+            add { }
+            remove { }
+        }
+
         public Task<string> CreateAnswerAsync(string offerSdp, CancellationToken ct)
         {
             ReceivedOffer = offerSdp;

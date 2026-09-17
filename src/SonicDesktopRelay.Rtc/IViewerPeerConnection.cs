@@ -18,6 +18,12 @@ public interface IViewerPeerConnection : IAsyncDisposable
     /// </summary>
     event Action<EncodedVideoSample>? VideoSampleReceived;
 
+    /// <summary>
+    /// One still-encoded Opus sample. RTC owns transport only; decoding and playback stay in
+    /// the independent audio media pipeline.
+    /// </summary>
+    event Action<EncodedAudioSample>? AudioSampleReceived;
+
     /// <summary>Applies the publisher's offer and produces the answer SDP.</summary>
     Task<string> CreateAnswerAsync(string offerSdp, CancellationToken ct);
 

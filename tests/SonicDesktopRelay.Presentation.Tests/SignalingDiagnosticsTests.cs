@@ -57,6 +57,42 @@ public sealed class SignalingDiagnosticsTests
         Assert.Equal("type.200", buffer.Entries[^1].Type);
     }
 
+    [Fact]
+    public async Task Outbound_signaling_records_metadata_without_storing_payload()
+    {
+        var buffer = new SignalingDiagnosticBuffer();
+        var inner = new RecordingConnection();
+        var diagnosticType = typeof(SessionRuntime).Assembly.GetType(
+            "SonicDesktopRelay.Presentation.DiagnosticSignalingConnection");
+
+        Assert.NotNull(diagnosticType);
+
+        var connection = Assert.IsAssignableFrom<ISignalingConnection>(
+            Activator.CreateInstance(
+                diagnosticType!,
+                inner,
+                buffer,
+                new Func<SessionPhase>(() => SessionPhase.Watching)));
+        var to = Guid.Parse("33333333-3333-3333-3333-333333333333");
+
+        await connection.SendAsync(
+            SignalingMessageTypes.WebRtcAnswer,
+            to,
+            new { type = "answer", sdp = "must-never-be-recorded" },
+            CancellationToken.None);
+
+        var entry = Assert.Single(buffer.Entries);
+        Assert.Equal(SignalingDirection.TX, entry.Direction);
+        Assert.Equal(SignalingMessageTypes.WebRtcAnswer, entry.Type);
+        Assert.Equal(SessionPhase.Watching, entry.Phase);
+        Assert.Equal(SignalingState.Connected, entry.Signaling);
+        Assert.Null(entry.From);
+        Assert.Equal(to, entry.To);
+        Assert.Null(entry.Handled);
+        Assert.Null(typeof(SignalingDiagnosticEntry).GetProperty("Payload"));
+        Assert.Equal(SignalingMessageTypes.WebRtcAnswer, inner.LastSentType);
+    }
+
     private static SignalingDiagnosticEntry Diagnostic(int index) =>
         new(
             DateTimeOffset.UnixEpoch.AddMilliseconds(index),
@@ -96,6 +132,35 @@ public sealed class SignalingDiagnosticsTests
 
         public Task SendAsync(string type, Guid? to, object? payload, CancellationToken ct) =>
             Task.CompletedTask;
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class RecordingConnection : ISignalingConnection
+    {
+        public SignalingState State => SignalingState.Connected;
+
+        public string? LastSentType { get; private set; }
+
+        public event Action<SignalingEnvelope>? FrameReceived
+        {
+            add { }
+            remove { }
+        }
+
+        public event Action<SignalingState>? StateChanged
+        {
+            add { }
+            remove { }
+        }
+
+        public Task StartAsync(Guid sessionId, CancellationToken ct) => Task.CompletedTask;
+
+        public Task SendAsync(string type, Guid? to, object? payload, CancellationToken ct)
+        {
+            LastSentType = type;
+            return Task.CompletedTask;
+        }
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }

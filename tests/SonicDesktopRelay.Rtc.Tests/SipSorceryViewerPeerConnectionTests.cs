@@ -51,16 +51,19 @@ public sealed class SipSorceryViewerPeerConnectionTests
     }
 
     [Fact]
-    public async Task The_answer_contains_no_audio_track_in_this_phase()
+    public async Task The_answer_accepts_the_publishers_opus_audio_track()
     {
-        var factory = new SipSorceryViewerPeerConnectionFactory(Ice);
-        await using var peer = factory.Create();
+        var publisherFactory = new SipSorceryPeerConnectionFactory(Ice);
+        await using var publisher = publisherFactory.Create(Guid.NewGuid());
+        var offer = await publisher.CreateOfferAsync(CancellationToken.None);
 
-        var answer = await peer.CreateAnswerAsync(PublisherOfferSdp, CancellationToken.None);
+        var viewerFactory = new SipSorceryViewerPeerConnectionFactory(Ice);
+        await using var viewer = viewerFactory.Create();
+        var answer = await viewer.CreateAnswerAsync(offer, CancellationToken.None);
 
-        // The publisher sends no audio until phase 4, so a viewer-side audio path would have
-        // nothing to play.
-        Assert.DoesNotContain("m=audio", answer);
+        Assert.Contains("m=audio", answer);
+        Assert.DoesNotContain("m=audio 0", answer, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("OPUS", answer, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

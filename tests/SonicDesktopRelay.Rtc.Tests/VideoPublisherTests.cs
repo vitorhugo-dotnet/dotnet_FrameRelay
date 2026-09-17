@@ -19,9 +19,6 @@ public sealed class VideoPublisherTests
         await harness.Publisher.AddViewerAsync(ViewerA, CancellationToken.None);
 
         Assert.Equal(1, harness.Publisher.PeerCount);
-        // publisher.ready then webrtc.offer, in that order: the handshake
-        // dotnet_SonicRelay/docs/protocol.md documents. A viewer written against those docs
-        // learns who the publisher is from the first frame and would never answer without it.
         Assert.Equal(
             [SignalingMessageTypes.PublisherReady, SignalingMessageTypes.WebRtcOffer],
             harness.Signaling.Sent.Select(x => x.Type).ToArray());
@@ -163,15 +160,10 @@ public sealed class VideoPublisherTests
     private sealed class Harness
     {
         public required FakeCapture Capture { get; init; }
-
         public required FakeEncoder Encoder { get; init; }
-
         public required ScreenPublishPipeline Pipeline { get; init; }
-
         public required FakePeerFactory Peers { get; init; }
-
         public required FakeSignaling Signaling { get; init; }
-
         public required VideoPublisher Publisher { get; init; }
 
         public static async Task<Harness> StartedAsync()
@@ -198,7 +190,6 @@ public sealed class VideoPublisherTests
     private sealed class FakeCapture : IScreenCaptureSource
     {
         public MonitorInfo Monitor { get; private set; }
-
         public event Action<VideoFrame>? FrameCaptured;
 
         public Task StartAsync(MonitorInfo monitor, VideoQuality quality, CancellationToken ct)
@@ -217,9 +208,7 @@ public sealed class VideoPublisherTests
     private sealed class FakeEncoder : IVideoEncoder
     {
         public string Name => "fake";
-
         public int EncodeCalls { get; private set; }
-
         public int KeyFrameRequests { get; private set; }
 
         public EncodedVideoSample? Encode(VideoFrame frame, VideoQuality quality)
@@ -229,10 +218,7 @@ public sealed class VideoPublisherTests
         }
 
         public void RequestKeyFrame() => KeyFrameRequests++;
-
-        public void Dispose()
-        {
-        }
+        public void Dispose() { }
     }
 
     private sealed class FakePeerFactory : IPeerConnectionFactory
@@ -250,19 +236,14 @@ public sealed class VideoPublisherTests
     private sealed class FakePeer(Guid participantId) : IPeerConnection
     {
         public Guid ParticipantId { get; } = participantId;
-
         public List<EncodedVideoSample> SentSamples { get; } = [];
-
+        public List<EncodedAudioSample> SentAudioSamples { get; } = [];
         public List<string> RemoteCandidates { get; } = [];
-
         public string? AppliedAnswer { get; private set; }
-
         public bool Disposed { get; private set; }
 
         public event Action<string, string?, int?>? IceCandidateGathered;
-
         public event Action? KeyFrameRequested;
-
         public event Action<double>? PacketLossReported;
 
         public Task<string> CreateOfferAsync(CancellationToken ct) => Task.FromResult("offer-sdp");
@@ -281,6 +262,8 @@ public sealed class VideoPublisherTests
 
         public void SendVideo(EncodedVideoSample sample) => SentSamples.Add(sample);
 
+        public void SendAudio(EncodedAudioSample sample) => SentAudioSamples.Add(sample);
+
         public void GatherCandidate(string candidate, string? mid, int? index) =>
             IceCandidateGathered?.Invoke(candidate, mid, index);
 
@@ -298,11 +281,8 @@ public sealed class VideoPublisherTests
     private sealed class FakeSignaling : ISignalingConnection
     {
         public List<(string Type, Guid? To, object? Payload)> Sent { get; } = [];
-
         public SignalingState State => SignalingState.Connected;
 
-        // Nothing in these tests drives the publisher from inbound frames — HandleAsync is
-        // called directly — so the events exist only to satisfy the interface.
         public event Action<SignalingEnvelope>? FrameReceived
         {
             add { }

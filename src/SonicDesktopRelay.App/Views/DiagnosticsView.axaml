@@ -3,29 +3,37 @@
              xmlns:app="clr-namespace:SonicDesktopRelay.App"
              x:Class="SonicDesktopRelay.App.Views.DiagnosticsView"
              x:DataType="app:Shell">
-    <DockPanel Margin="{StaticResource PagePadding}">
-        <TextBlock DockPanel.Dock="Top"
+    <Grid Margin="{StaticResource PagePadding}"
+          RowDefinitions="Auto,Auto,Auto,*,Auto,*">
+        <TextBlock Grid.Row="0"
                    Text="Diagnostics"
                    Margin="0,0,0,16"
                    FontSize="{StaticResource FontSizeLg}"
                    Foreground="{StaticResource TextPrimaryBrush}" />
 
-        <SelectableTextBlock DockPanel.Dock="Top"
+        <SelectableTextBlock Grid.Row="1"
                              Text="{Binding MediaStatusText}"
-                             Margin="0,0,0,8"
+                             Margin="0,0,0,16"
                              TextWrapping="Wrap"
                              FontFamily="Consolas, monospace"
                              FontSize="{StaticResource FontSizeSm}"
                              Foreground="{StaticResource TextPrimaryBrush}" />
 
-        <TextBlock DockPanel.Dock="Top"
-                   Text="Every snapshot the session runtime has published, newest first."
-                   Margin="0,0,0,16"
-                   TextWrapping="Wrap"
-                   FontSize="{StaticResource FontSizeSm}"
-                   Foreground="{StaticResource TextSecondaryBrush}" />
+        <StackPanel Grid.Row="2" Margin="0,0,0,8">
+            <TextBlock Text="Session snapshots"
+                       FontSize="{StaticResource FontSizeSm}"
+                       FontWeight="SemiBold"
+                       Foreground="{StaticResource TextPrimaryBrush}" />
+            <TextBlock Text="Every snapshot the session runtime has published, newest first."
+                       Margin="0,4,0,0"
+                       TextWrapping="Wrap"
+                       FontSize="{StaticResource FontSizeSm}"
+                       Foreground="{StaticResource TextSecondaryBrush}" />
+        </StackPanel>
 
-        <Border Background="{StaticResource SurfaceRaisedBrush}"
+        <Border Grid.Row="3"
+                Margin="0,0,0,16"
+                Background="{StaticResource SurfaceRaisedBrush}"
                 BorderBrush="{StaticResource BorderBrush}"
                 BorderThickness="1"
                 CornerRadius="{StaticResource ControlCornerRadius}">
@@ -42,5 +50,36 @@
                 </ItemsControl>
             </ScrollViewer>
         </Border>
-    </DockPanel>
+
+        <StackPanel Grid.Row="4" Margin="0,0,0,8">
+            <TextBlock Text="Signaling"
+                       FontSize="{StaticResource FontSizeSm}"
+                       FontWeight="SemiBold"
+                       Foreground="{StaticResource TextPrimaryBrush}" />
+            <TextBlock Text="RX/TX envelope metadata only, newest first. Payloads, SDP and ICE candidate contents are never recorded."
+                       Margin="0,4,0,0"
+                       TextWrapping="Wrap"
+                       FontSize="{StaticResource FontSizeSm}"
+                       Foreground="{StaticResource TextSecondaryBrush}" />
+        </StackPanel>
+
+        <Border Grid.Row="5"
+                Background="{StaticResource SurfaceRaisedBrush}"
+                BorderBrush="{StaticResource BorderBrush}"
+                BorderThickness="1"
+                CornerRadius="{StaticResource ControlCornerRadius}">
+            <ScrollViewer>
+                <ItemsControl ItemsSource="{Binding SignalingDiagnostics}" Margin="{StaticResource RailPadding}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="x:String">
+                            <SelectableTextBlock Text="{Binding}"
+                                                 FontFamily="Consolas, monospace"
+                                                 FontSize="{StaticResource FontSizeSm}"
+                                                 Foreground="{StaticResource TextSecondaryBrush}" />
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </ScrollViewer>
+        </Border>
+    </Grid>
 </UserControl>

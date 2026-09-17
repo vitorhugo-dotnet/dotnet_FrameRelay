@@ -27,7 +27,7 @@ public sealed class VideoPublisherPacketLossTests
     private sealed class FakeCapture : IScreenCaptureSource
     {
         public MonitorInfo Monitor { get; private set; }
-        public event Action<VideoFrame>? FrameCaptured;
+        public event Action<VideoFrame>? FrameCaptured { add { } remove { } }
 
         public Task StartAsync(MonitorInfo monitor, VideoQuality quality, CancellationToken ct)
         {
@@ -60,8 +60,8 @@ public sealed class VideoPublisherPacketLossTests
     {
         public Guid ParticipantId { get; } = participantId;
 
-        public event Action<string, string?, int?>? IceCandidateGathered;
-        public event Action? KeyFrameRequested;
+        public event Action<string, string?, int?>? IceCandidateGathered { add { } remove { } }
+        public event Action? KeyFrameRequested { add { } remove { } }
         public event Action<double>? PacketLossReported;
 
         public Task<string> CreateOfferAsync(CancellationToken ct) => Task.FromResult("offer");

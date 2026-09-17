@@ -40,8 +40,11 @@ public sealed class Shell : INotifyPropertyChanged
 
     public Shell() => RefreshMonitors();
 
-    /// <summary>The Diagnostics page's whole content: the snapshots the runtime has published.</summary>
+    /// <summary>The Diagnostics page's session-runtime snapshot history.</summary>
     public ObservableCollection<string> Diagnostics { get; } = [];
+
+    /// <summary>The Diagnostics page's bounded signaling metadata history.</summary>
+    public ObservableCollection<string> SignalingDiagnostics { get; } = [];
 
     public string BackendAddress
     {
@@ -206,6 +209,7 @@ public sealed class Shell : INotifyPropertyChanged
         {
             _composition = new AppComposition(settings, _deviceName);
             _composition.Runtime.Changed += OnSnapshot;
+            _composition.Runtime.SignalingDiagnosticAdded += OnSignalingDiagnostic;
             _composition.WatchHost.FrameDecoded += PublishFrame;
             ViewModel.Apply(_composition.Runtime.Snapshot);
         }
@@ -265,6 +269,18 @@ public sealed class Shell : INotifyPropertyChanged
         Diagnostics.Insert(0,
             $"{DateTimeOffset.Now:HH:mm:ss}  {snapshot.Phase}  signaling={snapshot.Signaling}  " +
             $"session={snapshot.SessionId?.ToString() ?? "-"}  viewers={snapshot.ViewerCount}");
+    });
+
+    private void OnSignalingDiagnostic(SignalingDiagnosticEntry entry) => Dispatcher.UIThread.Post(() =>
+    {
+        var handled = entry.Handled is { } value ? value.ToString().ToLowerInvariant() : "-";
+        SignalingDiagnostics.Insert(0,
+            $"{entry.Timestamp:HH:mm:ss.fff} {entry.Direction} {entry.Type} " +
+            $"phase={entry.Phase} signaling={entry.Signaling} " +
+            $"from={entry.From?.ToString() ?? "-"} to={entry.To?.ToString() ?? "-"} handled={handled}");
+
+        if (SignalingDiagnostics.Count > SignalingDiagnosticBuffer.DefaultCapacity)
+            SignalingDiagnostics.RemoveAt(SignalingDiagnostics.Count - 1);
     });
 
     private void Raise([CallerMemberName] string? property = null) =>

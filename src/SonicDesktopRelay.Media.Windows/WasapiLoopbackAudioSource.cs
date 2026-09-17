@@ -34,16 +34,16 @@ public interface IWasapiLoopbackRecorderFactory
 [SupportedOSPlatform("windows10.0.19041.0")]
 public sealed class WasapiLoopbackAudioSource : IAudioCaptureSource
 {
-    public const int NormalizedSampleRate = 48_000;
-    public const int NormalizedChannels = 2;
+    private const int OutputSampleRate = 48_000;
+    private const int OutputChannels = 2;
     public const int BitsPerSample = 16;
     public const int FrameSamples = 960;
     public const int BufferMilliseconds = 20;
 
     private readonly IWasapiLoopbackRecorderFactory _factory;
     private readonly PcmFrameAccumulator _accumulator = new(
-        NormalizedSampleRate,
-        NormalizedChannels,
+        OutputSampleRate,
+        OutputChannels,
         BitsPerSample,
         FrameSamples);
     private readonly Lock _gate = new();
@@ -69,6 +69,10 @@ public sealed class WasapiLoopbackAudioSource : IAudioCaptureSource
 
     public string? ActiveEndpointName { get; private set; }
 
+    public int NormalizedSampleRate => OutputSampleRate;
+
+    public int NormalizedChannels => OutputChannels;
+
     public string? DegradedReason { get; private set; }
 
     public async Task StartAsync(CancellationToken ct)
@@ -82,8 +86,8 @@ public sealed class WasapiLoopbackAudioSource : IAudioCaptureSource
             if (_started) return;
 
             recorder = _factory.Create(
-                NormalizedSampleRate,
-                NormalizedChannels,
+                OutputSampleRate,
+                OutputChannels,
                 BitsPerSample,
                 BufferMilliseconds);
 
@@ -165,8 +169,8 @@ public sealed class WasapiLoopbackAudioSource : IAudioCaptureSource
         {
             AudioCaptured?.Invoke(new AudioFrame(
                 frame,
-                NormalizedSampleRate,
-                NormalizedChannels,
+                OutputSampleRate,
+                OutputChannels,
                 FrameSamples,
                 TimeSpan.Zero));
         }

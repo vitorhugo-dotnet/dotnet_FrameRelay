@@ -3,6 +3,14 @@ namespace SonicDesktopRelay.Media;
 public readonly record struct MonitorInfo(string Id, string Name, int Width, int Height, bool IsPrimary);
 
 /// <summary>
+/// The publisher's user-selected ceiling. Adaptive quality may move below these values, never above them.
+/// </summary>
+public sealed record VideoPublishProfile(int MaxHeight, int MaxFramesPerSecond)
+{
+    public static VideoPublishProfile Default { get; } = new(1080, 30);
+}
+
+/// <summary>
 /// The session's single quality target. There is one for the whole session, not one per
 /// viewer: the screen is encoded once and handed to everyone, so quality is a property of
 /// the encode, not of a connection.
@@ -24,23 +32,54 @@ public sealed record VideoQuality(int MaxHeight, int FramesPerSecond, int Target
 
     public static VideoQuality Default => Ladder[0];
 
+    public static VideoQuality InitialFor(VideoPublishProfile profile)
+    {
+        ArgumentNullException.ThrowIfNull(profile);
+        if (profile.MaxHeight <= 0)
+            throw new ArgumentOutOfRangeException(nameof(profile), "MaxHeight must be positive.");
+        if (profile.MaxFramesPerSecond <= 0)
+            throw new ArgumentOutOfRangeException(nameof(profile), "MaxFramesPerSecond must be positive.");
+
+        var rung = Ladder.FirstOrDefault(x => x.MaxHeight <= profile.MaxHeight) ?? Ladder[^1];
+        return ApplyProfile(rung, profile);
+    }
+
     /// <summary>
     /// The next rung down, or the floor. Degrading is driven by the worst viewer's RTCP, so
     /// it must terminate: a session on a bad link settles at 360p rather than spiralling.
     /// </summary>
-    public VideoQuality Reduced()
+    public VideoQuality Reduced() => Reduced(VideoPublishProfile.Default);
+
+    public VideoQuality Reduced(VideoPublishProfile profile)
     {
-        var index = Array.FindIndex(Ladder, x => x == this);
-        if (index < 0) return Ladder[^1];
-        return index >= Ladder.Length - 1 ? Ladder[^1] : Ladder[index + 1];
+        var index = FindLadderIndex(this);
+        var rung = index < 0 || index >= Ladder.Length - 1 ? Ladder[^1] : Ladder[index + 1];
+        return ApplyProfile(rung, profile);
     }
 
-    /// <summary>The next rung toward the configured/default desktop quality, or the ceiling.</summary>
-    public VideoQuality Improved()
+    /// <summary>The next rung toward the configured/user ceiling, or that ceiling.</summary>
+    public VideoQuality Improved() => Improved(VideoPublishProfile.Default);
+
+    public VideoQuality Improved(VideoPublishProfile profile)
     {
-        var index = Array.FindIndex(Ladder, x => x == this);
-        if (index <= 0) return Ladder[0];
-        return Ladder[index - 1];
+        var ceilingIndex = FindLadderIndex(InitialFor(profile));
+        var index = FindLadderIndex(this);
+        if (index < 0) return InitialFor(profile);
+        if (index <= ceilingIndex) return InitialFor(profile);
+        return ApplyProfile(Ladder[index - 1], profile);
+    }
+
+    private static int FindLadderIndex(VideoQuality quality) =>
+        Array.FindIndex(Ladder, x =>
+            x.MaxHeight == quality.MaxHeight
+            && x.TargetBitsPerSecond == quality.TargetBitsPerSecond);
+
+    private static VideoQuality ApplyProfile(VideoQuality rung, VideoPublishProfile profile)
+    {
+        var fps = rung.FramesPerSecond >= 30
+            ? profile.MaxFramesPerSecond
+            : Math.Min(rung.FramesPerSecond, profile.MaxFramesPerSecond);
+        return rung with { FramesPerSecond = fps };
     }
 
     /// <summary>

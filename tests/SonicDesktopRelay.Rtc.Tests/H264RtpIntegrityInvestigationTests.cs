@@ -1,57 +1,159 @@
-using SIPSorcery.Net;
 using Xunit;
 
 namespace SonicDesktopRelay.Rtc.Tests;
 
-public sealed class H264RtpIntegrityInvestigationTests
+public sealed class H264RtpIntegrityTests
 {
     private const uint Timestamp = 90_000;
 
     [Fact]
-    public void Contiguous_fu_a_fragments_emit_one_access_unit()
+    public void Contiguous_fu_a_fragments_emit_one_valid_access_unit()
     {
-        var depacketiser = new H264Depacketiser();
+        var assembler = new H264RtpAccessUnitAssembler();
 
-        Assert.Null(Push(depacketiser, 100, FuStart(0x11), marker: 0));
-        Assert.Null(Push(depacketiser, 101, FuMiddle(0x22), marker: 0));
-        Assert.Null(Push(depacketiser, 102, FuMiddle(0x33), marker: 0));
+        Assert.Null(Push(assembler, 100, FuStart(0x11)));
+        Assert.Null(Push(assembler, 101, FuMiddle(0x22)));
+        Assert.Null(Push(assembler, 102, FuMiddle(0x33)));
 
-        var completed = Push(depacketiser, 103, FuEnd(0x44), marker: 1);
+        var completed = Push(assembler, 103, FuEnd(0x44), marker: true);
 
         Assert.NotNull(completed);
-        Assert.NotEmpty(completed!);
+        Assert.True(completed.Value.IsIdr);
+        Assert.Equal(0, assembler.IncompleteAccessUnitsDropped);
     }
 
     [Fact]
-    public void Missing_middle_fu_a_fragment_must_not_emit_an_access_unit()
+    public void Missing_middle_rtp_packet_drops_the_access_unit()
     {
-        var depacketiser = new H264Depacketiser();
+        var assembler = new H264RtpAccessUnitAssembler();
+        var drops = new List<H264AccessUnitDrop>();
+        assembler.AccessUnitDropped += drops.Add;
 
-        Assert.Null(Push(depacketiser, 100, FuStart(0x11), marker: 0));
-        Assert.Null(Push(depacketiser, 101, FuMiddle(0x22), marker: 0));
-        Assert.Null(Push(depacketiser, 103, FuMiddle(0x33), marker: 0));
+        Push(assembler, 100, FuStart(0x11));
+        Push(assembler, 101, FuMiddle(0x22));
+        Push(assembler, 103, FuMiddle(0x33));
+        var completed = Push(assembler, 104, FuEnd(0x44), marker: true);
 
-        var completed = Push(depacketiser, 104, FuEnd(0x44), marker: 1);
-
-        // Desired FrameRelay contract: an AU with a proven RTP sequence gap must be dropped.
-        // SIPSorcery 10.0.16 currently sorts and concatenates the surviving FU-A fragments,
-        // which is the production corruption path this regression work must guard.
         Assert.Null(completed);
+        var drop = Assert.Single(drops);
+        Assert.Equal(H264AccessUnitDropKind.Incomplete, drop.Kind);
+        Assert.Equal("rtp-sequence-gap", drop.Reason);
+        Assert.Equal(1, drop.MissingPackets);
+        Assert.Equal(1, assembler.RtpPacketsLost);
+        Assert.Equal(1, assembler.IncompleteAccessUnitsDropped);
     }
 
-    private static byte[]? Push(H264Depacketiser depacketiser, ushort sequence, byte[] payload, int marker)
+    [Fact]
+    public void Missing_fu_a_start_is_rejected()
     {
-        using var result = depacketiser.ProcessRTPPayload(
-            payload,
-            sequence,
-            Timestamp,
-            marker,
-            out _);
-        return result?.ToArray();
+        var assembler = new H264RtpAccessUnitAssembler();
+
+        Push(assembler, 100, FuMiddle(0x11));
+        var completed = Push(assembler, 101, FuEnd(0x22), marker: true);
+
+        Assert.Null(completed);
+        Assert.Equal(1, assembler.IncompleteAccessUnitsDropped);
     }
+
+    [Fact]
+    public void Missing_fu_a_end_is_rejected()
+    {
+        var assembler = new H264RtpAccessUnitAssembler();
+
+        Push(assembler, 100, FuStart(0x11));
+        var completed = Push(assembler, 101, FuMiddle(0x22), marker: true);
+
+        Assert.Null(completed);
+        Assert.Equal(1, assembler.IncompleteAccessUnitsDropped);
+    }
+
+    [Fact]
+    public void Sequence_number_wrap_is_contiguous()
+    {
+        var assembler = new H264RtpAccessUnitAssembler();
+
+        Push(assembler, 65534, FuStart(0x11));
+        Push(assembler, 65535, FuMiddle(0x22));
+        Push(assembler, 0, FuMiddle(0x33));
+        var completed = Push(assembler, 1, FuEnd(0x44), marker: true);
+
+        Assert.NotNull(completed);
+        Assert.Equal(0, assembler.RtpSequenceGaps);
+        Assert.Equal(0, assembler.RtpPacketsLost);
+    }
+
+    [Fact]
+    public void Out_of_order_but_complete_packets_are_reordered_without_false_loss()
+    {
+        var assembler = new H264RtpAccessUnitAssembler();
+
+        Push(assembler, 100, FuStart(0x11));
+        Push(assembler, 102, FuMiddle(0x33));
+        Push(assembler, 101, FuMiddle(0x22));
+        var completed = Push(assembler, 103, FuEnd(0x44), marker: true);
+
+        Assert.NotNull(completed);
+        Assert.True(assembler.RtpPacketsReordered > 0);
+        Assert.Equal(0, assembler.RtpPacketsLost);
+    }
+
+    private static H264AssembledAccessUnit? Push(
+        H264RtpAccessUnitAssembler assembler,
+        ushort sequence,
+        byte[] payload,
+        bool marker = false) =>
+        assembler.Push(sequence, Timestamp, marker, payload);
 
     // FU indicator: NRI=3 + type=28 (FU-A). Reconstructed NAL type is 5 (IDR).
     private static byte[] FuStart(byte data) => [0x7C, 0x85, data];
     private static byte[] FuMiddle(byte data) => [0x7C, 0x05, data];
     private static byte[] FuEnd(byte data) => [0x7C, 0x45, data];
+}
+
+public sealed class H264RtpIntegrityRecoveryTests
+{
+    private static readonly DateTimeOffset Start = DateTimeOffset.UnixEpoch;
+
+    [Fact]
+    public void Repeated_loss_signals_create_one_episode_and_coalesce_immediate_pli()
+    {
+        var recovery = new ViewerVideoRecoveryGate(TimeSpan.FromSeconds(1));
+
+        recovery.BeginRecovery();
+        Assert.True(recovery.TryRequestPli(Start));
+
+        recovery.BeginRecovery();
+        Assert.False(recovery.TryRequestPli(Start + TimeSpan.FromMilliseconds(100)));
+
+        Assert.Equal(1, recovery.RecoveryEpisodes);
+        Assert.Equal(1, recovery.RecoveryKeyframesRequested);
+    }
+
+    [Fact]
+    public void Dependent_access_units_are_suppressed_while_recovering()
+    {
+        var recovery = new ViewerVideoRecoveryGate(TimeSpan.FromSeconds(1));
+        recovery.BeginRecovery();
+
+        Assert.False(recovery.ShouldDeliver(isIdr: false));
+        Assert.False(recovery.ShouldDeliver(isIdr: false));
+
+        Assert.Equal(2, recovery.SuspectAccessUnitsSuppressed);
+        Assert.True(recovery.Active);
+    }
+
+    [Fact]
+    public void Clean_idr_resumes_delivery_and_rearms_future_recovery()
+    {
+        var recovery = new ViewerVideoRecoveryGate(TimeSpan.FromSeconds(1));
+        recovery.BeginRecovery();
+
+        Assert.True(recovery.ShouldDeliver(isIdr: true));
+        Assert.False(recovery.Active);
+        Assert.True(recovery.ShouldDeliver(isIdr: false));
+
+        recovery.BeginRecovery();
+        Assert.True(recovery.TryRequestPli(Start + TimeSpan.FromSeconds(2)));
+        Assert.Equal(2, recovery.RecoveryEpisodes);
+    }
 }

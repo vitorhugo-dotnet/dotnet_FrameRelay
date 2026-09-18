@@ -1,3 +1,4 @@
+using System.Net.Sockets;
 using SIPSorcery.Net;
 
 namespace SonicDesktopRelay.Rtc;
@@ -26,18 +27,21 @@ public static class RtcTransportClassifier
         RTCIceCandidateType localType,
         RTCIceCandidateType remoteType,
         RTCIceProtocol localProtocol,
-        RTCIceProtocol remoteProtocol)
+        RTCIceProtocol remoteProtocol,
+        ProtocolType? localRelayServerProtocol = null)
     {
         var path = localType == RTCIceCandidateType.relay || remoteType == RTCIceCandidateType.relay
             ? "TURN"
             : "Direct";
 
-        // A valid nominated pair normally uses the same protocol on both sides. If a stack
-        // reports mixed metadata, TCP is the conservative classification because it is the
-        // path where head-of-line blocking matters for our diagnostics.
-        var protocol = localProtocol == RTCIceProtocol.tcp || remoteProtocol == RTCIceProtocol.tcp
-            ? "TCP"
-            : "UDP";
+        // SIPSorcery 10.0.16 deliberately advertises relay candidates as UDP even when the
+        // local TURN server was reached over TCP/TLS. The local relay keeps its IceServer,
+        // whose Protocol is therefore the authoritative local client->TURN transport.
+        var protocol = localType == RTCIceCandidateType.relay && localRelayServerProtocol is { } turnProtocol
+            ? turnProtocol == ProtocolType.Tcp ? "TCP" : "UDP"
+            : localProtocol == RTCIceProtocol.tcp || remoteProtocol == RTCIceProtocol.tcp
+                ? "TCP"
+                : "UDP";
 
         return new RtcTransportDiagnostics(
             path,

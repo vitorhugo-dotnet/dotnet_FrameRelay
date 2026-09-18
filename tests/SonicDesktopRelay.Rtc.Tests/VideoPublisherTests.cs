@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Time.Testing;
 using SonicDesktopRelay.Media;
 using SonicDesktopRelay.Rtc;
 using SonicDesktopRelay.Signaling;
@@ -145,6 +146,29 @@ public sealed class VideoPublisherTests
     }
 
     [Fact]
+    public async Task Persistent_loss_from_one_viewer_is_not_erased_by_another_viewers_stable_reports()
+    {
+        var time = new FakeTimeProvider(DateTimeOffset.UnixEpoch);
+        var harness = await Harness.StartedAsync(time);
+        await harness.Publisher.AddViewerAsync(ViewerA, CancellationToken.None);
+        await harness.Publisher.AddViewerAsync(ViewerB, CancellationToken.None);
+        var poorViewer = harness.Peers.Created[0];
+        var stableViewer = harness.Peers.Created[1];
+
+        poorViewer.ReportPacketLoss(0.10);
+        stableViewer.ReportPacketLoss(0);
+        time.Advance(TimeSpan.FromSeconds(2.5));
+        poorViewer.ReportPacketLoss(0.10);
+        stableViewer.ReportPacketLoss(0);
+        time.Advance(TimeSpan.FromSeconds(2.5));
+        poorViewer.ReportPacketLoss(0.10);
+        stableViewer.ReportPacketLoss(0);
+
+        Assert.Equal(1080, harness.Pipeline.Quality.MaxHeight);
+        Assert.Equal(3_000_000, harness.Pipeline.Quality.TargetBitsPerSecond);
+    }
+
+    [Fact]
     public async Task Mild_loss_does_not_degrade_quality()
     {
         var harness = await Harness.StartedAsync();
@@ -182,17 +206,18 @@ public sealed class VideoPublisherTests
         public required FakeSignaling Signaling { get; init; }
         public required VideoPublisher Publisher { get; init; }
 
-        public static async Task<Harness> StartedAsync()
+        public static async Task<Harness> StartedAsync(TimeProvider? time = null)
         {
+            var effectiveTime = time ?? TimeProvider.System;
             var capture = new FakeCapture();
             var encoder = new FakeEncoder();
-            var pipeline = new ScreenPublishPipeline(capture, encoder);
+            var pipeline = new ScreenPublishPipeline(capture, encoder, time: effectiveTime);
             var audioCapture = new FakeAudioCapture();
             var audioEncoder = new FakeAudioEncoder();
             var audioPipeline = new AudioPublishPipeline(
                 audioCapture,
                 audioEncoder,
-                new MediaSessionClock(TimeProvider.System));
+                new MediaSessionClock(effectiveTime));
             var peers = new FakePeerFactory();
             var signaling = new FakeSignaling();
             var publisher = new VideoPublisher(pipeline, peers, signaling, audioPipeline);

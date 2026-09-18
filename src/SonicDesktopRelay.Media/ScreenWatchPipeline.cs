@@ -40,7 +40,6 @@ public sealed class ScreenWatchPipeline(
     private long _nullDecodeResults;
     private long _keyFrameRequests;
     private long _maximumAccessUnitBytes;
-    private bool _decodeRecoveryAsked;
     private bool _stallKeyFrameAsked;
     private WatchState _state = WatchState.Waiting;
 
@@ -123,23 +122,15 @@ public sealed class ScreenWatchPipeline(
 
         if (frame is null)
         {
+            // A decoder returning no frame is not transport loss. Media Foundation legitimately
+            // does this when the transform needs more input, so treating null as packet loss
+            // creates false PLI storms. RTP integrity/recovery is handled before Decode().
             Interlocked.Increment(ref _nullDecodeResults);
-
-            // Once decoding has started, a swallowed frame means the decoder lost sync. Ask
-            // immediately rather than waiting for the stall timer, but only once until a good
-            // frame proves recovery.
-            if (_state == WatchState.Receiving && !_decodeRecoveryAsked)
-            {
-                _decodeRecoveryAsked = true;
-                RequestKeyFrame("decode-null");
-            }
-
             return;
         }
 
         _lastFrameAt = time.GetUtcNow();
         Interlocked.Increment(ref _decodedFrames);
-        _decodeRecoveryAsked = false;
         _stallKeyFrameAsked = false;
         SetState(WatchState.Receiving);
         FrameDecoded?.Invoke(frame);

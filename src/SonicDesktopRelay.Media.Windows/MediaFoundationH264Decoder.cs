@@ -522,6 +522,7 @@ public sealed class MediaFoundationH264Decoder : IVideoDecoder
             }
 
             IMFSample? callerSample = null;
+            var traceOwnership = allocationChanged;
             var output = new OutputDataBuffer
             {
                 StreamID = 0,
@@ -549,7 +550,7 @@ public sealed class MediaFoundationH264Decoder : IVideoDecoder
 
                 var callerPointer = callerSample?.NativePointer ?? IntPtr.Zero;
                 var returnedPointer = output.Sample?.NativePointer ?? IntPtr.Zero;
-                var traceOwnership =
+                traceOwnership =
                     allocationChanged ||
                     result.Code == StreamChangeHResult ||
                     (result.Failure && result.Code != NeedMoreInputHResult);

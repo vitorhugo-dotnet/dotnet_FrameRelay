@@ -37,6 +37,17 @@ public sealed class RtcVideoWatchHost(
 
     public NativeVideoDiagnostics? VideoDiagnostics => _decoder?.Diagnostics;
 
+    public string? VideoDecoderFailure => _decoder?.LastFailure;
+
+    public long VideoAccessUnitsReceived => _pipeline?.VideoAccessUnitsReceived ?? 0;
+
+    public long DecodedFrames => _pipeline?.DecodedFrames ?? 0;
+
+    public DateTimeOffset? LastDecodedFrameAt => _pipeline?.LastDecodedFrameAt;
+
+    public TimeSpan? LastDecodedFrameAge =>
+        _pipeline?.LastDecodedFrameAt is { } last ? TimeProvider.System.GetUtcNow() - last : null;
+
     public string? AudioDecoderName => _audioPipeline?.DecoderName;
 
     public string? AudioSinkName => _audioPipeline?.SinkName ?? _audioSink?.Name;
@@ -54,6 +65,12 @@ public sealed class RtcVideoWatchHost(
     public event Action<string>? NegotiationFailed;
 
     public event Action<ViewerNegotiationDiagnosticEntry>? WebRtcDiagnosticAdded;
+
+    /// <summary>
+    /// Raised by the existing one-second media watchdog so the Diagnostics page can refresh
+    /// counters/failure state even while no decoded frame reaches the UI.
+    /// </summary>
+    public event Action? VideoDiagnosticsChanged;
 
     /// <summary>
     /// One decoded frame, on the decode thread. The shell marshals it to the UI thread before
@@ -126,7 +143,14 @@ public sealed class RtcVideoWatchHost(
             // The pipeline deliberately holds no clock of its own; something outside has to
             // ask it whether the media has gone quiet.
             _watchdog = TimeProvider.System.CreateTimer(
-                _ => pipeline.CheckForStall(), null, StallCheckInterval, StallCheckInterval);
+                _ =>
+                {
+                    pipeline.CheckForStall();
+                    VideoDiagnosticsChanged?.Invoke();
+                },
+                null,
+                StallCheckInterval,
+                StallCheckInterval);
 
             subscriber.NegotiationFailed += OnNegotiationFailed;
             subscriber.Diagnostic += OnWebRtcDiagnostic;

@@ -42,8 +42,9 @@ public sealed class AppComposition
         SessionRuntime? runtime = null;
         ISignalingConnection? current = null;
         var iceApi = new IceApiClient(sessionHttp);
-        PublishHost = new RtcVideoPublishHost(iceApi, () => current);
-        WatchHost = new RtcVideoWatchHost(iceApi, () => current);
+        var loggerFactory = FrameRelayLogging.Current?.LoggerFactory;
+        PublishHost = new RtcVideoPublishHost(iceApi, () => current, loggerFactory);
+        WatchHost = new RtcVideoWatchHost(iceApi, () => current, loggerFactory);
 
         Runtime = new SessionRuntime(
             new SessionApiAdapter(new SessionApiClient(sessionHttp)),

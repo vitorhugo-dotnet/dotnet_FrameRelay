@@ -1,0 +1,21 @@
+name: TDD Media Foundation output lifetime
+
+on:
+  push:
+    branches:
+      - fix/media-foundation-output-sample-lifetime
+
+permissions:
+  contents: read
+
+jobs:
+  focused-test:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      - name: Run focused decoder ownership tests
+        run: dotnet test tests/SonicDesktopRelay.Media.Windows.Tests/SonicDesktopRelay.Media.Windows.Tests.csproj --configuration Release --filter "FullyQualifiedName~MediaFoundationH264DecoderTests"

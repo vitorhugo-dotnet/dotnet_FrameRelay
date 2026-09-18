@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Time.Testing;
 using Xunit;
 
 namespace SonicDesktopRelay.Media.Tests;
@@ -5,6 +6,23 @@ namespace SonicDesktopRelay.Media.Tests;
 public sealed class ScreenPublishPipelineTests
 {
     private static readonly MonitorInfo Monitor = new("\\\\.\\DISPLAY1", "Primary", 1920, 1080, true);
+
+    [Fact]
+    public async Task A_shared_media_clock_stamps_video_at_pipeline_ingress()
+    {
+        var time = new FakeTimeProvider(DateTimeOffset.UnixEpoch);
+        var clock = new MediaSessionClock(time);
+        var capture = new FakeCapture();
+        var encoder = new FakeEncoder();
+        await using var pipeline = new ScreenPublishPipeline(capture, encoder, clock);
+        await pipeline.StartAsync(Monitor, CancellationToken.None);
+
+        time.Advance(TimeSpan.FromMilliseconds(100));
+        capture.Emit();
+
+        Assert.NotNull(encoder.LastFrame);
+        Assert.Equal(TimeSpan.FromMilliseconds(100), encoder.LastFrame!.Timestamp);
+    }
 
     [Fact]
     public async Task Each_captured_frame_produces_one_encoded_sample()
@@ -176,6 +194,8 @@ public sealed class ScreenPublishPipelineTests
 
         public int KeyFrameRequests { get; private set; }
 
+        public VideoFrame? LastFrame { get; private set; }
+
         public bool ReturnNull { get; init; }
 
         public bool Throw { get; init; }
@@ -183,6 +203,7 @@ public sealed class ScreenPublishPipelineTests
         public EncodedVideoSample? Encode(VideoFrame frame, VideoQuality quality)
         {
             EncodeCalls++;
+            LastFrame = frame;
             if (Throw) throw new InvalidOperationException("encoder failed");
             return ReturnNull
                 ? null

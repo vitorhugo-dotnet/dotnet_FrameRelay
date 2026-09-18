@@ -155,6 +155,38 @@ public sealed class ScreenPublishPipelineTests
     }
 
     [Fact]
+    public async Task Adaptive_fps_change_updates_capture_rate_without_restarting_capture()
+    {
+        var time = new FakeTimeProvider(DateTimeOffset.UnixEpoch);
+        var capture = new FakeCapture();
+        var encoder = new FakeEncoder();
+        await using var pipeline = new ScreenPublishPipeline(capture, encoder, time: time);
+        await pipeline.StartAsync(Monitor, CancellationToken.None);
+
+        void ReportSustainedPoor()
+        {
+            pipeline.ReportReception(0.10);
+            time.Advance(TimeSpan.FromSeconds(2.5));
+            pipeline.ReportReception(0.10);
+            time.Advance(TimeSpan.FromSeconds(2.5));
+            pipeline.ReportReception(0.10);
+        }
+
+        ReportSustainedPoor(); // 1080p 4M -> 1080p 3M
+        time.Advance(TimeSpan.FromSeconds(15));
+        ReportSustainedPoor(); // -> 1080p 2M
+        time.Advance(TimeSpan.FromSeconds(15));
+        ReportSustainedPoor(); // -> 720p 2M
+        time.Advance(TimeSpan.FromSeconds(15));
+        ReportSustainedPoor(); // -> 720p 1.5M
+        time.Advance(TimeSpan.FromSeconds(15));
+        ReportSustainedPoor(); // -> 540p 20 FPS
+
+        Assert.Equal(1, capture.StartCalls);
+        Assert.Contains(20, capture.FrameRateUpdates);
+    }
+
+    [Fact]
     public async Task An_encoder_that_throws_stops_the_pipeline_instead_of_spinning()
     {
         var capture = new FakeCapture();
@@ -215,13 +247,20 @@ public sealed class ScreenPublishPipelineTests
     {
         public MonitorInfo Monitor { get; private set; }
 
+        public int StartCalls { get; private set; }
+
+        public List<int> FrameRateUpdates { get; } = [];
+
         public event Action<VideoFrame>? FrameCaptured;
 
         public Task StartAsync(MonitorInfo monitor, VideoQuality quality, CancellationToken ct)
         {
             Monitor = monitor;
+            StartCalls++;
             return Task.CompletedTask;
         }
+
+        public void SetFrameRate(int framesPerSecond) => FrameRateUpdates.Add(framesPerSecond);
 
         public Task StopAsync() => Task.CompletedTask;
 

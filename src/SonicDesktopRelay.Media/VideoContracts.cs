@@ -125,12 +125,12 @@ public readonly record struct EncodedVideoSample(
     /// effective configured cadence instead of silently assuming 30 FPS.
     /// </summary>
     public EncodedVideoSample(
-        ReadOnlyMemory<byte> data,
-        TimeSpan timestamp,
-        bool isKeyFrame,
-        int width,
-        int height)
-        : this(data, timestamp, isKeyFrame, width, height, LegacyThirtyFpsDuration)
+        ReadOnlyMemory<byte> Data,
+        TimeSpan Timestamp,
+        bool IsKeyFrame,
+        int Width,
+        int Height)
+        : this(Data, Timestamp, IsKeyFrame, Width, Height, LegacyThirtyFpsDuration)
     {
     }
 }

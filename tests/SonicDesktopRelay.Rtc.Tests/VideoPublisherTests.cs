@@ -40,6 +40,20 @@ public sealed class VideoPublisherTests
     }
 
     [Fact]
+    public async Task Video_send_diagnostics_measure_fanout_duration()
+    {
+        var time = new FakeTimeProvider(DateTimeOffset.UnixEpoch);
+        var harness = await Harness.StartedAsync(time);
+        await harness.Publisher.AddViewerAsync(ViewerA, CancellationToken.None);
+        harness.Peers.Created[0].DuringVideoSend =
+            () => time.Advance(TimeSpan.FromMilliseconds(7));
+
+        harness.Capture.Emit();
+
+        Assert.Equal(TimeSpan.FromMilliseconds(7), harness.Publisher.LastVideoSendDuration);
+    }
+
+    [Fact]
     public async Task One_audio_encode_is_fanned_out_to_all_viewer_peers()
     {
         var harness = await Harness.StartedAsync();
@@ -345,6 +359,8 @@ public sealed class VideoPublisherTests
         public string? AppliedAnswer { get; private set; }
         public bool Disposed { get; private set; }
 
+        public Action? DuringVideoSend { get; set; }
+
         public event Action<string, string?, int?>? IceCandidateGathered;
         public event Action<KeyFrameRequestReason>? KeyFrameRequested;
         public event Action<double>? PacketLossReported;
@@ -366,7 +382,11 @@ public sealed class VideoPublisherTests
             return Task.CompletedTask;
         }
 
-        public void SendVideo(EncodedVideoSample sample) => SentSamples.Add(sample);
+        public void SendVideo(EncodedVideoSample sample)
+        {
+            DuringVideoSend?.Invoke();
+            SentSamples.Add(sample);
+        }
 
         public void SendAudio(EncodedAudioSample sample) => SentAudioSamples.Add(sample);
 

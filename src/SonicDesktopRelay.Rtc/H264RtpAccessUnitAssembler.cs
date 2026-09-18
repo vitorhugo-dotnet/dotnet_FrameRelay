@@ -16,6 +16,12 @@ internal sealed record H264AccessUnitDrop(
     ushort? NextSequence,
     int MissingPackets);
 
+internal sealed record H264RtpGap(
+    uint Timestamp,
+    ushort PreviousSequence,
+    ushort NextSequence,
+    int MissingPackets);
+
 internal readonly record struct H264AssembledAccessUnit(
     byte[] Data,
     uint Timestamp,
@@ -34,8 +40,10 @@ internal sealed class H264RtpAccessUnitAssembler
     private readonly List<Packet> _packets = [];
     private uint? _timestamp;
     private ushort? _lastArrivalSequence;
+    private ushort? _lastCompletedSequence;
 
     public event Action<H264AccessUnitDrop>? AccessUnitDropped;
+    public event Action<H264RtpGap>? RtpGapDetected;
 
     public long RtpPacketsReceived { get; private set; }
     public long RtpSequenceGaps { get; private set; }
@@ -66,6 +74,9 @@ internal sealed class H264RtpAccessUnitAssembler
                 0);
             ResetFrame();
         }
+
+        if (_timestamp is null && _lastCompletedSequence is { } completedSequence)
+            DetectGapBeforeAccessUnit(completedSequence, sequenceNumber, timestamp);
 
         _timestamp ??= timestamp;
 
@@ -190,6 +201,7 @@ internal sealed class H264RtpAccessUnitAssembler
                 accessUnit = result.ToArray();
         }
 
+        _lastCompletedSequence = ordered[^1].SequenceNumber;
         ResetFrame();
 
         if (accessUnit is null || accessUnit.Length == 0)
@@ -205,6 +217,39 @@ internal sealed class H264RtpAccessUnitAssembler
         }
 
         return new H264AssembledAccessUnit(accessUnit, timestamp, ContainsIdr(accessUnit));
+    }
+
+    private void DetectGapBeforeAccessUnit(
+        ushort previousSequence,
+        ushort nextSequence,
+        uint timestamp)
+    {
+        var expected = unchecked((ushort)(previousSequence + 1));
+        if (nextSequence == expected)
+            return;
+
+        // Raw packets arrive after SIPSorcery's reorder buffer. A forward discontinuity here
+        // means coded data was actually skipped by the reorder timeout, even if the next AU is
+        // internally complete. The next P-frame is therefore suspect until an IDR recovers.
+        if (!IsAfter(nextSequence, previousSequence))
+        {
+            RtpPacketsReordered++;
+            return;
+        }
+
+        var missing = unchecked((ushort)(nextSequence - expected));
+        if (missing <= 0)
+            return;
+
+        RtpSequenceGaps++;
+        RtpPacketsLost += missing;
+        LastRtpGap =
+            $"timestamp={timestamp} previous={previousSequence} next={nextSequence} missing={missing}";
+        RtpGapDetected?.Invoke(new H264RtpGap(
+            timestamp,
+            previousSequence,
+            nextSequence,
+            missing));
     }
 
     private bool ValidateH264Payloads(IReadOnlyList<Packet> packets, uint timestamp)

@@ -48,8 +48,16 @@ jobs:
             throw "Legacy media files remain tracked: $($legacyFiles -join ', ')"
           }
 
-          $hits = git grep -n -i $legacyName -- ':!docs/superpowers/plans/*' ':!docs/superpowers/specs/*'
-          $grepExit = $LASTEXITCODE
+          $previousNativeErrorPreference = $PSNativeCommandUseErrorActionPreference
+          $PSNativeCommandUseErrorActionPreference = $false
+          try {
+            $hits = git grep -n -i $legacyName -- ':!docs/superpowers/plans/*' ':!docs/superpowers/specs/*'
+            $grepExit = $LASTEXITCODE
+          }
+          finally {
+            $PSNativeCommandUseErrorActionPreference = $previousNativeErrorPreference
+          }
+
           if ($grepExit -eq 0) {
             $hits | Write-Host
             throw 'Legacy media references remain outside historical Superpowers documents.'

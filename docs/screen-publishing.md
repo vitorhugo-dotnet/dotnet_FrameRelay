@@ -36,10 +36,12 @@ low-latency contract. Asynchronous hardware transforms are driven through
 `MediaFoundationAsyncMftPump`. Every rejected candidate is retained with its reason for
 Diagnostics.
 
-The encoder output is normalized to Annex B access units. A fresh encoder and a requested
-recovery frame produce an IDR access unit containing the parameter sets needed by a fresh
-decoder. Resolution or quality changes reopen/reconfigure the native transform and force a
-random-access frame.
+The encoder output is normalized to Annex B access units. Recovery-only keyframe requests use
+Media Foundation `ICodecAPI` with `CODECAPI_AVEncVideoForceKeyFrame` when the selected transform
+supports it, so the next input becomes a recovery point without tearing the transform down.
+Transforms that do not support the codec-control property use the older reconfigure behavior as
+an explicit, diagnosed correctness fallback. Real geometry/FPS/bitrate changes still reconfigure
+the native transform and request a clean random-access frame.
 
 ## System audio
 
@@ -56,19 +58,37 @@ A publishing host creates one `MediaSessionClock` and passes it to both the vide
 pipelines. Timestamps are assigned at pipeline ingress so both streams share the same monotonic
 origin instead of inheriting unrelated device clocks.
 
-## Quality ladder
+## Publisher quality and FPS ceilings
 
-The session uses one global quality target. Sustained packet loss can reduce it for every viewer:
+Before starting a share, the publisher chooses a quality ceiling (1080p, 720p, 540p or 360p) and
+an FPS ceiling (15, 30 or 60 FPS). Defaults are 1080p / 30 FPS. The selections are session-start
+controls for this PR; manual mid-session profile switching is not exposed.
 
-| Rung | Height | FPS | Target bitrate |
+The session still uses one global adaptive quality target because capture and encoding are shared.
+The selected profile limits how high the adaptive controller may start or recover. Sustained
+packet loss can reduce bitrate/resolution/FPS for every viewer, but recovery never exceeds the
+user-selected ceiling.
+
+The bitrate-first ladder is:
+
+| Rung | Height | Base FPS | Target bitrate |
 |---|---:|---:|---:|
 | 0 | 1080 | 30 | 4 Mbit/s |
-| 1 | 720 | 30 | 2 Mbit/s |
-| 2 | 540 | 20 | 1 Mbit/s |
-| 3 | 360 | 15 | 600 kbit/s |
+| 1 | 1080 | 30 | 3 Mbit/s |
+| 2 | 1080 | 30 | 2 Mbit/s |
+| 3 | 720 | 30 | 2 Mbit/s |
+| 4 | 720 | 30 | 1.5 Mbit/s |
+| 5 | 540 | 20 | 1 Mbit/s |
+| 6 | 360 | 15 | 600 kbit/s |
+
+For 30-FPS ladder rungs, a selected 60-FPS ceiling can run that resolution/bitrate rung at 60 FPS;
+lower-FPS rungs remain capped at their base FPS. A 15-FPS ceiling caps every rung at 15 FPS.
 
 Scaling preserves aspect ratio, never upscales, and keeps dimensions compatible with 4:2:0
-chroma. A quality reduction also requests a keyframe so viewers can resynchronize immediately.
+chroma. When effective FPS changes, the WGC throttle is updated without restarting capture.
+Encoded samples carry their actual duration, and the RTC sender converts that duration to the
+90 kHz video RTP clock instead of assuming 30 FPS. A quality change also requests a clean
+keyframe so viewers can resynchronize immediately.
 
 ## Watching pipeline
 
@@ -105,6 +125,9 @@ blitted them.
 Each viewer gets one SIPSorcery peer connection. The publisher sends one H.264 track and one
 Opus track. ICE configuration comes from `GET /api/webrtc/ice-servers` and the client keeps
 `ForceRelay=false`, so direct/STUN connectivity is attempted first and TURN is a fallback.
+After SIPSorcery nominates the winning ICE pair, FrameRelay records only its safe classification:
+Direct or TURN, UDP or TCP, and local/remote candidate types. It does not copy endpoint addresses,
+ports, candidate strings, ICE username fragments or credentials into application diagnostics.
 
 Signaling uses the existing session WebSocket:
 
@@ -125,13 +148,22 @@ The Diagnostics page reports runtime state rather than probing a second codec in
 - selected Media Foundation encoder/decoder transform;
 - transform CLSID and hardware/software path;
 - input/output pixel formats;
-- active video geometry, frame rate and bitrate when available;
+- active/effective video geometry, frame rate and bitrate when available;
+- encoder keyframe mode (`codec-api` or `reconfigure-fallback`) and latest recovery latency;
+- sampled encode and WebRTC video fan-out duration;
+- selected Direct/TURN and UDP/TCP transport classification;
 - rejected transform candidates and reasons;
 - WASAPI capture/render endpoint state;
 - Opus encoder/decoder state;
 - session and bounded signaling metadata.
 
-Diagnostics never record SDP bodies, ICE candidate contents, credentials or media payloads.
+Diagnostics never record SDP bodies, ICE candidate contents, candidate addresses/ports,
+credentials or media payloads.
+
+The following performance work is deliberately deferred to separate changes: a bounded
+latest-frame-wins capture -> encode channel (which first needs explicit frame-buffer ownership),
+full queue/capture/convert stage timing, TURN transport preference tuning, hardware-decoder
+selection, GPU-native texture -> NV12 conversion, and broader RTP pacing/congestion tuning.
 
 ## Failure model
 

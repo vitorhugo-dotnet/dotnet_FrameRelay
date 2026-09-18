@@ -79,6 +79,12 @@ public sealed class RtcVideoPublishHost(
     /// <summary>Each video encoder candidate that was rejected, with the reason it supplied.</summary>
     public IReadOnlyList<string> EncoderRejections { get; private set; } = [];
 
+    /// <summary>
+    /// Raised for structural diagnostics changes such as selected ICE transport. Per-frame timing
+    /// remains sampled/read-on-demand rather than dispatching UI work at video frame rate.
+    /// </summary>
+    public event Action? VideoDiagnosticsChanged;
+
     public async Task StartAsync(MonitorInfo monitor, VideoPublishProfile profile, CancellationToken ct)
     {
         await _gate.WaitAsync(ct);
@@ -216,6 +222,7 @@ public sealed class RtcVideoPublishHost(
             diagnostics.Protocol,
             diagnostics.LocalCandidateType,
             diagnostics.RemoteCandidateType);
+        VideoDiagnosticsChanged?.Invoke();
     }
 
     private async Task<IceServerSettings> LoadIceAsync(CancellationToken ct)

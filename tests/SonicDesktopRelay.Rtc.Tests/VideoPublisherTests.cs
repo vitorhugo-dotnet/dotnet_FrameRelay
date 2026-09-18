@@ -252,7 +252,7 @@ public sealed class VideoPublisherTests
                 new MediaSessionClock(effectiveTime));
             var peers = new FakePeerFactory();
             var signaling = new FakeSignaling();
-            var publisher = new VideoPublisher(pipeline, peers, signaling, audioPipeline);
+            var publisher = new VideoPublisher(pipeline, peers, signaling, audioPipeline, effectiveTime);
             await pipeline.StartAsync(Monitor, CancellationToken.None);
             await audioPipeline.StartAsync(CancellationToken.None);
             return new Harness

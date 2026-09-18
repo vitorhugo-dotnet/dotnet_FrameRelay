@@ -25,7 +25,8 @@ internal sealed record H264RtpGap(
 internal readonly record struct H264AssembledAccessUnit(
     byte[] Data,
     uint Timestamp,
-    bool IsIdr);
+    bool IsIdr,
+    bool HasVcl);
 
 /// <summary>
 /// Guards the SIPSorcery H.264 depacketizer from packet sets that are known to be incomplete.
@@ -215,7 +216,8 @@ internal sealed class H264RtpAccessUnitAssembler
             return null;
         }
 
-        return new H264AssembledAccessUnit(accessUnit, timestamp, ContainsIdr(accessUnit));
+        var nalInfo = InspectNalUnits(accessUnit);
+        return new H264AssembledAccessUnit(accessUnit, timestamp, nalInfo.IsIdr, nalInfo.HasVcl);
     }
 
     private void DetectGapBeforeAccessUnit(
@@ -387,8 +389,11 @@ internal sealed class H264RtpAccessUnitAssembler
     private static bool IsAfter(ushort candidate, ushort reference) =>
         unchecked((short)(candidate - reference)) > 0;
 
-    private static bool ContainsIdr(byte[] annexB)
+    private static (bool IsIdr, bool HasVcl) InspectNalUnits(byte[] annexB)
     {
+        var isIdr = false;
+        var hasVcl = false;
+
         for (var i = 0; i + 3 < annexB.Length; i++)
         {
             if (annexB[i] != 0 || annexB[i + 1] != 0)
@@ -402,11 +407,14 @@ internal sealed class H264RtpAccessUnitAssembler
             else
                 continue;
 
-            if ((annexB[headerIndex] & 0x1F) == 5)
-                return true;
+            var nalType = annexB[headerIndex] & 0x1F;
+            if (nalType is >= 1 and <= 5)
+                hasVcl = true;
+            if (nalType == 5)
+                isIdr = true;
         }
 
-        return false;
+        return (isIdr, hasVcl);
     }
 
     private sealed record Packet(ushort SequenceNumber, bool Marker, byte[] Payload);

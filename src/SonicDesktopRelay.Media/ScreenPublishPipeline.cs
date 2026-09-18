@@ -31,7 +31,7 @@ public sealed class ScreenPublishPipeline(
     private static readonly Guid AnonymousReceptionSource = Guid.Empty;
 
     private readonly Lock _adaptationGate = new();
-    private readonly Dictionary<Guid, PoorReceptionEvidence> _poorReceptionBySource = [];
+    private readonly Dictionary<Guid, ReceptionEvidence> _receptionBySource = [];
 
     private bool _running;
     private long _framesCaptured;
@@ -47,8 +47,6 @@ public sealed class ScreenPublishPipeline(
 
     private bool _keyFramePending;
     private KeyFrameRequestReason? _pendingKeyFrameReason;
-    private int _consecutiveStableReports;
-    private DateTimeOffset? _stableSince;
     private DateTimeOffset? _lastQualityChangeAt;
 
     public event Action<EncodedVideoSample>? SampleEncoded;
@@ -154,9 +152,10 @@ public sealed class ScreenPublishPipeline(
         ReportReception(AnonymousReceptionSource, reportedLoss);
 
     /// <summary>
-    /// Feeds one viewer's RTCP reception sample into the shared quality policy. Poor-reception
-    /// evidence is kept per viewer so a healthy viewer cannot erase another viewer's sustained
-    /// loss. The resulting quality target is still global because the session has one encoder.
+    /// Feeds one viewer's RTCP reception sample into the shared quality policy. Evidence is
+    /// tracked per viewer: one healthy peer cannot erase another peer's sustained loss, and a
+    /// single healthy peer cannot prove that all degraded peers recovered. The selected quality
+    /// remains session-global because capture and encoding are intentionally shared.
     /// </summary>
     public void ReportReception(Guid sourceId, double reportedLoss)
     {
@@ -167,22 +166,20 @@ public sealed class ScreenPublishPipeline(
         string? changeEvent = null;
         string? reason = null;
         var poorReports = 0;
-        int stableReports;
+        var stableReports = 0;
         TimeSpan cooldownRemaining;
 
         lock (_adaptationGate)
         {
             cooldownRemaining = CooldownRemaining(now);
+            var evidence = GetReceptionEvidence(sourceId);
 
             if (loss >= PoorReceptionLossRatio)
             {
-                _consecutiveStableReports = 0;
-                _stableSince = null;
-
-                var evidence = GetPoorReceptionEvidence(sourceId);
-                evidence.Since ??= now;
-                evidence.ConsecutiveReports++;
-                poorReports = evidence.ConsecutiveReports;
+                evidence.ResetStable();
+                evidence.PoorSince ??= now;
+                evidence.ConsecutivePoorReports++;
+                poorReports = evidence.ConsecutivePoorReports;
 
                 _logger.LogInformation(
                     "video.quality.degradation.considered reason={Reason} receptionSource={ReceptionSource} " +
@@ -192,14 +189,14 @@ public sealed class ScreenPublishPipeline(
                     "rtcp-loss",
                     sourceId,
                     loss,
-                    evidence.ConsecutiveReports,
-                    (now - evidence.Since.Value).TotalMilliseconds,
+                    poorReports,
+                    (now - evidence.PoorSince.Value).TotalMilliseconds,
                     cooldownRemaining.TotalMilliseconds,
                     Quality.MaxHeight,
                     Quality.TargetBitsPerSecond);
 
-                if (evidence.ConsecutiveReports >= ConsecutivePoorReportsRequired
-                    && now - evidence.Since.Value >= PoorReceptionMinimumDuration
+                if (poorReports >= ConsecutivePoorReportsRequired
+                    && now - evidence.PoorSince.Value >= PoorReceptionMinimumDuration
                     && cooldownRemaining == TimeSpan.Zero)
                 {
                     var reduced = Quality.Reduced();
@@ -211,27 +208,27 @@ public sealed class ScreenPublishPipeline(
                         _lastQualityChangeAt = now;
                         changeEvent = "video.quality.changed";
                         reason = "sustained-rtcp-loss";
-                        ResetAllPoorReceptionEvidence();
+                        ResetAllReceptionEvidence();
                     }
                     else
                     {
-                        evidence.Reset();
+                        evidence.ResetPoor();
                     }
                 }
             }
             else if (loss <= StableReceptionLossRatio)
             {
-                ResetPoorReceptionEvidence(sourceId);
+                evidence.ResetPoor();
 
                 if (Quality == VideoQuality.Default)
                 {
-                    _consecutiveStableReports = 0;
-                    _stableSince = null;
+                    evidence.ResetStable();
                 }
                 else
                 {
-                    _stableSince ??= now;
-                    _consecutiveStableReports++;
+                    evidence.StableSince ??= now;
+                    evidence.ConsecutiveStableReports++;
+                    stableReports = evidence.ConsecutiveStableReports;
 
                     _logger.LogInformation(
                         "video.quality.recovery.considered reason={Reason} receptionSource={ReceptionSource} " +
@@ -241,14 +238,13 @@ public sealed class ScreenPublishPipeline(
                         "stable-rtcp-reception",
                         sourceId,
                         loss,
-                        _consecutiveStableReports,
-                        (now - _stableSince.Value).TotalMilliseconds,
+                        stableReports,
+                        (now - evidence.StableSince.Value).TotalMilliseconds,
                         cooldownRemaining.TotalMilliseconds,
                         Quality.MaxHeight,
                         Quality.TargetBitsPerSecond);
 
-                    if (_consecutiveStableReports >= ConsecutiveStableReportsRequired
-                        && now - _stableSince.Value >= StableRecoveryDuration
+                    if (AllReceptionSourcesStable(now)
                         && cooldownRemaining == TimeSpan.Zero)
                     {
                         var improved = Quality.Improved();
@@ -260,25 +256,17 @@ public sealed class ScreenPublishPipeline(
                             _lastQualityChangeAt = now;
                             changeEvent = "video.quality.recovered";
                             reason = "stable-rtcp-reception";
+                            ResetAllReceptionEvidence();
                         }
-
-                        _consecutiveStableReports = 0;
-                        _stableSince = null;
                     }
                 }
             }
             else
             {
-                // This viewer is neither genuinely poor nor genuinely stable. Clear only its
-                // poor evidence; another viewer's sustained loss remains valid evidence.
-                ResetPoorReceptionEvidence(sourceId);
-                _consecutiveStableReports = 0;
-                _stableSince = null;
+                // Neither genuinely poor nor genuinely stable. Do not let stale evidence from
+                // this viewer count toward a later shared quality transition.
+                evidence.Reset();
             }
-
-            if (_poorReceptionBySource.TryGetValue(sourceId, out var remainingEvidence))
-                poorReports = remainingEvidence.ConsecutiveReports;
-            stableReports = _consecutiveStableReports;
         }
 
         if (oldQuality is null || newQuality is null || changeEvent is null)
@@ -313,28 +301,29 @@ public sealed class ScreenPublishPipeline(
     public void RemoveReceptionSource(Guid sourceId)
     {
         lock (_adaptationGate)
-            _poorReceptionBySource.Remove(sourceId);
+            _receptionBySource.Remove(sourceId);
     }
 
-    private PoorReceptionEvidence GetPoorReceptionEvidence(Guid sourceId)
+    private ReceptionEvidence GetReceptionEvidence(Guid sourceId)
     {
-        if (_poorReceptionBySource.TryGetValue(sourceId, out var evidence))
+        if (_receptionBySource.TryGetValue(sourceId, out var evidence))
             return evidence;
 
-        evidence = new PoorReceptionEvidence();
-        _poorReceptionBySource.Add(sourceId, evidence);
+        evidence = new ReceptionEvidence();
+        _receptionBySource.Add(sourceId, evidence);
         return evidence;
     }
 
-    private void ResetPoorReceptionEvidence(Guid sourceId)
-    {
-        if (_poorReceptionBySource.TryGetValue(sourceId, out var evidence))
-            evidence.Reset();
-    }
+    private bool AllReceptionSourcesStable(DateTimeOffset now) =>
+        _receptionBySource.Count > 0
+        && _receptionBySource.Values.All(evidence =>
+            evidence.ConsecutiveStableReports >= ConsecutiveStableReportsRequired
+            && evidence.StableSince is { } stableSince
+            && now - stableSince >= StableRecoveryDuration);
 
-    private void ResetAllPoorReceptionEvidence()
+    private void ResetAllReceptionEvidence()
     {
-        foreach (var evidence in _poorReceptionBySource.Values)
+        foreach (var evidence in _receptionBySource.Values)
             evidence.Reset();
     }
 
@@ -441,15 +430,29 @@ public sealed class ScreenPublishPipeline(
         }
     }
 
-    private sealed class PoorReceptionEvidence
+    private sealed class ReceptionEvidence
     {
-        public int ConsecutiveReports { get; set; }
-        public DateTimeOffset? Since { get; set; }
+        public int ConsecutivePoorReports { get; set; }
+        public int ConsecutiveStableReports { get; set; }
+        public DateTimeOffset? PoorSince { get; set; }
+        public DateTimeOffset? StableSince { get; set; }
+
+        public void ResetPoor()
+        {
+            ConsecutivePoorReports = 0;
+            PoorSince = null;
+        }
+
+        public void ResetStable()
+        {
+            ConsecutiveStableReports = 0;
+            StableSince = null;
+        }
 
         public void Reset()
         {
-            ConsecutiveReports = 0;
-            Since = null;
+            ResetPoor();
+            ResetStable();
         }
     }
 

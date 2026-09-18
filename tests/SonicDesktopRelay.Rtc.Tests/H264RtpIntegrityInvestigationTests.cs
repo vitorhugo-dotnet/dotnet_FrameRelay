@@ -151,10 +151,11 @@ public sealed class H264RtpIntegrityRecoveryTests
         var recovery = new ViewerVideoRecoveryGate(TimeSpan.FromSeconds(1));
 
         recovery.BeginRecovery();
-        Assert.True(recovery.TryRequestPli(Start));
+        Assert.True(recovery.CanRequestPli(Start));
+        recovery.MarkPliSent(Start);
 
         recovery.BeginRecovery();
-        Assert.False(recovery.TryRequestPli(Start + TimeSpan.FromMilliseconds(100)));
+        Assert.False(recovery.CanRequestPli(Start + TimeSpan.FromMilliseconds(100)));
 
         Assert.Equal(1, recovery.RecoveryEpisodes);
         Assert.Equal(1, recovery.RecoveryKeyframesRequested);
@@ -171,6 +172,18 @@ public sealed class H264RtpIntegrityRecoveryTests
 
         Assert.Equal(2, recovery.SuspectAccessUnitsSuppressed);
         Assert.True(recovery.Active);
+    }
+
+    [Fact]
+    public void Unsent_pli_does_not_start_the_rate_limit_window()
+    {
+        var recovery = new ViewerVideoRecoveryGate(TimeSpan.FromSeconds(1));
+        recovery.BeginRecovery();
+
+        Assert.True(recovery.CanRequestPli(Start));
+        // Simulate transport not ready: no MarkPliSent call.
+        Assert.True(recovery.CanRequestPli(Start + TimeSpan.FromMilliseconds(100)));
+        Assert.Equal(0, recovery.RecoveryKeyframesRequested);
     }
 
     [Fact]
@@ -195,7 +208,8 @@ public sealed class H264RtpIntegrityRecoveryTests
         Assert.True(recovery.ShouldDeliver(isIdr: false, hasVcl: true));
 
         recovery.BeginRecovery();
-        Assert.True(recovery.TryRequestPli(Start + TimeSpan.FromSeconds(2)));
+        Assert.True(recovery.CanRequestPli(Start + TimeSpan.FromSeconds(2)));
+        recovery.MarkPliSent(Start + TimeSpan.FromSeconds(2));
         Assert.Equal(2, recovery.RecoveryEpisodes);
     }
 }

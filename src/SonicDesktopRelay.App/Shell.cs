@@ -157,8 +157,9 @@ public sealed class Shell : INotifyPropertyChanged
         var video = host.VideoDiagnostics;
         var transform = video is null
             ? encoder
-            : $"{video.TransformName} ({video.Acceleration}, {video.InputFormat}->{video.OutputFormat}, " +
-              $"{video.Width}x{video.Height}@{video.FramesPerSecond}, {video.Bitrate} bps)";
+            : $"{video.TransformName} (clsid={video.TransformClsid:B}, {video.Acceleration}, " +
+              $"{video.InputFormat}->{video.OutputFormat}, {video.Width}x{video.Height}@" +
+              $"{video.FramesPerSecond}, {video.Bitrate} bps)";
 
         var audio = host.AudioDegradedReason is { } audioFailure
             ? $"audio degraded: {audioFailure}"
@@ -182,7 +183,9 @@ public sealed class Shell : INotifyPropertyChanged
         var video = host.VideoDiagnostics;
         var transform = video is null
             ? decoder
-            : $"{video.TransformName} ({video.Acceleration}, {video.InputFormat}->{video.OutputFormat})";
+            : $"{video.TransformName} (clsid={video.TransformClsid:B}, {video.Acceleration}, " +
+              $"{video.InputFormat}->{video.OutputFormat}, " +
+              $"{(video.Width > 0 && video.Height > 0 ? $"{video.Width}x{video.Height}" : "geometry pending")})";
 
         var audio = host.AudioDegradedReason is { } audioFailure
             ? $"audio degraded: {audioFailure}"

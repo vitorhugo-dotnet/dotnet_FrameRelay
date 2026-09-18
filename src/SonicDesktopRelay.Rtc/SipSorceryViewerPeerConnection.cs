@@ -109,7 +109,7 @@ public sealed class SipSorceryViewerPeerConnection : IViewerPeerConnection
             {
                 if (_closed) return;
                 recoveryWasActive = _videoRecovery.Active;
-                deliver = _videoRecovery.ShouldDeliver(complete.IsIdr);
+                deliver = _videoRecovery.ShouldDeliver(complete.IsIdr, complete.HasVcl);
             }
 
             if (!deliver)

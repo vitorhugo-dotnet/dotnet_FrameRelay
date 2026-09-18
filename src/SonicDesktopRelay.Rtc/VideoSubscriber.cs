@@ -47,6 +47,8 @@ public sealed class VideoSubscriber(
     /// </summary>
     public event Action<string>? NegotiationFailed;
 
+    public event Action<ViewerNegotiationDiagnosticEntry>? Diagnostic;
+
     public async Task HandleAsync(SignalingEnvelope envelope, CancellationToken ct)
     {
         if (envelope.From is not { } from) return;
@@ -60,6 +62,7 @@ public sealed class VideoSubscriber(
                 return;
 
             case SignalingMessageTypes.WebRtcOffer:
+                EmitDiagnostic("viewer.offer.received", from: from);
                 if (ReadString(envelope, "sdp") is not { } offerSdp) return;
                 await LearnPublisherAsync(from, ct);
                 if (PublisherId != from) return;
@@ -172,7 +175,10 @@ public sealed class VideoSubscriber(
         }
         catch (Exception e)
         {
-            await FailNegotiationAsync(peer, "createAnswer", e.Message);
+            var stage = e is ViewerNegotiationException negotiation
+                ? negotiation.Stage
+                : "createAnswer";
+            await FailNegotiationAsync(peer, stage, e.Message);
             return;
         }
 
@@ -190,10 +196,12 @@ public sealed class VideoSubscriber(
             return;
         }
 
+        EmitDiagnostic("viewer.answer.send.begin", to: publisher);
         try
         {
             await signaling.SendAsync(SignalingMessageTypes.WebRtcAnswer, publisher,
                 new { type = "answer", sdp = answer }, ct);
+            EmitDiagnostic("viewer.answer.send.ok", to: publisher);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -201,6 +209,11 @@ public sealed class VideoSubscriber(
         }
         catch (Exception e)
         {
+            EmitDiagnostic(
+                "viewer.answer.send.failed",
+                exceptionType: e.GetType().Name,
+                message: e.Message,
+                to: publisher);
             await FailNegotiationAsync(peer, "sendAnswer", e.Message);
         }
     }
@@ -274,9 +287,13 @@ public sealed class VideoSubscriber(
     {
         var peer = peers.Create();
 
+        peer.Diagnostic += entry =>
+            Diagnostic?.Invoke(entry with { From = entry.From ?? PublisherId });
+
         peer.IceCandidateGathered += (candidate, mid, index) =>
         {
             if (PublisherId is not { } publisher) return;
+            EmitDiagnostic("viewer.ice_candidate.send", to: publisher);
             _ = signaling.SendAsync(SignalingMessageTypes.WebRtcIceCandidate, publisher,
                 new { candidate, sdpMid = mid, sdpMLineIndex = index }, CancellationToken.None);
         };
@@ -292,6 +309,26 @@ public sealed class VideoSubscriber(
         }
 
         return peer;
+    }
+
+    private void EmitDiagnostic(
+        string eventName,
+        string? exceptionType = null,
+        string? message = null,
+        Guid? from = null,
+        Guid? to = null)
+    {
+        Diagnostic?.Invoke(new ViewerNegotiationDiagnosticEntry(
+            DateTimeOffset.UtcNow,
+            eventName,
+            "unknown",
+            "unknown",
+            "unknown",
+            "unknown",
+            ExceptionType: exceptionType,
+            Message: message,
+            From: from,
+            To: to));
     }
 
     private void OnKeyFrameNeeded() => _peer?.RequestKeyFrame();

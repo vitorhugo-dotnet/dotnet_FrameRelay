@@ -91,6 +91,7 @@ public sealed class SessionRuntime(
                 if (!_watchHooked)
                 {
                     watchHost.WatchStateChanged += OnWatchState;
+                    watchHost.NegotiationFailed += OnWatchNegotiationFailed;
                     _watchHooked = true;
                 }
 
@@ -110,7 +111,7 @@ public sealed class SessionRuntime(
                 }
             }
 
-            Publish(new SessionSnapshot(SessionPhase.Watching, null, sessionId, 0, _connection!.State, null,
+            Publish(new SessionSnapshot(SessionPhase.Watching, null, sessionId, 0, _connection!.State, Snapshot.Error,
                 Watching: watchHost is null ? null : WatchState.Waiting,
                 DecoderName: watchHost?.DecoderName));
         }
@@ -355,6 +356,12 @@ public sealed class SessionRuntime(
     {
         if (Snapshot.Phase != SessionPhase.Watching) return;
         Publish(Snapshot with { Watching = state });
+    }
+
+    private void OnWatchNegotiationFailed(string failure)
+    {
+        if (Snapshot.Phase is not (SessionPhase.Joining or SessionPhase.Watching)) return;
+        Publish(Snapshot with { Error = failure });
     }
 
     private async Task FailAsync(string code)

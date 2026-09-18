@@ -135,7 +135,12 @@ public sealed class VideoSubscriberTests
         {
             await harness.Subscriber.HandleAsync(
                 Frame(SignalingMessageTypes.WebRtcIceCandidate, Publisher,
-                    $"""{"candidate":"candidate:{{i}}","sdpMid":"0","sdpMLineIndex":0}"""),
+                    JsonSerializer.Serialize(new
+                    {
+                        candidate = $"candidate:{i}",
+                        sdpMid = "0",
+                        sdpMLineIndex = 0
+                    })),
                 CancellationToken.None);
         }
 

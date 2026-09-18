@@ -46,9 +46,12 @@ public sealed class ScreenPublishPipeline(
     private long _maximumAccessUnitBytes;
     private long _lastCapturedUtcTicks;
     private long _lastEncodedUtcTicks;
+    private long _lastEncodeDurationTicks;
+    private long _lastKeyFrameRecoveryLatencyTicks;
 
     private bool _keyFramePending;
     private KeyFrameRequestReason? _pendingKeyFrameReason;
+    private DateTimeOffset? _pendingKeyFrameRequestedAt;
     private DateTimeOffset? _lastQualityChangeAt;
 
     public event Action<EncodedVideoSample>? SampleEncoded;
@@ -79,6 +82,10 @@ public sealed class ScreenPublishPipeline(
     public DateTimeOffset? LastCapturedFrameAt => ReadTimestamp(ref _lastCapturedUtcTicks);
 
     public DateTimeOffset? LastEncodedAccessUnitAt => ReadTimestamp(ref _lastEncodedUtcTicks);
+
+    public TimeSpan? LastEncodeDuration => ReadDuration(ref _lastEncodeDurationTicks);
+
+    public TimeSpan? LastKeyFrameRecoveryLatency => ReadDuration(ref _lastKeyFrameRecoveryLatencyTicks);
 
     public string? LastFailure { get; private set; }
 
@@ -121,6 +128,7 @@ public sealed class ScreenPublishPipeline(
 
             _keyFramePending = true;
             _pendingKeyFrameReason = reason;
+            _pendingKeyFrameRequestedAt = _time.GetUtcNow();
         }
 
         try
@@ -142,6 +150,7 @@ public sealed class ScreenPublishPipeline(
             {
                 _keyFramePending = false;
                 _pendingKeyFrameReason = null;
+                _pendingKeyFrameRequestedAt = null;
             }
             throw;
         }
@@ -360,6 +369,7 @@ public sealed class ScreenPublishPipeline(
         Interlocked.Exchange(ref _lastCapturedUtcTicks, _time.GetUtcNow().UtcTicks);
 
         EncodedVideoSample? sample;
+        var encodeStarted = _time.GetTimestamp();
         try
         {
             var stampedFrame = clock is null
@@ -385,6 +395,17 @@ public sealed class ScreenPublishPipeline(
             Failed?.Invoke(e);
             return;
         }
+        finally
+        {
+            var encodeDuration = _time.GetElapsedTime(encodeStarted);
+            Interlocked.Exchange(ref _lastEncodeDurationTicks, encodeDuration.Ticks);
+            _logger.LogTrace(
+                "video.encode.completed encodeMs={EncodeMs:F3} maxHeight={MaxHeight} fps={Fps} bitrate={Bitrate}",
+                encodeDuration.TotalMilliseconds,
+                Quality.MaxHeight,
+                Quality.FramesPerSecond,
+                Quality.TargetBitsPerSecond);
+        }
 
         if (sample is not { } encoded) return;
 
@@ -396,19 +417,30 @@ public sealed class ScreenPublishPipeline(
             Interlocked.Increment(ref _keyframesProduced);
 
             KeyFrameRequestReason? fulfilledReason;
+            DateTimeOffset? requestedAt;
             lock (_adaptationGate)
             {
                 fulfilledReason = _keyFramePending ? _pendingKeyFrameReason : null;
+                requestedAt = _keyFramePending ? _pendingKeyFrameRequestedAt : null;
                 _keyFramePending = false;
                 _pendingKeyFrameReason = null;
+                _pendingKeyFrameRequestedAt = null;
             }
 
             if (fulfilledReason is { } reason)
             {
+                var recoveryLatency = requestedAt is { } requestTime
+                    ? _time.GetUtcNow() - requestTime
+                    : TimeSpan.Zero;
+                if (recoveryLatency > TimeSpan.Zero)
+                    Interlocked.Exchange(ref _lastKeyFrameRecoveryLatencyTicks, recoveryLatency.Ticks);
+
                 _logger.LogInformation(
-                    "Publisher recovery keyframe produced. reason={Reason} keyframesProduced={KeyframesProduced} " +
-                    "encodedAccessUnits={EncodedAccessUnits} requests={KeyFrameRequests} coalesced={CoalescedKeyFrameRequests}",
+                    "Publisher recovery keyframe produced. reason={Reason} recoveryLatencyMs={RecoveryLatencyMs:F1} " +
+                    "keyframesProduced={KeyframesProduced} encodedAccessUnits={EncodedAccessUnits} " +
+                    "requests={KeyFrameRequests} coalesced={CoalescedKeyFrameRequests}",
                     reason,
+                    recoveryLatency.TotalMilliseconds,
                     KeyframesProduced,
                     EncodedAccessUnits,
                     KeyFrameRequests,
@@ -423,6 +455,12 @@ public sealed class ScreenPublishPipeline(
     {
         var ticks = Interlocked.Read(ref source);
         return ticks == 0 ? null : new DateTimeOffset(ticks, TimeSpan.Zero);
+    }
+
+    private static TimeSpan? ReadDuration(ref long source)
+    {
+        var ticks = Interlocked.Read(ref source);
+        return ticks <= 0 ? null : TimeSpan.FromTicks(ticks);
     }
 
     private static void UpdateMaximum(ref long target, long candidate)

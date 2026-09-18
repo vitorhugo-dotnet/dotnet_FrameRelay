@@ -14,15 +14,27 @@ public sealed class VideoPublisher(
     ScreenPublishPipeline pipeline,
     IPeerConnectionFactory peers,
     ISignalingConnection signaling,
-    AudioPublishPipeline? audioPipeline = null) : IAsyncDisposable
+    AudioPublishPipeline? audioPipeline = null,
+    TimeProvider? time = null) : IAsyncDisposable
 {
     private readonly ConcurrentDictionary<Guid, IPeerConnection> _peers = new();
     private readonly ConcurrentDictionary<Guid, RtcTransportDiagnostics> _transportDiagnostics = new();
+    private readonly TimeProvider _time = time ?? TimeProvider.System;
+    private long _lastVideoSendDurationTicks;
     private bool _subscribed;
 
     public int PeerCount => _peers.Count;
 
     public IReadOnlyDictionary<Guid, RtcTransportDiagnostics> TransportDiagnostics => _transportDiagnostics;
+
+    public TimeSpan? LastVideoSendDuration
+    {
+        get
+        {
+            var ticks = Interlocked.Read(ref _lastVideoSendDurationTicks);
+            return ticks <= 0 ? null : TimeSpan.FromTicks(ticks);
+        }
+    }
 
     public event Action<Guid, RtcTransportDiagnostics>? TransportDiagnosticsChanged;
 
@@ -123,7 +135,16 @@ public sealed class VideoPublisher(
 
     private void BroadcastVideo(EncodedVideoSample sample)
     {
-        foreach (var peer in _peers.Values) peer.SendVideo(sample);
+        var started = _time.GetTimestamp();
+        try
+        {
+            foreach (var peer in _peers.Values) peer.SendVideo(sample);
+        }
+        finally
+        {
+            var elapsed = _time.GetElapsedTime(started);
+            Interlocked.Exchange(ref _lastVideoSendDurationTicks, elapsed.Ticks);
+        }
     }
 
     private void BroadcastAudio(EncodedAudioSample sample)

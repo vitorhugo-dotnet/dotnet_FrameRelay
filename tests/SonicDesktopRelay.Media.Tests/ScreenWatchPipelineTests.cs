@@ -208,6 +208,47 @@ public sealed class ScreenWatchPipelineTests
         Assert.Equal(Start, pipeline.LastDecodedFrameAt);
     }
 
+
+    [Fact]
+    public void Diagnostics_keep_tracking_access_units_after_a_terminal_decode_failure()
+    {
+        var time = new FakeTimeProvider(Start);
+        using var pipeline = new ScreenWatchPipeline(
+            new FakeDecoder { Throw = true },
+            time);
+
+        pipeline.Submit(Sample());
+
+        time.Advance(TimeSpan.FromSeconds(1));
+        pipeline.Submit(new EncodedVideoSample(
+            new byte[32],
+            TimeSpan.FromSeconds(1),
+            IsKeyFrame: false,
+            Width: 1920,
+            Height: 1080));
+
+        Assert.Equal(WatchState.Failed, pipeline.State);
+        Assert.Equal(2, pipeline.VideoAccessUnitsReceived);
+        Assert.Equal(Start + TimeSpan.FromSeconds(1), pipeline.LastAccessUnitAt);
+        Assert.Equal(32, pipeline.MaximumAccessUnitBytes);
+        Assert.Equal(1, pipeline.KeyAccessUnitsReceived);
+    }
+
+    [Fact]
+    public void Diagnostics_count_null_decodes_and_recovery_keyframe_requests()
+    {
+        var decoder = new FakeDecoder();
+        using var pipeline = new ScreenWatchPipeline(decoder, new FakeTimeProvider(Start));
+        pipeline.Submit(Sample());
+
+        decoder.ReturnNull = true;
+        pipeline.Submit(Sample());
+        pipeline.Submit(Sample());
+
+        Assert.Equal(2, pipeline.NullDecodeResults);
+        Assert.Equal(1, pipeline.KeyFrameRequests);
+    }
+
     private static EncodedVideoSample Sample() =>
         new(new byte[8], TimeSpan.Zero, true, 1920, 1080);
 

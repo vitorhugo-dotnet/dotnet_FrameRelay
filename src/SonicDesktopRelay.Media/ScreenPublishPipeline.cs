@@ -20,7 +20,6 @@ public sealed class ScreenPublishPipeline(
     private readonly ILogger<ScreenPublishPipeline> _logger =
         logger ?? NullLogger<ScreenPublishPipeline>.Instance;
     private readonly VideoPublishProfile _profile = profile ?? VideoPublishProfile.Default;
-    private readonly VideoPublishProfile _profile = profile ?? VideoPublishProfile.Default;
 
     // RTCP reports normally arrive periodically. Requiring both multiple reports and elapsed
     // time makes a burst insufficient on its own, while the cooldown prevents staircase drops.

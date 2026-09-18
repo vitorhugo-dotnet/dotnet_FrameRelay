@@ -1,4 +1,6 @@
 using System.Runtime.Versioning;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using SonicDesktopRelay.ApiClient;
 using SonicDesktopRelay.Media;
 using SonicDesktopRelay.Media.Windows;
@@ -15,8 +17,11 @@ namespace SonicDesktopRelay.App;
 [SupportedOSPlatform("windows10.0.19041.0")]
 public sealed class RtcVideoWatchHost(
     IceApiClient iceApi,
-    Func<ISignalingConnection?> signaling) : IVideoWatchHost
+    Func<ISignalingConnection?> signaling,
+    ILoggerFactory? loggerFactory = null) : IVideoWatchHost
 {
+    private readonly ILogger<RtcVideoWatchHost> _logger =
+        loggerFactory?.CreateLogger<RtcVideoWatchHost>() ?? NullLogger<RtcVideoWatchHost>.Instance;
     /// <summary>
     /// How often the watchdog looks. The pipeline decides what counts as a stall; this only
     /// decides how quickly it notices, and a second is well under the four it waits for.
@@ -37,11 +42,21 @@ public sealed class RtcVideoWatchHost(
 
     public NativeVideoDiagnostics? VideoDiagnostics => _decoder?.Diagnostics;
 
-    public string? VideoDecoderFailure => _decoder?.LastFailure;
+    public string? VideoDecoderFailure => _pipeline?.LastFailure ?? _decoder?.LastFailure;
 
     public long VideoAccessUnitsReceived => _pipeline?.VideoAccessUnitsReceived ?? 0;
 
     public long DecodedFrames => _pipeline?.DecodedFrames ?? 0;
+
+    public long KeyAccessUnitsReceived => _pipeline?.KeyAccessUnitsReceived ?? 0;
+
+    public long NullDecodeResults => _pipeline?.NullDecodeResults ?? 0;
+
+    public long KeyFrameRequests => _pipeline?.KeyFrameRequests ?? 0;
+
+    public long MaximumAccessUnitBytes => _pipeline?.MaximumAccessUnitBytes ?? 0;
+
+    public DateTimeOffset? LastAccessUnitAt => _pipeline?.LastAccessUnitAt;
 
     public DateTimeOffset? LastDecodedFrameAt => _pipeline?.LastDecodedFrameAt;
 
@@ -92,12 +107,16 @@ public sealed class RtcVideoWatchHost(
                              ?? throw new InvalidOperationException(
                                  "Signaling must be connected before watching starts.");
 
-            var decoder = new MediaFoundationH264Decoder();
+            var decoder = new MediaFoundationH264Decoder(
+                loggerFactory?.CreateLogger<MediaFoundationH264Decoder>());
             _decoder = decoder;
             DecoderName = decoder.Name;
             DecoderRejections = decoder.RejectionLog;
 
-            var pipeline = new ScreenWatchPipeline(decoder, TimeProvider.System);
+            var pipeline = new ScreenWatchPipeline(
+                decoder,
+                TimeProvider.System,
+                loggerFactory?.CreateLogger<ScreenWatchPipeline>());
             pipeline.FrameDecoded += OnFrame;
             pipeline.StateChanged += OnState;
             // Own the decoder pipeline before any later async setup. ICE/audio failures must
@@ -155,6 +174,12 @@ public sealed class RtcVideoWatchHost(
             subscriber.NegotiationFailed += OnNegotiationFailed;
             subscriber.Diagnostic += OnWebRtcDiagnostic;
             _subscriber = subscriber;
+
+            _logger.LogInformation(
+                "Viewer media stack started. decoder={DecoderName} transform={TransformName} acceleration={Acceleration}",
+                decoder.Name,
+                decoder.TransformInfo?.Name ?? decoder.Name,
+                decoder.TransformInfo?.IsHardware == true ? "hardware" : "software");
         }
         catch (Exception e) when (e is InvalidOperationException or PlatformNotSupportedException
                                       or HttpRequestException or ApiException)
@@ -162,6 +187,10 @@ public sealed class RtcVideoWatchHost(
             // Watching without a video decoder is not recoverable, but the session is already up:
             // record why and let Diagnostics say it out loud rather than taking the app down.
             StartFailure = e.Message;
+            _logger.LogError(
+                e,
+                "Viewer media stack failed to start. hresult=0x{HResult:X8}",
+                e.HResult);
             await DisposeStackAsync();
             throw;
         }
@@ -195,7 +224,30 @@ public sealed class RtcVideoWatchHost(
 
     private void OnFrame(VideoFrame frame) => FrameDecoded?.Invoke(frame);
 
-    private void OnState(WatchState state) => WatchStateChanged?.Invoke(state);
+    private void OnState(WatchState state)
+    {
+        if (state == WatchState.Failed)
+        {
+            _logger.LogError(
+                "Viewer media pipeline entered Failed. accessUnits={AccessUnits} decodedFrames={DecodedFrames} nullDecodes={NullDecodes} keyFrameRequests={KeyFrameRequests} lastFailure={LastFailure}",
+                VideoAccessUnitsReceived,
+                DecodedFrames,
+                NullDecodeResults,
+                KeyFrameRequests,
+                VideoDecoderFailure);
+        }
+        else
+        {
+            _logger.LogInformation(
+                "Viewer media pipeline state changed to {State}. accessUnits={AccessUnits} decodedFrames={DecodedFrames} nullDecodes={NullDecodes}",
+                state,
+                VideoAccessUnitsReceived,
+                DecodedFrames,
+                NullDecodeResults);
+        }
+
+        WatchStateChanged?.Invoke(state);
+    }
 
     private void OnAudioPipelineFailed(Exception error)
         => _audioPipelineFailure ??= error.Message;

@@ -1,4 +1,6 @@
 using System.Runtime.Versioning;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using SonicDesktopRelay.ApiClient;
 using SonicDesktopRelay.Media;
 using SonicDesktopRelay.Media.Windows;
@@ -16,8 +18,11 @@ namespace SonicDesktopRelay.App;
 [SupportedOSPlatform("windows10.0.19041.0")]
 public sealed class RtcVideoPublishHost(
     IceApiClient iceApi,
-    Func<ISignalingConnection?> signaling) : IVideoPublishHost
+    Func<ISignalingConnection?> signaling,
+    ILoggerFactory? loggerFactory = null) : IVideoPublishHost
 {
+    private readonly ILogger<RtcVideoPublishHost> _logger =
+        loggerFactory?.CreateLogger<RtcVideoPublishHost>() ?? NullLogger<RtcVideoPublishHost>.Instance;
     private readonly SemaphoreSlim _gate = new(1, 1);
 
     private ScreenPublishPipeline? _pipeline;
@@ -30,6 +35,22 @@ public sealed class RtcVideoPublishHost(
     public string? EncoderName { get; private set; }
 
     public NativeVideoDiagnostics? VideoDiagnostics => _encoder?.Diagnostics;
+
+    public long FramesCaptured => _pipeline?.FramesCaptured ?? 0;
+
+    public long EncodedAccessUnits => _pipeline?.EncodedAccessUnits ?? 0;
+
+    public long KeyframesProduced => _pipeline?.KeyframesProduced ?? 0;
+
+    public long KeyFrameRequests => _pipeline?.KeyFrameRequests ?? 0;
+
+    public long MaximumAccessUnitBytes => _pipeline?.MaximumAccessUnitBytes ?? 0;
+
+    public DateTimeOffset? LastCapturedFrameAt => _pipeline?.LastCapturedFrameAt;
+
+    public DateTimeOffset? LastEncodedAccessUnitAt => _pipeline?.LastEncodedAccessUnitAt;
+
+    public string? VideoPipelineFailure => _pipeline?.LastFailure;
 
     public string? AudioEncoderName => _audioPipeline?.EncoderName;
 
@@ -66,7 +87,12 @@ public sealed class RtcVideoPublishHost(
             EncoderRejections = encoder.RejectionLog;
 
             var capture = new GraphicsCaptureScreenSource();
-            var pipeline = new ScreenPublishPipeline(capture, encoder, clock);
+            var pipeline = new ScreenPublishPipeline(
+                capture,
+                encoder,
+                clock,
+                TimeProvider.System,
+                loggerFactory?.CreateLogger<ScreenPublishPipeline>());
             // Transfer ownership before capture startup: if the native capture path throws,
             // DisposeStackAsync can still release the capture source and Media Foundation MFT.
             _pipeline = pipeline;
@@ -103,6 +129,15 @@ public sealed class RtcVideoPublishHost(
                 new SipSorceryPeerConnectionFactory(ice),
                 connection,
                 audioPipeline);
+
+            _logger.LogInformation(
+                "Publisher media stack started. encoder={EncoderName} transform={TransformName} acceleration={Acceleration} monitor={MonitorId} dimensions={Width}x{Height}",
+                encoder.Name,
+                encoder.TransformInfo?.Name ?? encoder.Name,
+                encoder.TransformInfo?.IsHardware == true ? "hardware" : "software",
+                monitor.Id,
+                monitor.Width,
+                monitor.Height);
         }
         catch (Exception e) when (e is InvalidOperationException or PlatformNotSupportedException
                                       or HttpRequestException or ApiException)
@@ -111,6 +146,10 @@ public sealed class RtcVideoPublishHost(
             // itself is already up: record why and let Diagnostics say it out loud rather than
             // taking the app down.
             StartFailure = e.Message;
+            _logger.LogError(
+                e,
+                "Publisher media stack failed to start. hresult=0x{HResult:X8}",
+                e.HResult);
             await DisposeStackAsync();
             throw;
         }

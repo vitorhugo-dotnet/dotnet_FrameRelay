@@ -15,18 +15,9 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- The bindings only. SIPSorceryMedia.FFmpeg wraps them, but its initialiser registers
-         capture devices, which pulls in avdevice, avfilter and avformat — 130 MB of libraries
-         for a code path this app never takes, since it captures through Windows.Graphics.Capture
-         and encodes through avcodec directly. -->
-    <PackageReference Include="FFmpeg.AutoGen" Version="8.1.0" />
     <PackageReference Include="NAudio.Wasapi" Version="3.1.0" />
     <PackageReference Include="Vortice.Direct3D11" Version="3.8.3" />
     <PackageReference Include="Vortice.MediaFoundation" Version="3.8.3" />
   </ItemGroup>
-
-  <!-- The single owner of the FFmpeg download: everything that embeds the runtime references
-       this project, so it is acquired once instead of once per consumer. -->
-  <Import Project="..\..\build\FFmpegAcquisition.targets" />
 
 </Project>

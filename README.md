@@ -1,68 +1,67 @@
 # FrameRelay
 
-FrameRelay shares a Windows screen and its system audio with other Windows machines over the shared [RelayControl](https://github.com/vitorhugo-dotnet/dotnet_SonicRelay) control plane. It is an Avalonia desktop app: pick a monitor, get a six-character code, and everyone who enters it watches the same encoded stream over WebRTC.
+FrameRelay is a Windows desktop screen-sharing client built on .NET 10 and Avalonia. The current
+desktop project names still use the legacy `SonicDesktopRelay.*` namespace; this migration does
+not rename them.
 
-FrameRelay is a separate product from **SonicRelay**. SonicRelay focuses on low-latency system-audio streaming to mobile viewers; FrameRelay focuses on desktop screen sharing while reusing the same device identity, session, signaling and TURN infrastructure.
+## Runtime requirements
 
-## Requirements
+- Windows 10 build 19041 or later.
+- Access to the FrameRelay backend/signaling service.
+- No separate video codec runtime installation. Screen video uses the H.264 transforms shipped
+  with Windows.
 
-To run a release:
-
-- Windows 10 build 19041 or later. Nothing else — **FFmpeg is bundled**, so there is no separate
-  download and no `winget install` step.
-
-To build from source:
-
-- .NET 10 SDK.
-- Network access on the first build: it fetches the pinned FFmpeg 8.1.1 shared build once
-  (about 100 MB, cached under `artifacts/ffmpeg/`) and copies the libraries into every build
-  output. `-p:EmbedFFmpegRuntime=false` skips that and uses a system install instead. See
-  [docs/screen-publishing.md](docs/screen-publishing.md#ffmpeg-requirement).
-
-The bundled FFmpeg is GPL v3; see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) for what that
-means for redistribution.
+For source builds, install the .NET 10 SDK.
 
 ## Build and test
 
-```bash
-dotnet build SonicDesktopRelay.sln
-dotnet test SonicDesktopRelay.sln
-dotnet run --project src/SonicDesktopRelay.App
+```powershell
+dotnet restore SonicDesktopRelay.sln
+dotnet build SonicDesktopRelay.sln --configuration Release --no-restore
+dotnet test SonicDesktopRelay.sln --configuration Release --no-build --no-restore
 ```
 
-> The solution, project and namespace identifiers still use `SonicDesktopRelay.*` internally. The public product name is **FrameRelay**; renaming internal identifiers is intentionally outside this branding-only change.
+## Native media path
 
-Tests that need a display skip themselves when there is none; everything else runs on fakes. The
-FFmpeg tests do not skip — the build hands them the same libraries the app ships.
+Publishing uses one media session for every viewer:
+
+```text
+Windows.Graphics.Capture -> BGRA -> NV12 -> Media Foundation H.264 -> WebRTC
+WASAPI loopback -> PCM 48 kHz stereo -> Opus ----------------------^
+```
+
+Watching mirrors that path:
+
+```text
+WebRTC -> Media Foundation H.264 -> NV12 -> BGRA -> Avalonia surface
+       -> Opus -> PCM 48 kHz stereo -> WASAPI render endpoint
+```
+
+The H.264 encoder enumerates hardware Media Foundation transforms first and falls back to a
+system software transform when necessary. The decoder also enumerates native transforms and
+normalizes output to NV12 before the reusable BGRA render buffer.
+
+Audio and video are stamped from the same `MediaSessionClock`. The RTC layer stays P2P-first
+with the backend-provided ICE servers and uses TURN only when direct connectivity cannot be
+established.
+
+The Diagnostics screen reports the live selected native transform, hardware/software path,
+formats, geometry/bitrate, candidate rejection reasons, WASAPI endpoint state, Opus codec state,
+session state, and signaling metadata. SDP, ICE candidate contents, credentials, and media
+payloads are not recorded.
 
 ## Projects
 
-| Project | TFM | Responsibility |
+| Project | Target | Responsibility |
 |---|---|---|
-| `SonicDesktopRelay.Core` | `net10.0` | Device identity, credential storage, settings |
-| `SonicDesktopRelay.ApiClient` | `net10.0` | Typed HTTP: devices, sessions, ICE servers |
-| `SonicDesktopRelay.Signaling` | `net10.0` | WebSocket signaling, envelope, reconnection |
-| `SonicDesktopRelay.Media` | `net10.0` | Platform-neutral media contracts, the publish and watch pipelines |
-| `SonicDesktopRelay.Media.Windows` | `net10.0-windows10.0.19041.0` | Windows.Graphics.Capture and the FFmpeg H.264 encoder and decoder |
-| `SonicDesktopRelay.Rtc` | `net10.0` | Peer connections, both halves of negotiation, fan-out to N viewers |
-| `SonicDesktopRelay.Presentation` | `net10.0` | Session state machine and view models |
-| `SonicDesktopRelay.App` | `net10.0-windows10.0.19041.0` | Avalonia shell and composition root |
-
-The App carries a Windows TFM because MSBuild cannot reference a `net10.0-windows` project from
-a `net10.0` one, and the App is the only assembly that composes `Media.Windows`. Every library
-below it stays platform-neutral, which is what lets the whole presentation layer be tested
-without a GPU.
-
-## Related projects
-
-- [RelayControl](https://github.com/vitorhugo-dotnet/dotnet_SonicRelay) — shared device identity, pairing, sessions, signaling and TURN credentials.
-- [SonicRelay Desktop](https://github.com/vitorhugo-dotnet/desktop_dotnet_SonicRelay) — system-audio publisher for SonicRelay.
-- [SonicRelay Mobile](https://github.com/vitorhugo-dotnet/flutter_mobile-web_SonicRelay) — mobile SonicRelay audio viewer.
+| `SonicDesktopRelay.Media` | `net10.0` | Platform-neutral audio/video contracts and pipelines |
+| `SonicDesktopRelay.Media.Windows` | `net10.0-windows10.0.19041.0` | Windows.Graphics.Capture, Media Foundation, WASAPI |
+| `SonicDesktopRelay.Rtc` | `net10.0` | SIPSorcery peer connections, H.264/Opus transport |
+| `SonicDesktopRelay.Presentation` | `net10.0` | Session/view-model state |
+| `SonicDesktopRelay.App` | Windows | Avalonia composition root and UI |
 
 ## Documentation
 
-- [Screen publishing and watching](docs/screen-publishing.md) — capture, encoder and decoder
-  selection, the FFmpeg requirement, the quality ladder, and why a stall is not a
-  disconnection.
-- [Design spec](docs/superpowers/specs/2026-08-23-sonicdesktoprelay-design.md).
-- [Third-party notices](THIRD-PARTY-NOTICES.md) — the bundled FFmpeg and its licence.
+- [Screen publishing and watching](docs/screen-publishing.md)
+- [Native media validation](docs/native-media-validation.md)
+- [Third-party notices](THIRD-PARTY-NOTICES.md)

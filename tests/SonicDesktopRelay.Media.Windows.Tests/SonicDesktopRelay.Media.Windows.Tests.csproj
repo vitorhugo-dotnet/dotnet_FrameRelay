@@ -23,8 +23,5 @@
     <ProjectReference Include="..\..\src\SonicDesktopRelay.Media.Windows\SonicDesktopRelay.Media.Windows.csproj" />
   </ItemGroup>
 
-  <!-- The same runtime the app ships, so the encoder and decoder tests exercise the FFmpeg
-       that will actually be shipped instead of whatever the agent happens to have installed. -->
-  <Import Project="..\..\build\FFmpeg.targets" />
 
 </Project>

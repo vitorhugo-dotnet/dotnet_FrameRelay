@@ -34,13 +34,31 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      # The FFmpeg shared build the app embeds is around 100 MB. Caching it on the version and
-      # checksum in build/FFmpeg.props means only the first run after a version bump downloads it.
-      - name: Cache the embedded FFmpeg runtime
-        uses: actions/cache@v4
-        with:
-          path: artifacts/ffmpeg
-          key: ffmpeg-${{ runner.os }}-${{ hashFiles('build/FFmpeg.props') }}
+      - name: Reject legacy media stack references
+        shell: pwsh
+        run: |
+          $legacyName = 'FF' + 'mpeg'
+
+          $legacyFiles = @(
+            git ls-files | Where-Object {
+              $_.IndexOf($legacyName, [StringComparison]::OrdinalIgnoreCase) -ge 0
+            }
+          )
+          if ($legacyFiles.Count -gt 0) {
+            throw "Legacy media files remain tracked: $($legacyFiles -join ', ')"
+          }
+
+          $hits = git grep -n -i $legacyName -- ':!docs/superpowers/plans/*' ':!docs/superpowers/specs/*'
+          $grepExit = $LASTEXITCODE
+          if ($grepExit -eq 0) {
+            $hits | Write-Host
+            throw 'Legacy media references remain outside historical Superpowers documents.'
+          }
+          if ($grepExit -ne 1) {
+            throw "git grep failed with exit code $grepExit."
+          }
+
+
 
       - name: Set up .NET
         uses: actions/setup-dotnet@v4
@@ -184,13 +202,6 @@ jobs:
         with:
           global-json-file: global.json
 
-      # The FFmpeg shared build the app embeds is around 100 MB. Caching it on the version and
-      # checksum in build/FFmpeg.props means only the first run after a version bump downloads it.
-      - name: Cache the embedded FFmpeg runtime
-        uses: actions/cache@v4
-        with:
-          path: artifacts/ffmpeg
-          key: ffmpeg-${{ runner.os }}-${{ hashFiles('build/FFmpeg.props') }}
 
       - name: Resolve package metadata
         id: metadata
@@ -271,31 +282,44 @@ jobs:
             -p:DebugType=embedded `
             -o $singleFileDir
 
-      # The whole point of embedding FFmpeg is that neither asset needs anything installed, and
-      # the single-file path is the fragile half: content is only bundled because the libraries
-      # are marked AssetType=native. A regression there is invisible until a user's media fails
-      # to start, so it fails the build here instead.
-      - name: Verify FFmpeg is embedded in both assets
+      - name: Verify legacy codec artifacts are absent
         shell: pwsh
         run: |
-          $libraries = @('avcodec-62.dll', 'avutil-60.dll', 'swresample-6.dll', 'swscale-9.dll')
+          $legacyTokens = @(
+            'avcodec-',
+            'avutil-',
+            'swscale-',
+            'swresample-',
+            ('FF' + 'mpeg.AutoGen')
+          )
           $portableDir = Join-Path $env:GITHUB_WORKSPACE 'artifacts/publish/portable'
           $exePath = Join-Path $env:GITHUB_WORKSPACE "artifacts/publish/single-file/$env:APP_EXE_NAME"
 
-          $missing = $libraries | Where-Object { -not (Test-Path (Join-Path $portableDir $_)) }
-          if ($missing) {
-            throw "The portable publish output is missing $($missing -join ', '). Check build/FFmpeg.targets."
+          $badFiles = @(
+            Get-ChildItem -Path $portableDir -Recurse -File |
+              Where-Object {
+                $name = $_.Name
+                $legacyTokens | Where-Object {
+                  $name.IndexOf($_, [StringComparison]::OrdinalIgnoreCase) -ge 0
+                }
+              } |
+              Select-Object -ExpandProperty FullName
+          )
+          if ($badFiles.Count -gt 0) {
+            throw "Legacy codec artifacts remain in the portable output: $($badFiles -join ', ')"
           }
 
-          # Bundled entry names are stored uncompressed in the single-file manifest, so the
-          # library names are readable in the EXE even with EnableCompressionInSingleFile.
           $bundle = [System.Text.Encoding]::Latin1.GetString([System.IO.File]::ReadAllBytes($exePath))
-          $unbundled = $libraries | Where-Object { $bundle.IndexOf($_, [StringComparison]::Ordinal) -lt 0 }
-          if ($unbundled) {
-            throw "The single-file EXE does not bundle $($unbundled -join ', '). IncludeNativeLibrariesForSelfExtract only picks up items marked AssetType=native."
+          $embedded = @(
+            $legacyTokens | Where-Object {
+              $bundle.IndexOf($_, [StringComparison]::OrdinalIgnoreCase) -ge 0
+            }
+          )
+          if ($embedded.Count -gt 0) {
+            throw "Legacy codec artifacts remain in the single-file bundle: $($embedded -join ', ')"
           }
 
-          Write-Host "Both assets carry $($libraries -join ', ')."
+          Write-Host 'Portable and single-file outputs contain only the native Windows media path.'
 
       # No MSI or setup bundle yet: packaging/*.wxs arrives with phase 4 of the design
       # (docs/superpowers/specs/2026-08-23-sonicdesktoprelay-design.md). When it does, add a
@@ -336,8 +360,8 @@ jobs:
 
           Notes:
           - Windows only. The app registers itself on first run; there is no sign-in.
-          - FFmpeg 8.1.1 shared libraries are bundled in both assets; nothing has to be
-            installed separately. They are GPLv3 — see THIRD-PARTY-NOTICES.md.
+          - Video uses Windows Media Foundation and system audio uses WASAPI + Opus; no separate
+            native codec runtime needs to be installed or bundled.
           - An installer is not built yet; both assets are portable and per-user.
           - Packages are currently unsigned.
           "@ | Set-Content -Path (Join-Path $distDir 'RELEASE-NOTES.md') -Encoding UTF8

@@ -18,11 +18,14 @@ internal enum EncoderKeyFrameAction
 /// Coalesces encoder-level keyframe requests until the next input sample.
 /// Recovery should use ICodecAPI when available; rebuilding the MFT is a correctness fallback only.
 /// </summary>
-internal sealed class EncoderKeyFramePolicy(IMediaFoundationCodecControl codecControl)
+internal sealed class EncoderKeyFramePolicy(IMediaFoundationCodecControl? codecControl)
 {
+    private IMediaFoundationCodecControl? _codecControl = codecControl;
     private bool _pending;
 
     public void Request() => _pending = true;
+
+    public void UpdateControl(IMediaFoundationCodecControl? value) => _codecControl = value;
 
     public EncoderKeyFrameAction BeforeNextInput()
     {
@@ -30,7 +33,7 @@ internal sealed class EncoderKeyFramePolicy(IMediaFoundationCodecControl codecCo
             return EncoderKeyFrameAction.None;
 
         _pending = false;
-        return codecControl.TryForceNextKeyFrame()
+        return _codecControl?.TryForceNextKeyFrame() == true
             ? EncoderKeyFrameAction.CodecApi
             : EncoderKeyFrameAction.ReconfigureFallback;
     }

@@ -21,6 +21,7 @@ public sealed class RtcVideoPublishHost(
     private readonly SemaphoreSlim _gate = new(1, 1);
 
     private ScreenPublishPipeline? _pipeline;
+    private MediaFoundationH264Encoder? _videoEncoder;
     private MediaFoundationH264Encoder? _encoder;
     private AudioPublishPipeline? _audioPipeline;
     private WasapiLoopbackAudioSource? _audioSource;
@@ -28,6 +29,8 @@ public sealed class RtcVideoPublishHost(
     private string? _audioPipelineFailure;
 
     public string? EncoderName { get; private set; }
+
+    public NativeVideoDiagnostics? VideoDiagnostics => _videoEncoder?.Diagnostics;
 
     public NativeVideoDiagnostics? VideoDiagnostics => _encoder?.Diagnostics;
 
@@ -181,6 +184,7 @@ public sealed class RtcVideoPublishHost(
             // the GPU encode session is released the moment the share stops.
             await _pipeline.DisposeAsync();
             _pipeline = null;
+            _videoEncoder = null;
             _encoder = null;
         }
     }

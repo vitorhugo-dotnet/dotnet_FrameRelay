@@ -13,9 +13,6 @@ public sealed class SipSorceryPeerConnection : IPeerConnection
     /// <summary>H.264 over WebRTC is a dynamic payload type; 96 is the conventional first one.</summary>
     private const int H264PayloadId = 96;
 
-    /// <summary>The RTP clock for video is 90 kHz, fixed by RFC 3551.</summary>
-    private const uint VideoClockRate = 90_000;
-
     private readonly RTCPeerConnection _connection;
     private readonly object _gate = new();
     private bool _negotiated;
@@ -112,7 +109,7 @@ public sealed class SipSorceryPeerConnection : IPeerConnection
 
         try
         {
-            _connection.SendVideo(VideoClockRate / 30, sample.Data.ToArray());
+            _connection.SendVideo(VideoRtpTiming.ToTimestampUnits(sample.Duration), sample.Data.ToArray());
         }
         catch (Exception e) when (IsExpectedTransportFailure(e))
         {

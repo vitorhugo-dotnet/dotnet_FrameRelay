@@ -51,6 +51,8 @@ public sealed class RtcVideoWatchHost(
 
     public event Action<WatchState>? WatchStateChanged;
 
+    public event Action<string>? NegotiationFailed;
+
     /// <summary>
     /// One decoded frame, on the decode thread. The shell marshals it to the UI thread before
     /// anything touches a bitmap.
@@ -124,6 +126,7 @@ public sealed class RtcVideoWatchHost(
             _watchdog = TimeProvider.System.CreateTimer(
                 _ => pipeline.CheckForStall(), null, StallCheckInterval, StallCheckInterval);
 
+            subscriber.NegotiationFailed += OnNegotiationFailed;
             _subscriber = subscriber;
         }
         catch (Exception e) when (e is InvalidOperationException or PlatformNotSupportedException
@@ -170,6 +173,8 @@ public sealed class RtcVideoWatchHost(
     private void OnAudioPipelineFailed(Exception error)
         => _audioPipelineFailure ??= error.Message;
 
+    private void OnNegotiationFailed(string failure) => NegotiationFailed?.Invoke(failure);
+
     private async Task<IceServerSettings> LoadIceAsync(CancellationToken ct)
     {
         var response = await iceApi.GetIceServersAsync(ct);
@@ -189,6 +194,7 @@ public sealed class RtcVideoWatchHost(
 
         if (_subscriber is not null)
         {
+            _subscriber.NegotiationFailed -= OnNegotiationFailed;
             await _subscriber.DisposeAsync();
             _subscriber = null;
         }

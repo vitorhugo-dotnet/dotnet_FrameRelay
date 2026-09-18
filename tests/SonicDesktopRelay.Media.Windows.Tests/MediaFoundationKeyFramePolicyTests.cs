@@ -32,6 +32,20 @@ public sealed class MediaFoundationKeyFramePolicyTests
     }
 
     [Fact]
+    public void Required_reconfigure_consumes_a_pending_keyframe_without_forcing_a_second_reconfigure()
+    {
+        var control = new FakeCodecControl(forceResult: false);
+        var policy = new EncoderKeyFramePolicy(control);
+        policy.Request();
+
+        var consumed = policy.ConsumeAfterRequiredReconfigure();
+
+        Assert.True(consumed);
+        Assert.Equal(EncoderKeyFrameAction.None, policy.BeforeNextInput());
+        Assert.Equal(0, control.ForceCalls);
+    }
+
+    [Fact]
     public void Repeated_requests_before_one_input_are_coalesced()
     {
         var control = new FakeCodecControl(forceResult: true);

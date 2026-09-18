@@ -166,6 +166,42 @@ public sealed class ScreenPublishPipelineTests
         Assert.Equal(1, encoder.EncodeCalls);
     }
 
+
+    [Fact]
+    public async Task Diagnostics_track_capture_encode_keyframes_and_last_activity()
+    {
+        var time = new FakeTimeProvider(DateTimeOffset.UnixEpoch);
+        var capture = new FakeCapture();
+        var encoder = new FakeEncoder();
+        await using var pipeline = new ScreenPublishPipeline(capture, encoder, time: time);
+        await pipeline.StartAsync(Monitor, CancellationToken.None);
+
+        capture.Emit();
+        time.Advance(TimeSpan.FromMilliseconds(40));
+        capture.Emit();
+
+        Assert.Equal(2, pipeline.FramesCaptured);
+        Assert.Equal(2, pipeline.EncodedAccessUnits);
+        Assert.Equal(2, pipeline.KeyframesProduced);
+        Assert.Equal(DateTimeOffset.UnixEpoch + TimeSpan.FromMilliseconds(40), pipeline.LastCapturedFrameAt);
+        Assert.Equal(DateTimeOffset.UnixEpoch + TimeSpan.FromMilliseconds(40), pipeline.LastEncodedAccessUnitAt);
+        Assert.Equal(8, pipeline.MaximumAccessUnitBytes);
+    }
+
+    [Fact]
+    public async Task Diagnostics_count_keyframe_requests_sent_to_the_encoder()
+    {
+        var capture = new FakeCapture();
+        var encoder = new FakeEncoder();
+        await using var pipeline = new ScreenPublishPipeline(capture, encoder);
+        await pipeline.StartAsync(Monitor, CancellationToken.None);
+
+        pipeline.RequestKeyFrame();
+        pipeline.ReportPoorReception();
+
+        Assert.Equal(2, pipeline.KeyFrameRequests);
+    }
+
     private sealed class FakeCapture : IScreenCaptureSource
     {
         public MonitorInfo Monitor { get; private set; }

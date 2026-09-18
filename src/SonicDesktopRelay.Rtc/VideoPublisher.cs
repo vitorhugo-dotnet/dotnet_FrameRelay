@@ -17,9 +17,14 @@ public sealed class VideoPublisher(
     AudioPublishPipeline? audioPipeline = null) : IAsyncDisposable
 {
     private readonly ConcurrentDictionary<Guid, IPeerConnection> _peers = new();
+    private readonly ConcurrentDictionary<Guid, RtcTransportDiagnostics> _transportDiagnostics = new();
     private bool _subscribed;
 
     public int PeerCount => _peers.Count;
+
+    public IReadOnlyDictionary<Guid, RtcTransportDiagnostics> TransportDiagnostics => _transportDiagnostics;
+
+    public event Action<Guid, RtcTransportDiagnostics>? TransportDiagnosticsChanged;
 
     public async Task AddViewerAsync(Guid participantId, CancellationToken ct)
     {
@@ -46,6 +51,12 @@ public sealed class VideoPublisher(
 
             pipeline.ReportReception(participantId, loss);
         };
+        peer.TransportDiagnosticsChanged += diagnostics =>
+        {
+            if (!_peers.ContainsKey(participantId)) return;
+            _transportDiagnostics[participantId] = diagnostics;
+            TransportDiagnosticsChanged?.Invoke(participantId, diagnostics);
+        };
 
         EnsureSubscribed();
 
@@ -64,6 +75,7 @@ public sealed class VideoPublisher(
     public async Task RemoveViewerAsync(Guid participantId)
     {
         pipeline.RemoveReceptionSource(participantId);
+        _transportDiagnostics.TryRemove(participantId, out _);
         if (!_peers.TryRemove(participantId, out var peer)) return;
         await peer.DisposeAsync();
     }

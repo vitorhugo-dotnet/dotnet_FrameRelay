@@ -1,0 +1,24 @@
+name: H264 loss recovery TDD
+
+on:
+  push:
+    branches:
+      - fix/h264-loss-recovery-quality
+
+permissions:
+  contents: read
+
+jobs:
+  focused-tests:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      - run: dotnet restore SonicDesktopRelay.sln
+      - name: RTP integrity regression tests
+        run: dotnet test tests/SonicDesktopRelay.Rtc.Tests/SonicDesktopRelay.Rtc.Tests.csproj --configuration Release --no-restore --filter FullyQualifiedName~H264RtpIntegrity
+      - name: Quality adaptation regression tests
+        run: dotnet test tests/SonicDesktopRelay.Media.Tests/SonicDesktopRelay.Media.Tests.csproj --configuration Release --no-restore --filter FullyQualifiedName~QualityAdaptation

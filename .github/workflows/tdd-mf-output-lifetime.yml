@@ -1,4 +1,4 @@
-name: TDD Media Foundation output lifetime
+name: Pre-PR Media Foundation output lifetime verification
 
 on:
   push:
@@ -8,14 +8,25 @@ on:
 permissions:
   contents: read
 
+env:
+  SOLUTION_PATH: SonicDesktopRelay.sln
+  CONFIGURATION: Release
+
 jobs:
-  focused-test:
+  verify:
     runs-on: windows-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
         with:
           global-json-file: global.json
-      - name: Run focused decoder ownership tests
-        run: dotnet test tests/SonicDesktopRelay.Media.Windows.Tests/SonicDesktopRelay.Media.Windows.Tests.csproj --configuration Release --filter "FullyQualifiedName~MediaFoundationH264DecoderTests"
+      - name: Restore solution
+        run: dotnet restore $env:SOLUTION_PATH
+      - name: Build solution
+        run: dotnet build $env:SOLUTION_PATH --configuration $env:CONFIGURATION --no-restore
+      - name: Run release publishing helper tests
+        shell: pwsh
+        run: ./tests/Publish-GitHubRelease.Tests.ps1
+      - name: Run full test suite
+        run: dotnet test $env:SOLUTION_PATH --configuration $env:CONFIGURATION --no-build --no-restore

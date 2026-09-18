@@ -122,6 +122,24 @@ public sealed class VideoPublisherTests
     }
 
     [Fact]
+    public async Task Selected_transport_is_kept_per_viewer_without_endpoint_data()
+    {
+        var harness = await Harness.StartedAsync();
+        await harness.Publisher.AddViewerAsync(ViewerA, CancellationToken.None);
+        var expected = new RtcTransportDiagnostics("TURN", "UDP", "relay", "host");
+        RtcTransportDiagnostics? published = null;
+        harness.Publisher.TransportDiagnosticsChanged += (participantId, diagnostics) =>
+        {
+            if (participantId == ViewerA) published = diagnostics;
+        };
+
+        harness.Peers.Created[0].ReportTransport(expected);
+
+        Assert.Equal(expected, published);
+        Assert.Equal(expected, harness.Publisher.TransportDiagnostics[ViewerA]);
+    }
+
+    [Fact]
     public async Task A_keyframe_request_from_any_viewer_reaches_the_single_encoder()
     {
         var harness = await Harness.StartedAsync();
@@ -330,6 +348,9 @@ public sealed class VideoPublisherTests
         public event Action<string, string?, int?>? IceCandidateGathered;
         public event Action<KeyFrameRequestReason>? KeyFrameRequested;
         public event Action<double>? PacketLossReported;
+        public event Action<RtcTransportDiagnostics>? TransportDiagnosticsChanged;
+
+        public RtcTransportDiagnostics? TransportDiagnostics { get; private set; }
 
         public Task<string> CreateOfferAsync(CancellationToken ct) => Task.FromResult("offer-sdp");
 
@@ -355,6 +376,12 @@ public sealed class VideoPublisherTests
         public void RequestKeyFrame() => KeyFrameRequested?.Invoke(KeyFrameRequestReason.RtcpPli);
 
         public void ReportPacketLoss(double loss) => PacketLossReported?.Invoke(loss);
+
+        public void ReportTransport(RtcTransportDiagnostics diagnostics)
+        {
+            TransportDiagnostics = diagnostics;
+            TransportDiagnosticsChanged?.Invoke(diagnostics);
+        }
 
         public ValueTask DisposeAsync()
         {

@@ -125,6 +125,26 @@ public sealed class VideoSubscriberTests
     }
 
     [Fact]
+    public async Task Early_ice_buffer_is_bounded_per_participant()
+    {
+        var harness = new Harness();
+
+        for (var i = 0; i < 65; i++)
+        {
+            await harness.Subscriber.HandleAsync(
+                Frame(SignalingMessageTypes.WebRtcIceCandidate, Publisher,
+                    $"""{"candidate":"candidate:{{i}}","sdpMid":"0","sdpMLineIndex":0}"""),
+                CancellationToken.None);
+        }
+
+        await harness.OfferAsync();
+
+        Assert.Equal(64, harness.Peers.Created!.RemoteCandidates.Count);
+        Assert.Equal("candidate:0", harness.Peers.Created.RemoteCandidates[0]);
+        Assert.Equal("candidate:63", harness.Peers.Created.RemoteCandidates[^1]);
+    }
+
+    [Fact]
     public async Task A_negotiation_failure_does_not_escape_the_signaling_callback_and_disposes_the_peer()
     {
         var harness = new Harness();
@@ -180,12 +200,16 @@ public sealed class VideoSubscriberTests
         await harness.ReadyAsync();
         await harness.OfferAsync();
         harness.Signaling.Sent.Clear();
+        var diagnostics = new List<ViewerNegotiationDiagnosticEntry>();
+        harness.Subscriber.Diagnostic += diagnostics.Add;
 
         harness.Peers.Created!.GatherCandidate("candidate:2", "0", 0);
 
         var sent = Assert.Single(harness.Signaling.Sent);
         Assert.Equal(SignalingMessageTypes.WebRtcIceCandidate, sent.Type);
         Assert.Equal(Publisher, sent.To);
+        Assert.Contains(diagnostics, x => x.Event == "viewer.ice_candidate.send");
+        Assert.DoesNotContain("candidate:2", JsonSerializer.Serialize(diagnostics), StringComparison.Ordinal);
     }
 
     [Fact]

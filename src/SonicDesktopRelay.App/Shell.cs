@@ -13,6 +13,10 @@ using SonicDesktopRelay.Rtc;
 
 namespace SonicDesktopRelay.App;
 
+public sealed record ShareQualityOption(string Label, int MaxHeight);
+
+public sealed record ShareFrameRateOption(string Label, int FramesPerSecond);
+
 /// <summary>
 /// What the window binds to: the plan's <see cref="MainWindowViewModel"/> for everything the
 /// UI may know about a session, plus the few things only the shell owns — the configured
@@ -31,6 +35,8 @@ public sealed class Shell : INotifyPropertyChanged
     private string _deviceName = Environment.MachineName;
     private string? _shellError;
     private MonitorInfo? _selectedMonitor;
+    private ShareQualityOption? _selectedShareQuality;
+    private ShareFrameRateOption? _selectedShareFrameRate;
     private bool _isVideoFullScreen;
     private long _uiFramesDelivered;
     private long _lastUiFrameUtcTicks;
@@ -51,6 +57,8 @@ public sealed class Shell : INotifyPropertyChanged
                   ?? NullLogger<Shell>.Instance;
         _backendAddressStore = new FileBackendAddressStore(FileBackendAddressStore.DefaultPath);
         _backendAddress = _backendAddressStore.Read();
+        SelectedShareQuality = ShareQualities[0];
+        SelectedShareFrameRate = ShareFrameRates[1];
         RefreshMonitors();
     }
 
@@ -143,6 +151,43 @@ public sealed class Shell : INotifyPropertyChanged
         {
             if (_isVideoFullScreen == value) return;
             _isVideoFullScreen = value;
+            Raise();
+        }
+    }
+
+    public IReadOnlyList<ShareQualityOption> ShareQualities { get; } =
+    [
+        new("1080p", 1080),
+        new("720p", 720),
+        new("540p", 540),
+        new("360p", 360)
+    ];
+
+    public IReadOnlyList<ShareFrameRateOption> ShareFrameRates { get; } =
+    [
+        new("15 FPS", 15),
+        new("30 FPS", 30),
+        new("60 FPS", 60)
+    ];
+
+    public ShareQualityOption? SelectedShareQuality
+    {
+        get => _selectedShareQuality;
+        set
+        {
+            if (_selectedShareQuality == value) return;
+            _selectedShareQuality = value;
+            Raise();
+        }
+    }
+
+    public ShareFrameRateOption? SelectedShareFrameRate
+    {
+        get => _selectedShareFrameRate;
+        set
+        {
+            if (_selectedShareFrameRate == value) return;
+            _selectedShareFrameRate = value;
             Raise();
         }
     }
@@ -276,7 +321,14 @@ public sealed class Shell : INotifyPropertyChanged
             return;
         }
 
-        await GuardAsync(() => runtime.StartSharingAsync(monitor, DefaultMaxViewers, ct));
+        if (SelectedShareQuality is not { } quality || SelectedShareFrameRate is not { } frameRate)
+        {
+            ShellError = "Choose a video quality and frame rate before sharing.";
+            return;
+        }
+
+        var profile = new VideoPublishProfile(quality.MaxHeight, frameRate.FramesPerSecond);
+        await GuardAsync(() => runtime.StartSharingAsync(monitor, profile, DefaultMaxViewers, ct));
     }
 
     public async Task WatchAsync(string code, CancellationToken ct)

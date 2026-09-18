@@ -10,6 +10,39 @@ public sealed class QualityAdaptationTests
         new("display", "Primary", 1920, 1080, true);
 
     [Fact]
+    public void A_720p_profile_starts_at_the_highest_allowed_720p_rung()
+    {
+        var profile = new VideoPublishProfile(MaxHeight: 720, MaxFramesPerSecond: 30);
+
+        var quality = VideoQuality.InitialFor(profile);
+
+        Assert.Equal(720, quality.MaxHeight);
+        Assert.Equal(30, quality.FramesPerSecond);
+        Assert.Equal(2_000_000, quality.TargetBitsPerSecond);
+    }
+
+    [Fact]
+    public async Task Stable_recovery_never_exceeds_the_user_profile_ceiling()
+    {
+        var profile = new VideoPublishProfile(MaxHeight: 720, MaxFramesPerSecond: 30);
+        var harness = await Harness.CreateAsync(profile);
+
+        ReportSustainedPoor(harness); // 720p 2M -> 720p 1.5M
+
+        harness.Time.Advance(TimeSpan.FromSeconds(15));
+        harness.Pipeline.ReportReception(0);
+        harness.Time.Advance(TimeSpan.FromSeconds(15));
+        harness.Pipeline.ReportReception(0);
+        harness.Time.Advance(TimeSpan.FromSeconds(15));
+        harness.Pipeline.ReportReception(0);
+
+        Assert.Equal(720, harness.Pipeline.Quality.MaxHeight);
+        Assert.Equal(30, harness.Pipeline.Quality.FramesPerSecond);
+        Assert.Equal(2_000_000, harness.Pipeline.Quality.TargetBitsPerSecond);
+        await harness.DisposeAsync();
+    }
+
+    [Fact]
     public async Task One_poor_reception_report_does_not_reduce_resolution()
     {
         var harness = await Harness.CreateAsync();
@@ -204,12 +237,16 @@ public sealed class QualityAdaptationTests
         public FakeEncoder Encoder { get; } = encoder;
         public ScreenPublishPipeline Pipeline { get; } = pipeline;
 
-        public static async Task<Harness> CreateAsync()
+        public static async Task<Harness> CreateAsync(VideoPublishProfile? profile = null)
         {
             var time = new FakeTimeProvider(DateTimeOffset.UnixEpoch);
             var capture = new FakeCapture();
             var encoder = new FakeEncoder();
-            var pipeline = new ScreenPublishPipeline(capture, encoder, time: time);
+            var pipeline = new ScreenPublishPipeline(
+                capture,
+                encoder,
+                time: time,
+                profile: profile ?? VideoPublishProfile.Default);
             await pipeline.StartAsync(Monitor, CancellationToken.None);
             return new Harness(time, capture, encoder, pipeline);
         }

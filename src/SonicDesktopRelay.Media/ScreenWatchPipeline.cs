@@ -1,3 +1,6 @@
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+
 namespace SonicDesktopRelay.Media;
 
 public enum WatchState
@@ -20,9 +23,14 @@ public enum WatchState
 /// <see cref="ScreenPublishPipeline"/>: a viewer has exactly one publisher, so there is
 /// exactly one decoder.
 /// </summary>
-public sealed class ScreenWatchPipeline(IVideoDecoder decoder, TimeProvider time) : IDisposable
+public sealed class ScreenWatchPipeline(
+    IVideoDecoder decoder,
+    TimeProvider time,
+    ILogger<ScreenWatchPipeline>? logger = null) : IDisposable
 {
     private static readonly TimeSpan StallAfter = TimeSpan.FromSeconds(4);
+    private readonly ILogger<ScreenWatchPipeline> _logger =
+        logger ?? NullLogger<ScreenWatchPipeline>.Instance;
 
     private DateTimeOffset? _lastFrameAt;
     private long _videoAccessUnitsReceived;
@@ -47,6 +55,12 @@ public sealed class ScreenWatchPipeline(IVideoDecoder decoder, TimeProvider time
 
     public DateTimeOffset? LastDecodedFrameAt => _lastFrameAt;
 
+    /// <summary>
+    /// Reason attached to a terminal media failure. A Failed state without a reason is a
+    /// diagnostics bug because it makes the UI claim decoding failed while hiding the evidence.
+    /// </summary>
+    public string? LastFailure { get; private set; }
+
     public void Submit(EncodedVideoSample sample)
     {
         Interlocked.Increment(ref _videoAccessUnitsReceived);
@@ -57,8 +71,22 @@ public sealed class ScreenWatchPipeline(IVideoDecoder decoder, TimeProvider time
         {
             frame = decoder.Decode(sample);
         }
-        catch (Exception)
+        catch (Exception exception)
         {
+            LastFailure =
+                $"{exception.GetType().Name} (0x{exception.HResult:X8}): {exception.Message}";
+
+            _logger.LogError(
+                exception,
+                "Decoder exception escaped into ScreenWatchPipeline. " +
+                "hresult=0x{HResult:X8} accessUnits={VideoAccessUnits} decodedFrames={DecodedFrames} " +
+                "accessUnitBytes={AccessUnitBytes} keyFrame={IsKeyFrame}",
+                exception.HResult,
+                VideoAccessUnitsReceived,
+                DecodedFrames,
+                sample.Data.Length,
+                sample.IsKeyFrame);
+
             SetState(WatchState.Failed);
             return;
         }
@@ -104,7 +132,18 @@ public sealed class ScreenWatchPipeline(IVideoDecoder decoder, TimeProvider time
     private void SetState(WatchState state)
     {
         if (_state == state) return;
+        var previous = _state;
         _state = state;
+
+        _logger.LogInformation(
+            "Watch media state changed {PreviousState} -> {NewState}. accessUnits={VideoAccessUnits} " +
+            "decodedFrames={DecodedFrames} lastFailure={LastFailure}",
+            previous,
+            state,
+            VideoAccessUnitsReceived,
+            DecodedFrames,
+            LastFailure);
+
         StateChanged?.Invoke(state);
     }
 

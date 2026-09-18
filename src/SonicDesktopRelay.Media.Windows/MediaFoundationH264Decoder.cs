@@ -59,6 +59,9 @@ public sealed class MediaFoundationH264Decoder : IVideoDecoder
     private int _codedHeight;
     private int _stride;
     private int _outputBufferSize;
+    private int? _lastOutputStreamFlags;
+    private OutputSampleAllocationMode? _lastOutputSampleAllocationMode;
+    private long _processOutputCalls;
     private byte[] _bgra = [];
     private bool _transportGeometryKnown;
     private bool _configured;
@@ -497,10 +500,26 @@ public sealed class MediaFoundationH264Decoder : IVideoDecoder
         for (var attempt = 0; attempt < 8; attempt++)
         {
             var streamInfo = _transform!.GetOutputStreamInfo(0);
+            var streamFlags = streamInfo.Flags;
             var providesSamples =
-                (streamInfo.Flags & (int)OutputStreamInfoFlags.OutputStreamProvidesSamples) != 0;
+                (streamFlags & (int)OutputStreamInfoFlags.OutputStreamProvidesSamples) != 0;
+            var canProvideSamples =
+                (streamFlags & (int)OutputStreamInfoFlags.OutputStreamCanProvideSamples) != 0;
+            var callerSuppliedSample =
+                MediaFoundationOutputSampleLifetime.ShouldSupplyCallerSample(streamFlags);
+            var allocationMode =
+                MediaFoundationOutputSampleLifetime.ResolveAllocationMode(
+                    streamFlags,
+                    callerSuppliedSample);
 
-            IMFSample? allocated = null;
+            LogOutputSampleAllocation(
+                streamFlags,
+                providesSamples,
+                canProvideSamples,
+                allocationMode,
+                callerSuppliedSample);
+
+            IMFSample? callerAllocated = null;
             var output = new OutputDataBuffer
             {
                 StreamID = 0,
@@ -511,13 +530,13 @@ public sealed class MediaFoundationH264Decoder : IVideoDecoder
 
             try
             {
-                if (!providesSamples)
+                if (callerSuppliedSample)
                 {
-                    allocated = MediaFactory.MFCreateSample();
+                    callerAllocated = MediaFactory.MFCreateSample();
                     using var buffer = MediaFactory.MFCreateMemoryBuffer(
                         Math.Max(1, Math.Max(streamInfo.Size, _outputBufferSize)));
-                    allocated.AddBuffer(buffer);
-                    output.Sample = allocated;
+                    callerAllocated.AddBuffer(buffer);
+                    output.Sample = callerAllocated;
                 }
 
                 var result = _transform.ProcessOutput(
@@ -525,6 +544,25 @@ public sealed class MediaFoundationH264Decoder : IVideoDecoder
                     1,
                     ref output,
                     out _);
+
+                var processOutputCall = ++_processOutputCalls;
+                if (processOutputCall == 1 ||
+                    processOutputCall % 120 == 0 ||
+                    result.Code == StreamChangeHResult ||
+                    (result.Failure && result.Code != NeedMoreInputHResult))
+                {
+                    _logger.LogTrace(
+                        "H.264 decoder ProcessOutput completed. call={Call} hresult=0x{HResult:X8} streamFlags=0x{OutputStreamFlags:X8} providesSamples={ProvidesSamples} canProvideSamples={CanProvideSamples} allocationMode={AllocationMode} callerSuppliedSample={CallerSuppliedSample} returnedSample={ReturnedSample} streamChange={StreamChange}",
+                        processOutputCall,
+                        result.Code,
+                        streamFlags,
+                        providesSamples,
+                        canProvideSamples,
+                        allocationMode,
+                        callerSuppliedSample,
+                        output.Sample is not null,
+                        result.Code == StreamChangeHResult);
+                }
 
                 if (result.Code == NeedMoreInputHResult)
                     return last;
@@ -565,24 +603,54 @@ public sealed class MediaFoundationH264Decoder : IVideoDecoder
                     return last;
                 }
 
-                var decodedSample = output.Sample ?? allocated;
+                var decodedSample =
+                    MediaFoundationOutputSampleLifetime.SelectSampleForConversion(
+                        allocationMode,
+                        callerAllocated,
+                        output.Sample);
                 if (decodedSample is null)
                     return last;
 
+                // Convert before cleanup. In caller-allocated mode, output.Sample may be a
+                // second managed wrapper around the same native IMFSample reference.
                 last = ConvertOutput(decodedSample, timestamp) ?? last;
             }
             finally
             {
-                output.Events?.Dispose();
-
-                if (output.Sample is not null && !ReferenceEquals(output.Sample, allocated))
-                    output.Sample.Dispose();
-
-                allocated?.Dispose();
+                MediaFoundationOutputSampleLifetime.DisposeOwnedResources(
+                    allocationMode,
+                    callerAllocated,
+                    output.Sample,
+                    output.Events);
             }
         }
 
         return last;
+    }
+
+    private void LogOutputSampleAllocation(
+        int streamFlags,
+        bool providesSamples,
+        bool canProvideSamples,
+        OutputSampleAllocationMode allocationMode,
+        bool callerSuppliedSample)
+    {
+        if (_lastOutputStreamFlags == streamFlags &&
+            _lastOutputSampleAllocationMode == allocationMode)
+        {
+            return;
+        }
+
+        _lastOutputStreamFlags = streamFlags;
+        _lastOutputSampleAllocationMode = allocationMode;
+
+        _logger.LogDebug(
+            "H.264 decoder output sample allocation selected. streamFlags=0x{OutputStreamFlags:X8} providesSamples={ProvidesSamples} canProvideSamples={CanProvideSamples} allocationMode={AllocationMode} callerSuppliedSample={CallerSuppliedSample}",
+            streamFlags,
+            providesSamples,
+            canProvideSamples,
+            allocationMode,
+            callerSuppliedSample);
     }
 
     private VideoFrame? ConvertOutput(IMFSample sample, TimeSpan timestamp)

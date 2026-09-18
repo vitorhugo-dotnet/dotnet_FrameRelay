@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using SonicDesktopRelay.Media;
 using SonicDesktopRelay.Media.Windows;
+using Vortice.MediaFoundation;
 
 namespace SonicDesktopRelay.Media.Windows.Tests;
 
@@ -118,6 +119,187 @@ public sealed class MediaFoundationH264DecoderTests
         Assert.Same(a.Array, b.Array);
     }
 
+
+    [Fact]
+    public void Caller_allocated_output_sample_is_disposed_exactly_once()
+    {
+        var native = new FakeNativeSample();
+        using var caller = new FakeSampleWrapper(native);
+        using var returnedAlias = new FakeSampleWrapper(native);
+        var events = new FakeDisposable();
+
+        MediaFoundationOutputSampleLifetime.DisposeOwnedResources(
+            OutputSampleAllocationMode.CallerAllocated,
+            caller,
+            returnedAlias,
+            events);
+
+        Assert.Equal(1, native.ReleaseCount);
+        Assert.True(caller.IsDisposed);
+        Assert.False(returnedAlias.IsDisposed);
+        Assert.Equal(1, events.DisposeCount);
+    }
+
+    [Fact]
+    public void Mft_allocated_output_sample_is_disposed_exactly_once()
+    {
+        var native = new FakeNativeSample();
+        using var returned = new FakeSampleWrapper(native);
+        var events = new FakeDisposable();
+
+        MediaFoundationOutputSampleLifetime.DisposeOwnedResources(
+            OutputSampleAllocationMode.MftAllocated,
+            callerAllocatedSample: null,
+            processOutputSample: returned,
+            events);
+
+        Assert.Equal(1, native.ReleaseCount);
+        Assert.True(returned.IsDisposed);
+        Assert.Equal(1, events.DisposeCount);
+    }
+
+    [Fact]
+    public void Different_managed_wrappers_for_one_caller_sample_are_not_double_disposed()
+    {
+        var native = new FakeNativeSample();
+        using var caller = new FakeSampleWrapper(native);
+        using var processOutputAlias = new FakeSampleWrapper(native);
+
+        MediaFoundationOutputSampleLifetime.DisposeOwnedResources(
+            OutputSampleAllocationMode.CallerAllocated,
+            caller,
+            processOutputAlias,
+            outputEvents: null);
+
+        Assert.Equal(1, native.ReleaseCount);
+        Assert.True(caller.IsDisposed);
+        Assert.False(processOutputAlias.IsDisposed);
+    }
+
+    [Fact]
+    public void Provides_samples_requires_the_mft_owned_path()
+    {
+        const int flags = (int)OutputStreamInfoFlags.OutputStreamProvidesSamples;
+
+        Assert.False(MediaFoundationOutputSampleLifetime.ShouldSupplyCallerSample(flags));
+        Assert.Equal(
+            OutputSampleAllocationMode.MftAllocated,
+            MediaFoundationOutputSampleLifetime.ResolveAllocationMode(
+                flags,
+                callerSuppliedSample: false));
+        Assert.Throws<InvalidOperationException>(
+            () => MediaFoundationOutputSampleLifetime.ResolveAllocationMode(
+                flags,
+                callerSuppliedSample: true));
+    }
+
+    [Fact]
+    public void Can_provide_samples_follows_the_actual_sample_supplier()
+    {
+        const int flags = (int)OutputStreamInfoFlags.OutputStreamCanProvideSamples;
+
+        Assert.True(MediaFoundationOutputSampleLifetime.ShouldSupplyCallerSample(flags));
+        Assert.Equal(
+            OutputSampleAllocationMode.CallerAllocated,
+            MediaFoundationOutputSampleLifetime.ResolveAllocationMode(
+                flags,
+                callerSuppliedSample: true));
+        Assert.Equal(
+            OutputSampleAllocationMode.MftAllocated,
+            MediaFoundationOutputSampleLifetime.ResolveAllocationMode(
+                flags,
+                callerSuppliedSample: false));
+    }
+
+    [Fact]
+    public void Caller_required_allocation_rejects_a_missing_caller_sample()
+    {
+        const int flags = 0;
+
+        Assert.True(MediaFoundationOutputSampleLifetime.ShouldSupplyCallerSample(flags));
+        Assert.Equal(
+            OutputSampleAllocationMode.CallerAllocated,
+            MediaFoundationOutputSampleLifetime.ResolveAllocationMode(
+                flags,
+                callerSuppliedSample: true));
+        Assert.Throws<InvalidOperationException>(
+            () => MediaFoundationOutputSampleLifetime.ResolveAllocationMode(
+                flags,
+                callerSuppliedSample: false));
+    }
+
+    [Fact]
+    public void Need_more_input_cleanup_releases_the_caller_sample_and_events_once()
+    {
+        var native = new FakeNativeSample();
+        using var caller = new FakeSampleWrapper(native);
+        using var processOutputAlias = new FakeSampleWrapper(native);
+        var events = new FakeDisposable();
+
+        MediaFoundationOutputSampleLifetime.DisposeOwnedResources(
+            OutputSampleAllocationMode.CallerAllocated,
+            caller,
+            processOutputAlias,
+            events);
+
+        Assert.Equal(1, native.ReleaseCount);
+        Assert.Equal(1, events.DisposeCount);
+    }
+
+    [Fact]
+    public void Stream_change_cleanup_does_not_double_release_the_caller_sample()
+    {
+        var native = new FakeNativeSample();
+        using var caller = new FakeSampleWrapper(native);
+        using var processOutputAlias = new FakeSampleWrapper(native);
+
+        MediaFoundationOutputSampleLifetime.DisposeOwnedResources(
+            OutputSampleAllocationMode.CallerAllocated,
+            caller,
+            processOutputAlias,
+            outputEvents: null);
+
+        Assert.Equal(1, native.ReleaseCount);
+        Assert.False(processOutputAlias.IsDisposed);
+    }
+
+    [Fact]
+    public void Output_events_are_disposed_independently_when_no_sample_is_returned()
+    {
+        var events = new FakeDisposable();
+
+        MediaFoundationOutputSampleLifetime.DisposeOwnedResources(
+            OutputSampleAllocationMode.MftAllocated,
+            callerAllocatedSample: null,
+            processOutputSample: null,
+            events);
+
+        Assert.Equal(1, events.DisposeCount);
+    }
+
+    [Fact]
+    public void Successful_output_uses_the_owned_sample_until_conversion_finishes()
+    {
+        var callerNative = new FakeNativeSample();
+        var returnedNative = new FakeNativeSample();
+        using var caller = new FakeSampleWrapper(callerNative);
+        using var returned = new FakeSampleWrapper(returnedNative);
+
+        var callerSelected = MediaFoundationOutputSampleLifetime.SelectSampleForConversion(
+            OutputSampleAllocationMode.CallerAllocated,
+            caller,
+            returned);
+        var mftSelected = MediaFoundationOutputSampleLifetime.SelectSampleForConversion(
+            OutputSampleAllocationMode.MftAllocated,
+            caller,
+            returned);
+
+        Assert.Same(caller, callerSelected);
+        Assert.Same(returned, mftSelected);
+        Assert.False(caller.IsDisposed);
+        Assert.False(returned.IsDisposed);
+    }
+
     private static VideoFrame DecodeUntilOutput(
         MediaFoundationH264Encoder encoder,
         MediaFoundationH264Decoder decoder,
@@ -149,5 +331,40 @@ public sealed class MediaFoundationH264DecoderTests
         }
 
         throw new InvalidOperationException($"Media Foundation decoder produced no frame. Last failure: {decoder.LastFailure ?? "none"}");
+    }
+    private sealed class FakeNativeSample
+    {
+        public int ReleaseCount { get; set; }
+    }
+
+    private sealed class FakeSampleWrapper : IDisposable
+    {
+        private readonly FakeNativeSample _native;
+
+        public FakeSampleWrapper(FakeNativeSample native)
+        {
+            _native = native;
+        }
+
+        public bool IsDisposed { get; private set; }
+
+        public void Dispose()
+        {
+            if (IsDisposed)
+                return;
+
+            IsDisposed = true;
+            _native.ReleaseCount++;
+        }
+    }
+
+    private sealed class FakeDisposable : IDisposable
+    {
+        public int DisposeCount { get; private set; }
+
+        public void Dispose()
+        {
+            DisposeCount++;
+        }
     }
 }

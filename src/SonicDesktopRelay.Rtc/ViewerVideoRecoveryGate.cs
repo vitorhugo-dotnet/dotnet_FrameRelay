@@ -23,17 +23,18 @@ internal sealed class ViewerVideoRecoveryGate(TimeSpan minimumPliInterval)
         _lastPliAt = null;
     }
 
-    public bool TryRequestPli(DateTimeOffset now)
+    public bool CanRequestPli(DateTimeOffset now)
     {
         if (!Active)
             BeginRecovery();
 
-        if (_lastPliAt is { } previous && now - previous < minimumPliInterval)
-            return false;
+        return _lastPliAt is not { } previous || now - previous >= minimumPliInterval;
+    }
 
+    public void MarkPliSent(DateTimeOffset now)
+    {
         _lastPliAt = now;
         RecoveryKeyframesRequested++;
-        return true;
     }
 
     public bool ShouldDeliver(bool isIdr, bool hasVcl)

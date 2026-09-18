@@ -64,7 +64,7 @@ public sealed class RtcVideoPublishHost(
     /// <summary>Each video encoder candidate that was rejected, with the reason it supplied.</summary>
     public IReadOnlyList<string> EncoderRejections { get; private set; } = [];
 
-    public async Task StartAsync(MonitorInfo monitor, CancellationToken ct)
+    public async Task StartAsync(MonitorInfo monitor, VideoPublishProfile profile, CancellationToken ct)
     {
         await _gate.WaitAsync(ct);
         try
@@ -92,7 +92,8 @@ public sealed class RtcVideoPublishHost(
                 encoder,
                 clock,
                 TimeProvider.System,
-                loggerFactory?.CreateLogger<ScreenPublishPipeline>());
+                loggerFactory?.CreateLogger<ScreenPublishPipeline>(),
+                profile);
             // Transfer ownership before capture startup: if the native capture path throws,
             // DisposeStackAsync can still release the capture source and Media Foundation MFT.
             _pipeline = pipeline;

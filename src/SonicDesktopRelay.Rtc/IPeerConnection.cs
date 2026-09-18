@@ -12,8 +12,8 @@ public interface IPeerConnection : IAsyncDisposable
 
     event Action<string, string?, int?>? IceCandidateGathered;
 
-    /// <summary>The viewer asked for a keyframe (PLI), usually because it just joined or lost sync.</summary>
-    event Action? KeyFrameRequested;
+    /// <summary>A clean encoder recovery point was requested, with its transport/recovery cause.</summary>
+    event Action<KeyFrameRequestReason>? KeyFrameRequested;
 
     /// <summary>Inbound-loss ratio this viewer reported over RTCP, 0..1.</summary>
     event Action<double>? PacketLossReported;

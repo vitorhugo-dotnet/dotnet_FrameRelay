@@ -9,7 +9,7 @@ public sealed class SignalingDiagnosticsTests
     private static readonly Guid SessionId = Guid.Parse("6f9619ff-8b86-d011-b42d-00cf4fc964ff");
 
     [Fact]
-    public async Task Offer_received_during_signaling_start_is_recorded_while_still_joining()
+    public async Task Offer_received_during_signaling_start_is_buffered_and_forwarded_after_watch_host_starts()
     {
         var from = Guid.Parse("11111111-1111-1111-1111-111111111111");
         var to = Guid.Parse("22222222-2222-2222-2222-222222222222");
@@ -22,10 +22,11 @@ public sealed class SignalingDiagnosticsTests
                 to,
                 null,
                 null));
+        var host = new FakeVideoWatchHost();
         var runtime = new SessionRuntime(
             new FakeSessionApi(),
             () => connection,
-            watchHost: new FakeVideoWatchHost());
+            watchHost: host);
 
         await runtime.StartWatchingAsync("AB12CD", CancellationToken.None);
 
@@ -37,7 +38,8 @@ public sealed class SignalingDiagnosticsTests
         Assert.Equal(SignalingState.Connected, entry.Signaling);
         Assert.Equal(from, entry.From);
         Assert.Equal(to, entry.To);
-        Assert.False(entry.Handled);
+        Assert.True(entry.Handled);
+        Assert.Equal([SignalingMessageTypes.WebRtcOffer], host.Signalled);
     }
 
     [Fact]
@@ -167,6 +169,8 @@ public sealed class SignalingDiagnosticsTests
 
     private sealed class FakeVideoWatchHost : IVideoWatchHost
     {
+        public List<string> Signalled { get; } = [];
+
         public string? DecoderName => "test";
 
         public event Action<WatchState>? WatchStateChanged
@@ -179,8 +183,11 @@ public sealed class SignalingDiagnosticsTests
 
         public Task StopAsync() => Task.CompletedTask;
 
-        public Task HandleSignalingAsync(SignalingEnvelope envelope, CancellationToken ct) =>
-            Task.CompletedTask;
+        public Task HandleSignalingAsync(SignalingEnvelope envelope, CancellationToken ct)
+        {
+            Signalled.Add(envelope.Type);
+            return Task.CompletedTask;
+        }
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }

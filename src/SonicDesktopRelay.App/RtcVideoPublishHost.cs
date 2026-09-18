@@ -67,9 +67,11 @@ public sealed class RtcVideoPublishHost(
 
             var capture = new GraphicsCaptureScreenSource();
             var pipeline = new ScreenPublishPipeline(capture, encoder, clock);
+            // Transfer ownership before capture startup: if the native capture path throws,
+            // DisposeStackAsync can still release the capture source and Media Foundation MFT.
+            _pipeline = pipeline;
 
             await pipeline.StartAsync(monitor, ct);
-            _pipeline = pipeline;
 
             AudioPublishPipeline? audioPipeline = null;
             var audioSource = new WasapiLoopbackAudioSource();

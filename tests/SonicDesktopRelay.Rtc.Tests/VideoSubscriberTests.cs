@@ -109,12 +109,15 @@ public sealed class VideoSubscriberTests
     {
         var harness = new Harness();
         harness.Peers.AnswerFailure = new InvalidOperationException("synthetic negotiation failure");
+        string? reportedFailure = null;
+        harness.Subscriber.NegotiationFailed += failure => reportedFailure = failure;
 
         var failure = await Record.ExceptionAsync(harness.OfferAsync);
 
         Assert.Null(failure);
         Assert.True(harness.Peers.Created!.Disposed);
         Assert.Empty(harness.Signaling.Sent);
+        Assert.Equal("WebRTC negotiation failed at createAnswer: synthetic negotiation failure", reportedFailure);
     }
 
     [Fact]

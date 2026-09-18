@@ -11,13 +11,19 @@
                    FontSize="{StaticResource FontSizeLg}"
                    Foreground="{StaticResource TextPrimaryBrush}" />
 
-        <SelectableTextBlock Grid.Row="1"
-                             Text="{Binding MediaStatusText}"
-                             Margin="0,0,0,16"
-                             TextWrapping="Wrap"
-                             FontFamily="Consolas, monospace"
-                             FontSize="{StaticResource FontSizeSm}"
-                             Foreground="{StaticResource TextPrimaryBrush}" />
+        <StackPanel Grid.Row="1" Margin="0,0,0,16">
+            <SelectableTextBlock Text="{Binding MediaStatusText}"
+                                 TextWrapping="Wrap"
+                                 FontFamily="Consolas, monospace"
+                                 FontSize="{StaticResource FontSizeSm}"
+                                 Foreground="{StaticResource TextPrimaryBrush}" />
+            <SelectableTextBlock Margin="0,6,0,0"
+                                 Text="{Binding LogDirectory, StringFormat='Persistent logs: {0}'}"
+                                 TextWrapping="Wrap"
+                                 FontFamily="Consolas, monospace"
+                                 FontSize="{StaticResource FontSizeSm}"
+                                 Foreground="{StaticResource TextSecondaryBrush}" />
+        </StackPanel>
 
         <StackPanel Grid.Row="2" Margin="0,0,0,8">
             <TextBlock Text="Session snapshots"

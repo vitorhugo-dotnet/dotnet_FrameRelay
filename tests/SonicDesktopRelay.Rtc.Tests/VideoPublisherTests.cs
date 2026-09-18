@@ -133,7 +133,7 @@ public sealed class VideoPublisherTests
     }
 
     [Fact]
-    public async Task Sustained_loss_on_one_viewer_degrades_quality_for_the_session()
+    public async Task One_poor_report_from_one_viewer_does_not_degrade_shared_quality()
     {
         var harness = await Harness.StartedAsync();
         await harness.Publisher.AddViewerAsync(ViewerA, CancellationToken.None);
@@ -141,7 +141,7 @@ public sealed class VideoPublisherTests
 
         harness.Peers.Created[0].ReportPacketLoss(0.15);
 
-        Assert.Equal(720, harness.Pipeline.Quality.MaxHeight);
+        Assert.Equal(VideoQuality.Default, harness.Pipeline.Quality);
     }
 
     [Fact]
@@ -301,7 +301,7 @@ public sealed class VideoPublisherTests
         public bool Disposed { get; private set; }
 
         public event Action<string, string?, int?>? IceCandidateGathered;
-        public event Action? KeyFrameRequested;
+        public event Action<KeyFrameRequestReason>? KeyFrameRequested;
         public event Action<double>? PacketLossReported;
 
         public Task<string> CreateOfferAsync(CancellationToken ct) => Task.FromResult("offer-sdp");
@@ -325,7 +325,7 @@ public sealed class VideoPublisherTests
         public void GatherCandidate(string candidate, string? mid, int? index) =>
             IceCandidateGathered?.Invoke(candidate, mid, index);
 
-        public void RequestKeyFrame() => KeyFrameRequested?.Invoke();
+        public void RequestKeyFrame() => KeyFrameRequested?.Invoke(KeyFrameRequestReason.RtcpPli);
 
         public void ReportPacketLoss(double loss) => PacketLossReported?.Invoke(loss);
 

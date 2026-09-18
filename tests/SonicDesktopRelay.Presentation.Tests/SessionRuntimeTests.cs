@@ -308,6 +308,20 @@ public sealed class SessionRuntimeTests
     }
 
     [Fact]
+    public async Task A_viewer_negotiation_failure_is_exposed_without_pretending_media_is_waiting()
+    {
+        var host = new FakeVideoWatchHost();
+        var runtime = new SessionRuntime(new FakeSessionApi(), () => new FakeConnection(), watchHost: host);
+        await runtime.StartWatchingAsync("AB12CD", CancellationToken.None);
+        const string failure = "WebRTC negotiation failed at setRemoteDescription: VideoIncompatible";
+
+        host.RaiseNegotiationFailure(failure);
+
+        Assert.Equal(SessionPhase.Watching, runtime.Snapshot.Phase);
+        Assert.Equal(failure, runtime.Snapshot.Error);
+    }
+
+    [Fact]
     public async Task A_stall_is_visible_in_the_snapshot_without_leaving_the_watching_phase()
     {
         var api = new FakeSessionApi();
@@ -421,6 +435,8 @@ public sealed class SessionRuntimeTests
 
         public event Action<WatchState>? WatchStateChanged;
 
+        public event Action<string>? NegotiationFailed;
+
         public Task StartAsync(CancellationToken ct)
         {
             if (StartFailure is not null) throw new InvalidOperationException(StartFailure);
@@ -441,6 +457,8 @@ public sealed class SessionRuntimeTests
         }
 
         public void Raise(WatchState state) => WatchStateChanged?.Invoke(state);
+
+        public void RaiseNegotiationFailure(string failure) => NegotiationFailed?.Invoke(failure);
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }

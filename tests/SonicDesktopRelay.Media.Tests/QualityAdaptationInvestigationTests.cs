@@ -265,6 +265,8 @@ public sealed class QualityAdaptationTests
             return Task.CompletedTask;
         }
 
+        public void SetFrameRate(int framesPerSecond) { }
+
         public Task StopAsync() => Task.CompletedTask;
 
         public void EmitKeyFrame() =>

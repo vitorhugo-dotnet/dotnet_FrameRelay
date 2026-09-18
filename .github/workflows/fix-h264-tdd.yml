@@ -1,4 +1,4 @@
-name: H264 loss recovery TDD
+name: H264 loss recovery verification
 
 on:
   push:
@@ -9,17 +9,39 @@ permissions:
   contents: read
 
 jobs:
-  focused-tests:
+  verify:
     runs-on: windows-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
         with:
           global-json-file: global.json
-      - run: dotnet restore SonicDesktopRelay.sln
-      - name: RTP integrity regression tests
-        continue-on-error: true
-        run: dotnet test tests/SonicDesktopRelay.Rtc.Tests/SonicDesktopRelay.Rtc.Tests.csproj --configuration Release --no-restore --filter FullyQualifiedName~H264RtpIntegrity
-      - name: Quality adaptation regression tests
-        run: dotnet test tests/SonicDesktopRelay.Media.Tests/SonicDesktopRelay.Media.Tests.csproj --configuration Release --no-restore --filter FullyQualifiedName~QualityAdaptation
+
+      - name: Restore
+        run: dotnet restore SonicDesktopRelay.sln
+
+      - name: Build Release
+        run: dotnet build SonicDesktopRelay.sln --configuration Release --no-restore
+
+      - name: Focused RTP integrity and recovery tests
+        run: >-
+          dotnet test tests/SonicDesktopRelay.Rtc.Tests/SonicDesktopRelay.Rtc.Tests.csproj
+          --configuration Release --no-build --no-restore
+          --filter FullyQualifiedName~H264RtpIntegrity
+
+      - name: Focused quality adaptation tests
+        run: >-
+          dotnet test tests/SonicDesktopRelay.Media.Tests/SonicDesktopRelay.Media.Tests.csproj
+          --configuration Release --no-build --no-restore
+          --filter FullyQualifiedName~QualityAdaptation
+
+      - name: Release publishing helper tests
+        shell: pwsh
+        run: ./tests/Publish-GitHubRelease.Tests.ps1
+
+      - name: Full test suite
+        run: >-
+          dotnet test SonicDesktopRelay.sln --configuration Release --no-build --no-restore
+          --logger "trx;LogFilePrefix=h264-loss-recovery"
+          --results-directory TestResults

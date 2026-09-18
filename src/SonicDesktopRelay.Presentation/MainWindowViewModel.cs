@@ -53,7 +53,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         SessionPhase.Preparing => "Preparing to share…",
         SessionPhase.Sharing => $"Sharing — {_snapshot.ViewerCount} watching",
         SessionPhase.Joining => "Joining…",
-        SessionPhase.Watching => WatchingText(_snapshot.Watching),
+        SessionPhase.Watching => _snapshot.Error ?? WatchingText(_snapshot.Watching),
         SessionPhase.Ending => "Ending…",
         SessionPhase.Failed => FailureText(_snapshot.Error),
         _ => "Ready"

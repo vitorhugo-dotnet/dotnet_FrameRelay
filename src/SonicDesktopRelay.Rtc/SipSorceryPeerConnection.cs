@@ -64,7 +64,8 @@ public sealed class SipSorceryPeerConnection : IPeerConnection
 
         _connection.onconnectionstatechange += state =>
         {
-            if (state == RTCPeerConnectionState.connected) KeyFrameRequested?.Invoke();
+            if (state == RTCPeerConnectionState.connected)
+                KeyFrameRequested?.Invoke(KeyFrameRequestReason.InitialConnection);
         };
     }
 
@@ -72,7 +73,7 @@ public sealed class SipSorceryPeerConnection : IPeerConnection
 
     public event Action<string, string?, int?>? IceCandidateGathered;
 
-    public event Action? KeyFrameRequested;
+    public event Action<KeyFrameRequestReason>? KeyFrameRequested;
 
     public event Action<double>? PacketLossReported;
 
@@ -152,8 +153,10 @@ public sealed class SipSorceryPeerConnection : IPeerConnection
     private void OnRtcpReport(RTCPCompoundPacket report)
     {
         var feedbackType = report.Feedback?.Header?.PayloadFeedbackMessageType;
-        if (feedbackType is PSFBFeedbackTypesEnum.PLI or PSFBFeedbackTypesEnum.FIR)
-            KeyFrameRequested?.Invoke();
+        if (feedbackType == PSFBFeedbackTypesEnum.PLI)
+            KeyFrameRequested?.Invoke(KeyFrameRequestReason.RtcpPli);
+        else if (feedbackType == PSFBFeedbackTypesEnum.FIR)
+            KeyFrameRequested?.Invoke(KeyFrameRequestReason.RtcpFir);
 
         var samples = report.ReceiverReport?.ReceptionReports
                       ?? report.SenderReport?.ReceptionReports;

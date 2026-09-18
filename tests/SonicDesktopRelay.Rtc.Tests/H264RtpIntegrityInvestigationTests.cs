@@ -44,6 +44,25 @@ public sealed class H264RtpIntegrityTests
     }
 
     [Fact]
+    public void Gap_between_complete_access_units_is_still_reported_as_transport_loss()
+    {
+        var assembler = new H264RtpAccessUnitAssembler();
+        var gaps = new List<H264RtpGap>();
+        assembler.RtpGapDetected += gaps.Add;
+
+        var first = assembler.Push(100, Timestamp, marker: true, [0x65, 0x11]);
+        var second = assembler.Push(102, Timestamp * 2, marker: true, [0x41, 0x22]);
+
+        Assert.NotNull(first);
+        Assert.NotNull(second);
+        var gap = Assert.Single(gaps);
+        Assert.Equal((ushort)100, gap.PreviousSequence);
+        Assert.Equal((ushort)102, gap.NextSequence);
+        Assert.Equal(1, gap.MissingPackets);
+        Assert.Equal(1, assembler.RtpPacketsLost);
+    }
+
+    [Fact]
     public void Missing_fu_a_start_is_rejected()
     {
         var assembler = new H264RtpAccessUnitAssembler();

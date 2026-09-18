@@ -298,8 +298,10 @@ public sealed class SipSorceryViewerPeerConnection : IViewerPeerConnection
 
     private void RequestRecoveryKeyFrame(string reason)
     {
+        var now = DateTimeOffset.UtcNow;
         bool started;
-        bool shouldSend;
+        bool coalesced;
+        bool sent;
 
         lock (_gate)
         {
@@ -307,7 +309,19 @@ public sealed class SipSorceryViewerPeerConnection : IViewerPeerConnection
 
             started = !_videoRecovery.Active;
             _videoRecovery.BeginRecovery();
-            shouldSend = _videoRecovery.TryRequestPli(DateTimeOffset.UtcNow);
+
+            if (!_videoRecovery.CanRequestPli(now))
+            {
+                coalesced = true;
+                sent = false;
+            }
+            else
+            {
+                coalesced = false;
+                sent = TrySendPliUnsafe();
+                if (sent)
+                    _videoRecovery.MarkPliSent(now);
+            }
         }
 
         if (started)
@@ -320,7 +334,7 @@ public sealed class SipSorceryViewerPeerConnection : IViewerPeerConnection
                     $"incompleteAccessUnitsDropped={_videoAssembler.IncompleteAccessUnitsDropped}");
         }
 
-        if (!shouldSend)
+        if (coalesced)
         {
             EmitDiagnostic(
                 "viewer.video.recovery.pli_coalesced",
@@ -330,24 +344,26 @@ public sealed class SipSorceryViewerPeerConnection : IViewerPeerConnection
             return;
         }
 
-        if (!TrySendPli())
+        if (!sent)
+        {
+            EmitDiagnostic(
+                "viewer.video.recovery.pli_deferred",
+                message:
+                    $"reason={reason} transportReady=false " +
+                    $"recoveryKeyframesRequested={_videoRecovery.RecoveryKeyframesRequested}");
             return;
+        }
 
-        var sent = Interlocked.Increment(ref _pliSent);
+        var totalSent = Interlocked.Increment(ref _pliSent);
         EmitDiagnostic(
             "viewer.video.recovery.pli_sent",
             message:
-                $"reason={reason} pliSent={sent} " +
+                $"reason={reason} pliSent={totalSent} " +
                 $"recoveryKeyframesRequested={_videoRecovery.RecoveryKeyframesRequested}");
     }
 
-    private bool TrySendPli()
+    private bool TrySendPliUnsafe()
     {
-        lock (_gate)
-        {
-            if (_closed) return false;
-        }
-
         // Before the transport is up there is no RTCP session and no remote SSRC to name.
         var session = _connection.VideoRtcpSession;
         if (session is null) return false;

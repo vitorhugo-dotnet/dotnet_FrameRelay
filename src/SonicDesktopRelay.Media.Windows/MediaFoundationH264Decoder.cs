@@ -1,5 +1,7 @@
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using SharpGen.Runtime;
 using SonicDesktopRelay.Media;
 using Vortice.MediaFoundation;
@@ -48,6 +50,7 @@ public sealed class MediaFoundationH264Decoder : IVideoDecoder
     private readonly IDisposable _runtimeLease;
     private readonly Lock _gate = new();
     private readonly List<string> _rejections = [];
+    private readonly ILogger<MediaFoundationH264Decoder> _logger;
 
     private IMFTransform? _transform;
     private int _visibleWidth;
@@ -61,16 +64,26 @@ public sealed class MediaFoundationH264Decoder : IVideoDecoder
     private bool _configured;
     private bool _disposed;
 
-    public MediaFoundationH264Decoder()
+    public MediaFoundationH264Decoder(ILogger<MediaFoundationH264Decoder>? logger = null)
     {
+        _logger = logger ?? NullLogger<MediaFoundationH264Decoder>.Instance;
         _runtimeLease = MediaFoundationRuntime.Shared.Acquire();
 
         try
         {
             SelectCandidate();
+            _logger.LogInformation(
+                "Media Foundation H.264 decoder selected. transform={TransformName} clsid={TransformClsid} acceleration={Acceleration}",
+                TransformInfo?.Name ?? Name,
+                TransformInfo?.Clsid ?? Guid.Empty,
+                TransformInfo?.IsHardware == true ? "hardware" : "software");
         }
-        catch
+        catch (Exception exception)
         {
+            _logger.LogCritical(
+                exception,
+                "Media Foundation H.264 decoder initialization failed. hresult=0x{HResult:X8}",
+                exception.HResult);
             _runtimeLease.Dispose();
             throw;
         }
@@ -141,6 +154,7 @@ public sealed class MediaFoundationH264Decoder : IVideoDecoder
                 return null;
 
             LastFailure = null;
+            var stage = "validate-geometry";
 
             try
             {
@@ -149,11 +163,24 @@ public sealed class MediaFoundationH264Decoder : IVideoDecoder
                     (hasTransportGeometry &&
                      (sample.Width != _visibleWidth || sample.Height != _visibleHeight)))
                 {
+                    stage = "reconfigure";
+                    _logger.LogInformation(
+                        "H.264 decoder reconfigure requested. transportWidth={Width} transportHeight={Height} configured={Configured} currentVisible={VisibleWidth}x{VisibleHeight}",
+                        sample.Width,
+                        sample.Height,
+                        _configured,
+                        _visibleWidth,
+                        _visibleHeight);
                     Reconfigure(sample.Width, sample.Height);
                 }
 
+                stage = "create-input-sample";
                 using var input = CreateInputSample(sample);
+
+                stage = "process-input";
                 _transform!.ProcessInput(0, input, 0);
+
+                stage = "process-output";
                 return DrainOutput(sample.Timestamp);
             }
             catch (Exception e) when (
@@ -162,10 +189,38 @@ public sealed class MediaFoundationH264Decoder : IVideoDecoder
                     or InvalidOperationException
                     or ArgumentException)
             {
-                LastFailure = $"{e.GetType().Name}: {e.Message}";
+                LastFailure = $"{stage}: {e.GetType().Name} (0x{e.HResult:X8}): {e.Message}";
+                _logger.LogWarning(
+                    e,
+                    "Recoverable H.264 decode failure. stage={Stage} hresult=0x{HResult:X8} bytes={AccessUnitBytes} keyFrame={IsKeyFrame} transportGeometry={Width}x{Height} visibleGeometry={VisibleWidth}x{VisibleHeight}",
+                    stage,
+                    e.HResult,
+                    sample.Data.Length,
+                    sample.IsKeyFrame,
+                    sample.Width,
+                    sample.Height,
+                    _visibleWidth,
+                    _visibleHeight);
+
                 // Packet loss/corruption is normal network weather. Keep the decoder alive and
                 // wait for the next clean access unit/keyframe rather than killing the viewer.
                 return null;
+            }
+            catch (Exception e)
+            {
+                LastFailure = $"{stage}: {e.GetType().Name} (0x{e.HResult:X8}): {e.Message}";
+                _logger.LogError(
+                    e,
+                    "Unexpected H.264 decoder exception escaped. stage={Stage} hresult=0x{HResult:X8} bytes={AccessUnitBytes} keyFrame={IsKeyFrame} transportGeometry={Width}x{Height} visibleGeometry={VisibleWidth}x{VisibleHeight}",
+                    stage,
+                    e.HResult,
+                    sample.Data.Length,
+                    sample.IsKeyFrame,
+                    sample.Width,
+                    sample.Height,
+                    _visibleWidth,
+                    _visibleHeight);
+                throw;
             }
         }
     }
@@ -476,15 +531,37 @@ public sealed class MediaFoundationH264Decoder : IVideoDecoder
 
                 if (result.Code == StreamChangeHResult)
                 {
+                    _logger.LogInformation(
+                        "H.264 decoder reported output stream change. oldVisible={VisibleWidth}x{VisibleHeight} oldCoded={CodedWidth}x{CodedHeight}",
+                        _visibleWidth,
+                        _visibleHeight,
+                        _codedWidth,
+                        _codedHeight);
+
                     // SPS/PPS is authoritative for RTP. The fresh output type now carries the
                     // actual frame size (and may carry a new size later in the same session).
                     SelectNv12OutputType(requireGeometry: true);
+
+                    _logger.LogInformation(
+                        "H.264 decoder output stream change applied. newVisible={VisibleWidth}x{VisibleHeight} newCoded={CodedWidth}x{CodedHeight} stride={Stride}",
+                        _visibleWidth,
+                        _visibleHeight,
+                        _codedWidth,
+                        _codedHeight,
+                        _stride);
                     continue;
                 }
 
                 if (result.Failure)
                 {
-                    LastFailure = $"ProcessOutput failed: 0x{result.Code:X8}";
+                    LastFailure = $"process-output: HRESULT 0x{result.Code:X8}";
+                    _logger.LogWarning(
+                        "H.264 decoder ProcessOutput returned failure. hresult=0x{HResult:X8} visible={VisibleWidth}x{VisibleHeight} coded={CodedWidth}x{CodedHeight}",
+                        result.Code,
+                        _visibleWidth,
+                        _visibleHeight,
+                        _codedWidth,
+                        _codedHeight);
                     return last;
                 }
 

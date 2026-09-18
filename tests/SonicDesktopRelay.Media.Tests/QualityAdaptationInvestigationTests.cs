@@ -98,6 +98,32 @@ public sealed class QualityAdaptationTests
     }
 
     [Fact]
+    public async Task Stable_reports_from_one_viewer_do_not_recover_quality_for_an_unrecovered_viewer()
+    {
+        var harness = await Harness.CreateAsync();
+        var degradedViewer = Guid.Parse("6f9619ff-8b86-d011-b42d-00cf4fc96401");
+        var stableViewer = Guid.Parse("6f9619ff-8b86-d011-b42d-00cf4fc96402");
+
+        harness.Pipeline.ReportReception(degradedViewer, 0.10);
+        harness.Time.Advance(TimeSpan.FromSeconds(2.5));
+        harness.Pipeline.ReportReception(degradedViewer, 0.10);
+        harness.Time.Advance(TimeSpan.FromSeconds(2.5));
+        harness.Pipeline.ReportReception(degradedViewer, 0.10);
+        Assert.Equal(3_000_000, harness.Pipeline.Quality.TargetBitsPerSecond);
+
+        harness.Time.Advance(TimeSpan.FromSeconds(15));
+        harness.Pipeline.ReportReception(stableViewer, 0);
+        harness.Time.Advance(TimeSpan.FromSeconds(15));
+        harness.Pipeline.ReportReception(stableViewer, 0);
+        harness.Time.Advance(TimeSpan.FromSeconds(15));
+        harness.Pipeline.ReportReception(stableViewer, 0);
+
+        Assert.Equal(1080, harness.Pipeline.Quality.MaxHeight);
+        Assert.Equal(3_000_000, harness.Pipeline.Quality.TargetBitsPerSecond);
+        await harness.DisposeAsync();
+    }
+
+    [Fact]
     public async Task Recovery_does_not_immediately_oscillate_back_down()
     {
         var harness = await Harness.CreateAsync();

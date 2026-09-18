@@ -152,6 +152,21 @@ public sealed class SessionRuntimeTests
     }
 
     [Fact]
+    public async Task Sharing_passes_the_selected_video_profile_to_the_publish_host()
+    {
+        var api = new FakeSessionApi();
+        var host = new FakeVideoPublishHost();
+        var runtime = new SessionRuntime(api, () => new FakeConnection(), host);
+        var profile = new VideoPublishProfile(MaxHeight: 720, MaxFramesPerSecond: 15);
+
+        await runtime.StartSharingAsync(Monitor, profile, 3, CancellationToken.None);
+
+        Assert.Equal(profile, host.StartedProfile);
+        Assert.Equal(720, runtime.Snapshot.VideoHeight);
+        Assert.Equal(15, runtime.Snapshot.FramesPerSecond);
+    }
+
+    [Fact]
     public async Task Sharing_starts_publishing_on_the_chosen_monitor()
     {
         var api = new FakeSessionApi();
@@ -470,6 +485,8 @@ public sealed class SessionRuntimeTests
         public List<string> Signalled { get; } = [];
 
         public MonitorInfo? StartedOn { get; private set; }
+
+        public VideoPublishProfile? StartedProfile { get; private set; }
 
         public bool Stopped { get; private set; }
 

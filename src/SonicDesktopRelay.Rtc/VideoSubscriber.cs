@@ -22,6 +22,7 @@ public sealed class VideoSubscriber(
     private readonly Dictionary<Guid, Queue<PendingIceCandidate>> _pendingCandidates = [];
 
     private IViewerPeerConnection? _peer;
+    private ViewerNegotiationDiagnosticEntry? _lastPeerDiagnostic;
     private bool _remoteDescriptionReady;
     private bool _keyFrameHooked;
     private bool _disposed;
@@ -269,6 +270,7 @@ public sealed class VideoSubscriber(
             if (ReferenceEquals(_peer, peer))
             {
                 _peer = null;
+                _lastPeerDiagnostic = null;
                 _remoteDescriptionReady = false;
                 _pendingCandidates.Clear();
                 dispose = true;
@@ -285,10 +287,15 @@ public sealed class VideoSubscriber(
 
     private IViewerPeerConnection CreatePeer()
     {
+        _lastPeerDiagnostic = null;
         var peer = peers.Create();
 
         peer.Diagnostic += entry =>
-            Diagnostic?.Invoke(entry with { From = entry.From ?? PublisherId });
+        {
+            var enriched = entry with { From = entry.From ?? PublisherId };
+            _lastPeerDiagnostic = enriched;
+            Diagnostic?.Invoke(enriched);
+        };
 
         peer.IceCandidateGathered += (candidate, mid, index) =>
         {
@@ -318,17 +325,19 @@ public sealed class VideoSubscriber(
         Guid? from = null,
         Guid? to = null)
     {
+        var peer = _lastPeerDiagnostic;
         Diagnostic?.Invoke(new ViewerNegotiationDiagnosticEntry(
             DateTimeOffset.UtcNow,
             eventName,
-            "unknown",
-            "unknown",
-            "unknown",
-            "unknown",
-            ExceptionType: exceptionType,
-            Message: message,
-            From: from,
-            To: to));
+            peer?.SignalingState ?? "unknown",
+            peer?.IceGatheringState ?? "unknown",
+            peer?.IceConnectionState ?? "unknown",
+            peer?.ConnectionState ?? "unknown",
+            peer?.SetDescriptionResult,
+            exceptionType,
+            message,
+            from,
+            to));
     }
 
     private void OnKeyFrameNeeded() => _peer?.RequestKeyFrame();
@@ -343,6 +352,7 @@ public sealed class VideoSubscriber(
             _disposed = true;
             peer = _peer;
             _peer = null;
+            _lastPeerDiagnostic = null;
             _remoteDescriptionReady = false;
             _pendingCandidates.Clear();
         }

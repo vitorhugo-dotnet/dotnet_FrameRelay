@@ -66,7 +66,7 @@ internal sealed unsafe class MediaFoundationCodecControl : IMediaFoundationCodec
             return;
 
         var iid = CodecApiInterfaceId;
-        var result = Marshal.QueryInterface(transform, ref iid, out _codecApi);
+        var result = Marshal.QueryInterface(transform, in iid, out _codecApi);
         if (result < 0)
             _codecApi = 0;
     }

@@ -56,7 +56,7 @@ independent COM reference and is always released independently when present.
 A useful reproduction log should show the selected `streamFlags`, `providesSamples`,
 `canProvideSamples`, `allocationMode`, whether the caller supplied a sample, the
 `ProcessOutput` HRESULT/status, whether a sample was returned, native-pointer alias evidence,
-and the final cleanup path. Per-output detail is Trace-level; allocation selection is Debug-level.
+and the final cleanup path. Allocation selection is Debug-level; detailed `ProcessOutput` and cleanup evidence is Trace-level on allocation selection, stream changes, and failures so healthy per-frame output stays quiet.
 
 References:
 

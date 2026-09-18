@@ -79,6 +79,9 @@ public sealed class RtcVideoWatchHost(
             var pipeline = new ScreenWatchPipeline(decoder, TimeProvider.System);
             pipeline.FrameDecoded += OnFrame;
             pipeline.StateChanged += OnState;
+            // Own the decoder pipeline before any later async setup. ICE/audio failures must
+            // still unwind the native decoder and its Media Foundation runtime lease.
+            _pipeline = pipeline;
 
             AudioWatchPipeline? audioPipeline = null;
             var sink = new WasapiAudioSink();
@@ -121,7 +124,6 @@ public sealed class RtcVideoWatchHost(
             _watchdog = TimeProvider.System.CreateTimer(
                 _ => pipeline.CheckForStall(), null, StallCheckInterval, StallCheckInterval);
 
-            _pipeline = pipeline;
             _subscriber = subscriber;
         }
         catch (Exception e) when (e is InvalidOperationException or PlatformNotSupportedException

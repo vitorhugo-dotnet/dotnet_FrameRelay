@@ -18,9 +18,14 @@ The Windows media integration suite must exercise, not merely discover:
 - first access unit is a keyframe;
 - SPS/PPS are present for a fresh decoder;
 - quality scaling changes encoded geometry correctly;
-- requested recovery keyframe is emitted;
-- resolution change reconfigures and emits a keyframe;
-- encoder diagnostics project the live transform and rejection log;
+- requested recovery keyframe uses codec control without transform recreation when supported;
+- unsupported codec control uses the diagnosed reconfigure fallback;
+- resolution/FPS/bitrate change reconfigures and emits a keyframe;
+- 15/30/60 FPS samples map to 6000/3000/1500 ticks on the 90 kHz video RTP clock;
+- publisher quality recovery never exceeds the selected quality/FPS ceiling;
+- capture FPS can change without restarting WGC;
+- nominated ICE candidate pairs classify as Direct/TURN and UDP/TCP without exposing endpoints;
+- encoder diagnostics project the live transform, keyframe mode/timing and rejection log;
 - publisher-encoded H.264 decodes to the original frame size;
 - decoder survives corrupt input;
 - decoder handles a mid-stream resolution change;
@@ -93,21 +98,30 @@ On a supported Windows desktop:
 9. Leave the screen static, then resume activity; verify the viewer remains current rather than
    showing a permanently stale frame.
 10. Trigger or simulate packet loss and verify recovery requests a keyframe without restarting
-    the session.
-11. Change effective quality/resolution and verify the viewer continues after the keyframe-bound
-    reconfiguration.
-12. Stop and restart sharing/watching to verify native transforms and WASAPI devices are released
+    the session. On a codec-control-capable encoder, verify Diagnostics reports `codec-api` and
+    there is no transform teardown/reselection for recovery-only requests.
+11. Verify Diagnostics reports the nominated path as Direct/TURN and UDP/TCP without displaying
+    candidate addresses, ports or credentials.
+12. Start separate sessions at 720p / 15 FPS and 1080p / 60 FPS (on capable hardware); verify
+    actual encoded geometry/cadence and that the viewer remains current.
+13. Change effective adaptive quality and verify the viewer continues after the keyframe-bound
+    reconfiguration and never recovers above the selected profile ceiling.
+14. Verify publisher Diagnostics expose sampled encode/send timings and recovery latency.
+15. Stop and restart sharing/watching to verify native transforms and WASAPI devices are released
     cleanly.
-13. Verify diagnostics contain no SDP body, ICE candidate body, credential or media payload.
+16. Verify diagnostics contain no SDP body, ICE candidate body, candidate endpoint, credential or
+    media payload.
 
 ## Network validation
 
 Use a pair of machines/networks when possible:
 
-- direct/STUN path succeeds when reachable;
-- TURN is used only when direct connectivity cannot be established;
+- direct/STUN path succeeds when reachable and Diagnostics reports Direct/UDP or the proven
+  direct transport;
+- TURN is used only when direct connectivity cannot be established and Diagnostics reports the
+  nominated TURN transport;
 - audio and video remain on the same peer connection;
 - adding viewers does not create additional encoders.
 
-Record the selected transform names and whether each side used hardware or software acceleration
-with the release test notes.
+Record the selected transform names, Direct/TURN transport classification, UDP/TCP classification,
+and whether each side used hardware or software acceleration with the release test notes.

@@ -57,8 +57,8 @@ public sealed class VideoSurface : Control
             return;
         }
 
-        var rowBytes = checked(frame.Width * 4);
-        var total = checked(rowBytes * frame.Height);
+        var rowBytes = frame.Width * 4;
+        var total = rowBytes * frame.Height;
         if (frame.Bgra.Length < total)
         {
             var rejected = Interlocked.Increment(ref _rejectedFrames);

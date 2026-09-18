@@ -118,6 +118,56 @@ public sealed class MediaFoundationH264DecoderTests
         Assert.Same(a.Array, b.Array);
     }
 
+    [Fact]
+    public void Decoder_survives_well_past_the_previous_401_access_unit_failure_point()
+    {
+        if (!Available) return;
+
+        using var encoder = new MediaFoundationH264Encoder();
+        using var decoder = new MediaFoundationH264Decoder();
+
+        const int width = 640;
+        const int height = 360;
+        const int targetAccessUnits = 650;
+        var pixels = new byte[checked(width * height * 4)];
+        for (var i = 0; i < pixels.Length; i += 4)
+        {
+            pixels[i] = 0x20;
+            pixels[i + 1] = 0x80;
+            pixels[i + 2] = 0xE0;
+            pixels[i + 3] = 0xFF;
+        }
+
+        var quality = new VideoQuality(height, 30, 1_500_000);
+        var accessUnits = 0;
+        var decodedFrames = 0;
+
+        for (var frameIndex = 0;
+             frameIndex < targetAccessUnits + 120 && accessUnits < targetAccessUnits;
+             frameIndex++)
+        {
+            var timestamp = TimeSpan.FromTicks(
+                frameIndex * TimeSpan.TicksPerSecond / quality.FramesPerSecond);
+            var encoded = encoder.Encode(
+                new VideoFrame(width, height, pixels, timestamp),
+                quality);
+            if (encoded is null)
+                continue;
+
+            accessUnits++;
+            if (decoder.Decode(encoded.Value) is not null)
+                decodedFrames++;
+        }
+
+        Assert.True(
+            accessUnits >= targetAccessUnits,
+            $"Encoder produced only {accessUnits} access units.");
+        Assert.True(
+            decodedFrames > 396,
+            $"Decoder produced only {decodedFrames} frames from {accessUnits} access units.");
+        Assert.Null(decoder.LastFailure);
+    }
+
     private static VideoFrame DecodeUntilOutput(
         MediaFoundationH264Encoder encoder,
         MediaFoundationH264Decoder decoder,

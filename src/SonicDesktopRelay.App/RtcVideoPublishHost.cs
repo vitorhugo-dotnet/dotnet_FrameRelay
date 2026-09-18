@@ -24,6 +24,8 @@ public sealed class RtcVideoPublishHost(
     private readonly ILogger<RtcVideoPublishHost> _logger =
         loggerFactory?.CreateLogger<RtcVideoPublishHost>() ?? NullLogger<RtcVideoPublishHost>.Instance;
     private readonly SemaphoreSlim _gate = new(1, 1);
+    private static readonly IReadOnlyDictionary<Guid, RtcTransportDiagnostics> EmptyTransportDiagnostics =
+        new Dictionary<Guid, RtcTransportDiagnostics>();
 
     private ScreenPublishPipeline? _pipeline;
     private MediaFoundationH264Encoder? _encoder;
@@ -35,6 +37,19 @@ public sealed class RtcVideoPublishHost(
     public string? EncoderName { get; private set; }
 
     public NativeVideoDiagnostics? VideoDiagnostics => _encoder?.Diagnostics;
+
+    public VideoQuality? EffectiveQuality => _pipeline?.Quality;
+
+    public string KeyFrameMode => _encoder?.KeyFrameMode ?? "not-started";
+
+    public TimeSpan? LastEncodeDuration => _pipeline?.LastEncodeDuration;
+
+    public TimeSpan? LastKeyFrameRecoveryLatency => _pipeline?.LastKeyFrameRecoveryLatency;
+
+    public TimeSpan? LastVideoSendDuration => _publisher?.LastVideoSendDuration;
+
+    public IReadOnlyDictionary<Guid, RtcTransportDiagnostics> TransportDiagnostics =>
+        _publisher?.TransportDiagnostics ?? EmptyTransportDiagnostics;
 
     public long FramesCaptured => _pipeline?.FramesCaptured ?? 0;
 
@@ -130,6 +145,7 @@ public sealed class RtcVideoPublishHost(
                 new SipSorceryPeerConnectionFactory(ice),
                 connection,
                 audioPipeline);
+            _publisher.TransportDiagnosticsChanged += OnTransportDiagnosticsChanged;
 
             _logger.LogInformation(
                 "Publisher media stack started. encoder={EncoderName} transform={TransformName} acceleration={Acceleration} monitor={MonitorId} dimensions={Width}x{Height}",
@@ -191,6 +207,17 @@ public sealed class RtcVideoPublishHost(
     private void OnAudioPipelineFailed(Exception error)
         => _audioPipelineFailure ??= error.Message;
 
+    private void OnTransportDiagnosticsChanged(Guid participantId, RtcTransportDiagnostics diagnostics)
+    {
+        _logger.LogInformation(
+            "Publisher WebRTC transport selected. participant={ParticipantId} path={Path} protocol={Protocol} localType={LocalType} remoteType={RemoteType}",
+            participantId,
+            diagnostics.Path,
+            diagnostics.Protocol,
+            diagnostics.LocalCandidateType,
+            diagnostics.RemoteCandidateType);
+    }
+
     private async Task<IceServerSettings> LoadIceAsync(CancellationToken ct)
     {
         var response = await iceApi.GetIceServersAsync(ct);
@@ -204,6 +231,7 @@ public sealed class RtcVideoPublishHost(
     {
         if (_publisher is not null)
         {
+            _publisher.TransportDiagnosticsChanged -= OnTransportDiagnosticsChanged;
             await _publisher.DisposeAsync();
             _publisher = null;
         }

@@ -26,6 +26,7 @@ public sealed class RtcVideoWatchHost(
     private readonly SemaphoreSlim _gate = new(1, 1);
 
     private ScreenWatchPipeline? _pipeline;
+    private MediaFoundationH264Decoder? _decoder;
     private AudioWatchPipeline? _audioPipeline;
     private WasapiAudioSink? _audioSink;
     private VideoSubscriber? _subscriber;
@@ -33,6 +34,8 @@ public sealed class RtcVideoWatchHost(
     private string? _audioPipelineFailure;
 
     public string? DecoderName { get; private set; }
+
+    public NativeVideoDiagnostics? VideoDiagnostics => _decoder?.Diagnostics;
 
     public string? AudioDecoderName => _audioPipeline?.DecoderName;
 
@@ -68,7 +71,8 @@ public sealed class RtcVideoWatchHost(
                              ?? throw new InvalidOperationException(
                                  "Signaling must be connected before watching starts.");
 
-            var decoder = new FFmpegH264Decoder();
+            var decoder = new MediaFoundationH264Decoder();
+            _decoder = decoder;
             DecoderName = decoder.Name;
             DecoderRejections = decoder.RejectionLog;
 
@@ -203,6 +207,7 @@ public sealed class RtcVideoWatchHost(
             // Disposing the pipeline disposes the video decoder with it.
             _pipeline.Dispose();
             _pipeline = null;
+            _decoder = null;
         }
     }
 }

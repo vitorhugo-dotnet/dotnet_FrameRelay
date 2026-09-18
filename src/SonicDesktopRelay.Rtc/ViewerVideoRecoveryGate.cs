@@ -36,19 +36,24 @@ internal sealed class ViewerVideoRecoveryGate(TimeSpan minimumPliInterval)
         return true;
     }
 
-    public bool ShouldDeliver(bool isIdr)
+    public bool ShouldDeliver(bool isIdr, bool hasVcl)
     {
         if (!Active)
             return true;
 
-        if (!isIdr)
+        if (isIdr)
         {
-            SuspectAccessUnitsSuppressed++;
-            return false;
+            Active = false;
+            _lastPliAt = null;
+            return true;
         }
 
-        Active = false;
-        _lastPliAt = null;
-        return true;
+        // Parameter sets / AUD / SEI are safe and may be required before the requested IDR.
+        // They do not end recovery because no clean reference picture exists yet.
+        if (!hasVcl)
+            return true;
+
+        SuspectAccessUnitsSuppressed++;
+        return false;
     }
 }

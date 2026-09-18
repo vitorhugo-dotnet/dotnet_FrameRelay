@@ -13,11 +13,13 @@ public sealed class ScreenPublishPipeline(
     IVideoEncoder encoder,
     MediaSessionClock? clock = null,
     TimeProvider? time = null,
-    ILogger<ScreenPublishPipeline>? logger = null) : IAsyncDisposable
+    ILogger<ScreenPublishPipeline>? logger = null,
+    VideoPublishProfile? profile = null) : IAsyncDisposable
 {
     private readonly TimeProvider _time = time ?? TimeProvider.System;
     private readonly ILogger<ScreenPublishPipeline> _logger =
         logger ?? NullLogger<ScreenPublishPipeline>.Instance;
+    private readonly VideoPublishProfile _profile = profile ?? VideoPublishProfile.Default;
 
     // RTCP reports normally arrive periodically. Requiring both multiple reports and elapsed
     // time makes a burst insufficient on its own, while the cooldown prevents staircase drops.
@@ -53,7 +55,8 @@ public sealed class ScreenPublishPipeline(
 
     public event Action<Exception>? Failed;
 
-    public VideoQuality Quality { get; private set; } = VideoQuality.Default;
+    public VideoQuality Quality { get; private set; } =
+        VideoQuality.InitialFor(profile ?? VideoPublishProfile.Default);
 
     public string EncoderName => encoder.Name;
 
@@ -199,7 +202,7 @@ public sealed class ScreenPublishPipeline(
                     && now - evidence.PoorSince.Value >= PoorReceptionMinimumDuration
                     && cooldownRemaining == TimeSpan.Zero)
                 {
-                    var reduced = Quality.Reduced();
+                    var reduced = Quality.Reduced(_profile);
                     if (reduced != Quality)
                     {
                         oldQuality = Quality;
@@ -220,7 +223,7 @@ public sealed class ScreenPublishPipeline(
             {
                 evidence.ResetPoor();
 
-                if (Quality == VideoQuality.Default)
+                if (Quality == VideoQuality.InitialFor(_profile))
                 {
                     evidence.ResetStable();
                 }
@@ -247,7 +250,7 @@ public sealed class ScreenPublishPipeline(
                     if (AllReceptionSourcesStable(now)
                         && cooldownRemaining == TimeSpan.Zero)
                     {
-                        var improved = Quality.Improved();
+                        var improved = Quality.Improved(_profile);
                         if (improved != Quality)
                         {
                             oldQuality = Quality;

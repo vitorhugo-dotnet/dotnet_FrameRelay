@@ -15,6 +15,7 @@ public sealed class SipSorceryPeerConnection : IPeerConnection
 
     private readonly RTCPeerConnection _connection;
     private readonly object _gate = new();
+    private RtcTransportDiagnostics? _transportDiagnostics;
     private bool _negotiated;
     private bool _closed;
 
@@ -59,10 +60,19 @@ public sealed class SipSorceryPeerConnection : IPeerConnection
             OnRtcpReport(report);
         };
 
+        _connection.oniceconnectionstatechange += state =>
+        {
+            if (state == RTCIceConnectionState.connected)
+                RefreshTransportDiagnostics();
+        };
+
         _connection.onconnectionstatechange += state =>
         {
             if (state == RTCPeerConnectionState.connected)
+            {
+                RefreshTransportDiagnostics();
                 KeyFrameRequested?.Invoke(KeyFrameRequestReason.InitialConnection);
+            }
         };
     }
 
@@ -73,6 +83,16 @@ public sealed class SipSorceryPeerConnection : IPeerConnection
     public event Action<KeyFrameRequestReason>? KeyFrameRequested;
 
     public event Action<double>? PacketLossReported;
+
+    public event Action<RtcTransportDiagnostics>? TransportDiagnosticsChanged;
+
+    public RtcTransportDiagnostics? TransportDiagnostics
+    {
+        get
+        {
+            lock (_gate) return _transportDiagnostics;
+        }
+    }
 
     public async Task<string> CreateOfferAsync(CancellationToken ct)
     {
@@ -146,6 +166,27 @@ public sealed class SipSorceryPeerConnection : IPeerConnection
     private static bool IsExpectedTransportFailure(Exception e) =>
         e is ObjectDisposedException or InvalidOperationException
             or ApplicationException or System.Net.Sockets.SocketException;
+
+    private void RefreshTransportDiagnostics()
+    {
+        var nominated = _connection.GetRtpChannel()?.NominatedEntry;
+        if (nominated?.LocalCandidate is not { } local || nominated.RemoteCandidate is not { } remote)
+            return;
+
+        var next = RtcTransportClassifier.Classify(
+            local.type,
+            remote.type,
+            local.protocol,
+            remote.protocol);
+
+        lock (_gate)
+        {
+            if (_closed || _transportDiagnostics == next) return;
+            _transportDiagnostics = next;
+        }
+
+        TransportDiagnosticsChanged?.Invoke(next);
+    }
 
     private void OnRtcpReport(RTCPCompoundPacket report)
     {

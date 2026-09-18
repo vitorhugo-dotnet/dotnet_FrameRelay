@@ -123,11 +123,9 @@ public sealed class MediaFoundationH264DecoderTests
     {
         if (!Available) return;
 
-        using var encoder = new MediaFoundationH264Encoder();
-        using var decoder = new MediaFoundationH264Decoder();
-
         const int width = 640;
         const int height = 360;
+        const int corpusAccessUnits = 30;
         const int targetAccessUnits = 650;
         var pixels = new byte[checked(width * height * 4)];
         for (var i = 0; i < pixels.Length; i += 4)
@@ -139,32 +137,46 @@ public sealed class MediaFoundationH264DecoderTests
         }
 
         var quality = new VideoQuality(height, 30, 1_500_000);
-        var accessUnits = 0;
+        var corpus = new List<EncodedVideoSample>(corpusAccessUnits);
+
+        // Keep the stress phase decoder-only. The publisher encoder has its own native
+        // ProcessOutput lifetime and is intentionally out of scope for this regression.
+        using (var encoder = new MediaFoundationH264Encoder())
+        {
+            for (var frameIndex = 0;
+                 frameIndex < corpusAccessUnits + 60 && corpus.Count < corpusAccessUnits;
+                 frameIndex++)
+            {
+                var timestamp = TimeSpan.FromTicks(
+                    frameIndex * TimeSpan.TicksPerSecond / quality.FramesPerSecond);
+                var encoded = encoder.Encode(
+                    new VideoFrame(width, height, pixels, timestamp),
+                    quality);
+                if (encoded is { } accessUnit)
+                    corpus.Add(accessUnit);
+            }
+        }
+
+        Assert.Equal(corpusAccessUnits, corpus.Count);
+        Assert.True(corpus[0].IsKeyFrame);
+
+        using var decoder = new MediaFoundationH264Decoder();
         var decodedFrames = 0;
 
-        for (var frameIndex = 0;
-             frameIndex < targetAccessUnits + 120 && accessUnits < targetAccessUnits;
-             frameIndex++)
+        for (var accessUnitIndex = 0; accessUnitIndex < targetAccessUnits; accessUnitIndex++)
         {
+            var source = corpus[accessUnitIndex % corpus.Count];
             var timestamp = TimeSpan.FromTicks(
-                frameIndex * TimeSpan.TicksPerSecond / quality.FramesPerSecond);
-            var encoded = encoder.Encode(
-                new VideoFrame(width, height, pixels, timestamp),
-                quality);
-            if (encoded is null)
-                continue;
+                accessUnitIndex * TimeSpan.TicksPerSecond / quality.FramesPerSecond);
+            var accessUnit = source with { Timestamp = timestamp };
 
-            accessUnits++;
-            if (decoder.Decode(encoded.Value) is not null)
+            if (decoder.Decode(accessUnit) is not null)
                 decodedFrames++;
         }
 
         Assert.True(
-            accessUnits >= targetAccessUnits,
-            $"Encoder produced only {accessUnits} access units.");
-        Assert.True(
             decodedFrames > 396,
-            $"Decoder produced only {decodedFrames} frames from {accessUnits} access units.");
+            $"Decoder produced only {decodedFrames} frames from {targetAccessUnits} access units.");
         Assert.Null(decoder.LastFailure);
     }
 

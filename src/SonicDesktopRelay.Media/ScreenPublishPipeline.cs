@@ -28,8 +28,10 @@ public sealed class ScreenPublishPipeline(
     private static readonly TimeSpan PoorReceptionMinimumDuration = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan QualityChangeCooldown = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan StableRecoveryDuration = TimeSpan.FromSeconds(30);
+    private static readonly Guid AnonymousReceptionSource = Guid.Empty;
 
     private readonly Lock _adaptationGate = new();
+    private readonly Dictionary<Guid, PoorReceptionEvidence> _poorReceptionBySource = [];
 
     private bool _running;
     private long _framesCaptured;
@@ -45,9 +47,7 @@ public sealed class ScreenPublishPipeline(
 
     private bool _keyFramePending;
     private KeyFrameRequestReason? _pendingKeyFrameReason;
-    private int _consecutivePoorReports;
     private int _consecutiveStableReports;
-    private DateTimeOffset? _poorSince;
     private DateTimeOffset? _stableSince;
     private DateTimeOffset? _lastQualityChangeAt;
 
@@ -150,7 +150,15 @@ public sealed class ScreenPublishPipeline(
     /// Feeds one viewer RTCP reception sample into the shared quality policy. Recovery feedback
     /// is intentionally separate: a PLI asks for a clean picture, it does not mean congestion.
     /// </summary>
-    public void ReportReception(double reportedLoss)
+    public void ReportReception(double reportedLoss) =>
+        ReportReception(AnonymousReceptionSource, reportedLoss);
+
+    /// <summary>
+    /// Feeds one viewer's RTCP reception sample into the shared quality policy. Poor-reception
+    /// evidence is kept per viewer so a healthy viewer cannot erase another viewer's sustained
+    /// loss. The resulting quality target is still global because the session has one encoder.
+    /// </summary>
+    public void ReportReception(Guid sourceId, double reportedLoss)
     {
         var loss = Math.Clamp(reportedLoss, 0, 1);
         var now = _time.GetUtcNow();
@@ -158,7 +166,7 @@ public sealed class ScreenPublishPipeline(
         VideoQuality? newQuality = null;
         string? changeEvent = null;
         string? reason = null;
-        int poorReports;
+        var poorReports = 0;
         int stableReports;
         TimeSpan cooldownRemaining;
 
@@ -170,23 +178,28 @@ public sealed class ScreenPublishPipeline(
             {
                 _consecutiveStableReports = 0;
                 _stableSince = null;
-                _poorSince ??= now;
-                _consecutivePoorReports++;
+
+                var evidence = GetPoorReceptionEvidence(sourceId);
+                evidence.Since ??= now;
+                evidence.ConsecutiveReports++;
+                poorReports = evidence.ConsecutiveReports;
 
                 _logger.LogInformation(
-                    "video.quality.degradation.considered reason={Reason} reportedLoss={ReportedLoss:F4} " +
-                    "consecutivePoorReports={ConsecutivePoorReports} poorDurationMs={PoorDurationMs:F0} " +
-                    "cooldownRemainingMs={CooldownRemainingMs:F0} maxHeight={MaxHeight} bitrate={Bitrate}",
+                    "video.quality.degradation.considered reason={Reason} receptionSource={ReceptionSource} " +
+                    "reportedLoss={ReportedLoss:F4} consecutivePoorReports={ConsecutivePoorReports} " +
+                    "poorDurationMs={PoorDurationMs:F0} cooldownRemainingMs={CooldownRemainingMs:F0} " +
+                    "maxHeight={MaxHeight} bitrate={Bitrate}",
                     "rtcp-loss",
+                    sourceId,
                     loss,
-                    _consecutivePoorReports,
-                    (now - _poorSince.Value).TotalMilliseconds,
+                    evidence.ConsecutiveReports,
+                    (now - evidence.Since.Value).TotalMilliseconds,
                     cooldownRemaining.TotalMilliseconds,
                     Quality.MaxHeight,
                     Quality.TargetBitsPerSecond);
 
-                if (_consecutivePoorReports >= ConsecutivePoorReportsRequired
-                    && now - _poorSince.Value >= PoorReceptionMinimumDuration
+                if (evidence.ConsecutiveReports >= ConsecutivePoorReportsRequired
+                    && now - evidence.Since.Value >= PoorReceptionMinimumDuration
                     && cooldownRemaining == TimeSpan.Zero)
                 {
                     var reduced = Quality.Reduced();
@@ -198,16 +211,17 @@ public sealed class ScreenPublishPipeline(
                         _lastQualityChangeAt = now;
                         changeEvent = "video.quality.changed";
                         reason = "sustained-rtcp-loss";
+                        ResetAllPoorReceptionEvidence();
                     }
-
-                    _consecutivePoorReports = 0;
-                    _poorSince = null;
+                    else
+                    {
+                        evidence.Reset();
+                    }
                 }
             }
             else if (loss <= StableReceptionLossRatio)
             {
-                _consecutivePoorReports = 0;
-                _poorSince = null;
+                ResetPoorReceptionEvidence(sourceId);
 
                 if (Quality == VideoQuality.Default)
                 {
@@ -220,10 +234,12 @@ public sealed class ScreenPublishPipeline(
                     _consecutiveStableReports++;
 
                     _logger.LogInformation(
-                        "video.quality.recovery.considered reason={Reason} reportedLoss={ReportedLoss:F4} " +
-                        "consecutiveStableReports={ConsecutiveStableReports} stableDurationMs={StableDurationMs:F0} " +
-                        "cooldownRemainingMs={CooldownRemainingMs:F0} maxHeight={MaxHeight} bitrate={Bitrate}",
+                        "video.quality.recovery.considered reason={Reason} receptionSource={ReceptionSource} " +
+                        "reportedLoss={ReportedLoss:F4} consecutiveStableReports={ConsecutiveStableReports} " +
+                        "stableDurationMs={StableDurationMs:F0} cooldownRemainingMs={CooldownRemainingMs:F0} " +
+                        "maxHeight={MaxHeight} bitrate={Bitrate}",
                         "stable-rtcp-reception",
+                        sourceId,
                         loss,
                         _consecutiveStableReports,
                         (now - _stableSince.Value).TotalMilliseconds,
@@ -253,15 +269,15 @@ public sealed class ScreenPublishPipeline(
             }
             else
             {
-                // Neither genuinely poor nor genuinely stable. Do not let unrelated RTCP
-                // samples accumulate stale evidence toward a later quality transition.
-                _consecutivePoorReports = 0;
-                _poorSince = null;
+                // This viewer is neither genuinely poor nor genuinely stable. Clear only its
+                // poor evidence; another viewer's sustained loss remains valid evidence.
+                ResetPoorReceptionEvidence(sourceId);
                 _consecutiveStableReports = 0;
                 _stableSince = null;
             }
 
-            poorReports = _consecutivePoorReports;
+            if (_poorReceptionBySource.TryGetValue(sourceId, out var remainingEvidence))
+                poorReports = remainingEvidence.ConsecutiveReports;
             stableReports = _consecutiveStableReports;
         }
 
@@ -272,13 +288,14 @@ public sealed class ScreenPublishPipeline(
         var newResolution = ResolutionFor(newQuality);
 
         _logger.LogWarning(
-            "{QualityEvent} reason={Reason} reportedLoss={ReportedLoss:F4} " +
+            "{QualityEvent} reason={Reason} receptionSource={ReceptionSource} reportedLoss={ReportedLoss:F4} " +
             "oldResolution={OldResolution} newResolution={NewResolution} " +
             "oldBitrate={OldBitrate} newBitrate={NewBitrate} " +
             "consecutivePoorReports={ConsecutivePoorReports} consecutiveStableReports={ConsecutiveStableReports} " +
             "cooldownMs={CooldownMs:F0}",
             changeEvent,
             reason,
+            sourceId,
             loss,
             oldResolution,
             newResolution,
@@ -291,6 +308,34 @@ public sealed class ScreenPublishPipeline(
         // Reconfiguring bitrate or geometry starts a new encoder configuration. Make the
         // transition a clean random-access point for every viewer, independently of RTCP PLI.
         RequestKeyFrame(KeyFrameRequestReason.QualityChange);
+    }
+
+    public void RemoveReceptionSource(Guid sourceId)
+    {
+        lock (_adaptationGate)
+            _poorReceptionBySource.Remove(sourceId);
+    }
+
+    private PoorReceptionEvidence GetPoorReceptionEvidence(Guid sourceId)
+    {
+        if (_poorReceptionBySource.TryGetValue(sourceId, out var evidence))
+            return evidence;
+
+        evidence = new PoorReceptionEvidence();
+        _poorReceptionBySource.Add(sourceId, evidence);
+        return evidence;
+    }
+
+    private void ResetPoorReceptionEvidence(Guid sourceId)
+    {
+        if (_poorReceptionBySource.TryGetValue(sourceId, out var evidence))
+            evidence.Reset();
+    }
+
+    private void ResetAllPoorReceptionEvidence()
+    {
+        foreach (var evidence in _poorReceptionBySource.Values)
+            evidence.Reset();
     }
 
     private TimeSpan CooldownRemaining(DateTimeOffset now)
@@ -393,6 +438,18 @@ public sealed class ScreenPublishPipeline(
             var observed = Interlocked.CompareExchange(ref target, candidate, current);
             if (observed == current) return;
             current = observed;
+        }
+    }
+
+    private sealed class PoorReceptionEvidence
+    {
+        public int ConsecutiveReports { get; set; }
+        public DateTimeOffset? Since { get; set; }
+
+        public void Reset()
+        {
+            ConsecutiveReports = 0;
+            Since = null;
         }
     }
 

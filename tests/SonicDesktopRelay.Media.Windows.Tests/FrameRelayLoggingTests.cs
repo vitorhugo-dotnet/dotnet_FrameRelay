@@ -37,6 +37,41 @@ public sealed class FrameRelayLoggingTests
     }
 
     [Fact]
+    public void File_sink_keeps_trace_warning_error_and_exception_details()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "FrameRelayLoggingTests", Guid.NewGuid().ToString("N"));
+
+        try
+        {
+            using (var logging = FrameRelayLogging.Create(root))
+            {
+                var logger = logging.LoggerFactory.CreateLogger("FrameRelay.LevelTests");
+                logger.LogTrace("trace-marker");
+                logger.LogWarning("warning-marker");
+                logger.LogError(new InvalidOperationException("decoder-boom"), "error-marker");
+            }
+
+            var file = Assert.Single(
+                Directory.GetFiles(Path.Combine(root, "FrameRelay", "logs"), "FrameRelay-*.log"));
+            var content = File.ReadAllText(file);
+
+            Assert.Contains("[VRB]", content);
+            Assert.Contains("trace-marker", content);
+            Assert.Contains("[WRN]", content);
+            Assert.Contains("warning-marker", content);
+            Assert.Contains("[ERR]", content);
+            Assert.Contains("error-marker", content);
+            Assert.Contains(nameof(InvalidOperationException), content);
+            Assert.Contains("decoder-boom", content);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void Log_path_never_depends_on_the_install_directory()
     {
         var root = Path.Combine(Path.GetTempPath(), "FrameRelayLoggingTests", Guid.NewGuid().ToString("N"));

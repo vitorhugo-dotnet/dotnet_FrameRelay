@@ -60,6 +60,7 @@ public sealed class SipSorceryViewerPeerConnectionTests
         var viewerFactory = new SipSorceryViewerPeerConnectionFactory(Ice);
         await using var viewer = viewerFactory.Create();
         var answer = await viewer.CreateAnswerAsync(offer, CancellationToken.None);
+        await publisher.ApplyAnswerAsync(answer, CancellationToken.None);
 
         var audioStart = answer.IndexOf("m=audio", StringComparison.OrdinalIgnoreCase);
         var videoStart = answer.IndexOf("m=video", StringComparison.OrdinalIgnoreCase);
@@ -72,6 +73,49 @@ public sealed class SipSorceryViewerPeerConnectionTests
         Assert.DoesNotContain("m=audio 0", audioSection, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("OPUS", audioSection, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("a=recvonly", audioSection, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task A_valid_offer_reports_each_answer_stage_without_storing_the_sdp()
+    {
+        var factory = new SipSorceryViewerPeerConnectionFactory(Ice);
+        await using var peer = factory.Create();
+        var diagnostics = new List<ViewerNegotiationDiagnosticEntry>();
+        peer.Diagnostic += diagnostics.Add;
+
+        await peer.CreateAnswerAsync(PublisherOfferSdp, CancellationToken.None);
+
+        var stages = diagnostics.Select(x => x.Event).ToArray();
+        Assert.Contains("viewer.remote_description.begin", stages);
+        Assert.Contains("viewer.remote_description.ok", stages);
+        Assert.Contains("viewer.answer.create.begin", stages);
+        Assert.Contains("viewer.answer.create.ok", stages);
+        Assert.Contains("viewer.local_description.begin", stages);
+        Assert.Contains("viewer.local_description.ok", stages);
+
+        var serialized = System.Text.Json.JsonSerializer.Serialize(diagnostics);
+        Assert.DoesNotContain("a=ice-pwd", serialized, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("a=fingerprint", serialized, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("v=0", serialized, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task An_incompatible_remote_offer_surfaces_set_description_result_and_stage()
+    {
+        var incompatibleOffer = PublisherOfferSdp.Replace("H264/90000", "VP8/90000", StringComparison.Ordinal);
+        var factory = new SipSorceryViewerPeerConnectionFactory(Ice);
+        await using var peer = factory.Create();
+        var diagnostics = new List<ViewerNegotiationDiagnosticEntry>();
+        peer.Diagnostic += diagnostics.Add;
+
+        var failure = await Assert.ThrowsAsync<ViewerNegotiationException>(
+            () => peer.CreateAnswerAsync(incompatibleOffer, CancellationToken.None));
+
+        Assert.Equal("setRemoteDescription", failure.Stage);
+        Assert.Contains("VideoIncompatible", failure.Message, StringComparison.Ordinal);
+        Assert.Contains(diagnostics, x =>
+            x.Event == "viewer.remote_description.failed"
+            && x.SetDescriptionResult == "VideoIncompatible");
     }
 
     [Fact]

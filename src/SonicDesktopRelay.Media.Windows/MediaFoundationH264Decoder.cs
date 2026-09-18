@@ -29,6 +29,22 @@ public sealed class MediaFoundationH264Decoder : IVideoDecoder
     private const int StreamChangeHResult = unchecked((int)0xC00D6D61);
     private const int NoMoreTypesHResult = unchecked((int)0xC00D36B9);
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MfOffset
+    {
+        public ushort Fraction;
+        public short Value;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MfVideoArea
+    {
+        public MfOffset OffsetX;
+        public MfOffset OffsetY;
+        public int Width;
+        public int Height;
+    }
+
     private readonly IDisposable _runtimeLease;
     private readonly Lock _gate = new();
     private readonly List<string> _rejections = [];
@@ -332,12 +348,24 @@ public sealed class MediaFoundationH264Decoder : IVideoDecoder
                 "Media Foundation H.264 decoder output type did not expose a valid frame size.");
         }
 
-        _visibleWidth = _transportGeometryKnown && _visibleWidth > 0
-            ? Math.Min(_visibleWidth, _codedWidth)
-            : _codedWidth;
-        _visibleHeight = _transportGeometryKnown && _visibleHeight > 0
-            ? Math.Min(_visibleHeight, _codedHeight)
-            : _codedHeight;
+        if (_transportGeometryKnown && _visibleWidth > 0 && _visibleHeight > 0)
+        {
+            _visibleWidth = Math.Min(_visibleWidth, _codedWidth);
+            _visibleHeight = Math.Min(_visibleHeight, _codedHeight);
+        }
+        else if (TryReadDisplayAperture(outputType, out var displayWidth, out var displayHeight))
+        {
+            // H.264 coded dimensions are macroblock-aligned. For example, a 640x360 picture
+            // can legitimately decode into a 640x368 NV12 surface. The display aperture is
+            // the valid picture region; pixels outside it are padding and must not be shown.
+            _visibleWidth = Math.Min(displayWidth, _codedWidth);
+            _visibleHeight = Math.Min(displayHeight, _codedHeight);
+        }
+        else
+        {
+            _visibleWidth = _codedWidth;
+            _visibleHeight = _codedHeight;
+        }
 
         _stride = outputType.GetUInt32(
             MediaTypeAttributeKeys.DefaultStride,
@@ -351,6 +379,60 @@ public sealed class MediaFoundationH264Decoder : IVideoDecoder
         var bgraSize = checked(_visibleWidth * _visibleHeight * 4);
         if (_bgra.Length != bgraSize)
             _bgra = new byte[bgraSize];
+    }
+
+    private static bool TryReadDisplayAperture(
+        IMFMediaType outputType,
+        out int width,
+        out int height)
+    {
+        // Microsoft's display-area fallback order is minimum display aperture, then geometric
+        // aperture, then the entire coded frame.
+        if (TryReadVideoArea(
+                outputType,
+                MediaTypeAttributeKeys.MinimumDisplayAperture,
+                out width,
+                out height))
+        {
+            return true;
+        }
+
+        return TryReadVideoArea(
+            outputType,
+            MediaTypeAttributeKeys.GeometricAperture,
+            out width,
+            out height);
+    }
+
+    private static bool TryReadVideoArea(
+        IMFMediaType outputType,
+        Guid attribute,
+        out int width,
+        out int height)
+    {
+        width = 0;
+        height = 0;
+
+        try
+        {
+            var blob = outputType.GetBlob(attribute);
+            if (blob.Length < Marshal.SizeOf<MfVideoArea>())
+                return false;
+
+            var area = MemoryMarshal.Read<MfVideoArea>(blob);
+            if (area.Width <= 0 || area.Height <= 0)
+                return false;
+
+            width = area.Width;
+            height = area.Height;
+            return true;
+        }
+        catch (SharpGenException)
+        {
+            // Attribute absence is normal. The caller falls back to the next aperture and,
+            // finally, to MF_MT_FRAME_SIZE.
+            return false;
+        }
     }
 
     private VideoFrame? DrainOutput(TimeSpan timestamp)

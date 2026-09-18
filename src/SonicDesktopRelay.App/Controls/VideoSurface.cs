@@ -6,6 +6,8 @@ using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
 using Avalonia.Threading;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using SonicDesktopRelay.Media;
 using SonicDesktopRelay.Presentation;
 
@@ -20,6 +22,10 @@ namespace SonicDesktopRelay.App.Controls;
 [SupportedOSPlatform("windows10.0.19041.0")]
 public sealed class VideoSurface : Control
 {
+    private readonly ILogger<VideoSurface> _logger =
+        FrameRelayLogging.Current?.LoggerFactory.CreateLogger<VideoSurface>()
+        ?? NullLogger<VideoSurface>.Instance;
+
     private WriteableBitmap? _bitmap;
 
     /// <summary>The staging copy used only when a frame is not array-backed. Reused, never per frame.</summary>
@@ -27,6 +33,9 @@ public sealed class VideoSurface : Control
 
     private int _width;
     private int _height;
+    private long _presentedFrames;
+    private long _renderedFrames;
+    private long _rejectedFrames;
 
     /// <summary>
     /// Blits one frame into the recycled bitmap. UI thread only: <see cref="Shell"/> marshals
@@ -37,11 +46,31 @@ public sealed class VideoSurface : Control
     {
         Dispatcher.UIThread.VerifyAccess();
 
-        if (frame.Width <= 0 || frame.Height <= 0) return;
+        if (frame.Width <= 0 || frame.Height <= 0)
+        {
+            var rejected = Interlocked.Increment(ref _rejectedFrames);
+            _logger.LogWarning(
+                "VideoSurface rejected frame with invalid geometry. width={Width} height={Height} rejectedFrames={RejectedFrames}",
+                frame.Width,
+                frame.Height,
+                rejected);
+            return;
+        }
 
-        var rowBytes = frame.Width * 4;
-        var total = rowBytes * frame.Height;
-        if (frame.Bgra.Length < total) return;
+        var rowBytes = checked(frame.Width * 4);
+        var total = checked(rowBytes * frame.Height);
+        if (frame.Bgra.Length < total)
+        {
+            var rejected = Interlocked.Increment(ref _rejectedFrames);
+            _logger.LogWarning(
+                "VideoSurface rejected undersized BGRA frame. width={Width} height={Height} bytes={Bytes} requiredBytes={RequiredBytes} rejectedFrames={RejectedFrames}",
+                frame.Width,
+                frame.Height,
+                frame.Bgra.Length,
+                total,
+                rejected);
+            return;
+        }
 
         if (_bitmap is null || _width != frame.Width || _height != frame.Height)
         {
@@ -53,6 +82,11 @@ public sealed class VideoSurface : Control
                 AlphaFormat.Opaque);
             _width = frame.Width;
             _height = frame.Height;
+
+            _logger.LogInformation(
+                "VideoSurface bitmap created or resized. width={Width} height={Height}",
+                _width,
+                _height);
         }
 
         var (source, offset) = Borrow(frame.Bgra, total);
@@ -73,6 +107,17 @@ public sealed class VideoSurface : Control
                         locked.Address + ((nint)y * locked.RowBytes), rowBytes);
                 }
             }
+        }
+
+        var presented = Interlocked.Increment(ref _presentedFrames);
+        if (presented == 1 || presented % 120 == 0)
+        {
+            _logger.LogTrace(
+                "VideoSurface accepted decoded frame. presentedFrames={PresentedFrames} rejectedFrames={RejectedFrames} width={Width} height={Height}",
+                presented,
+                Interlocked.Read(ref _rejectedFrames),
+                frame.Width,
+                frame.Height);
         }
 
         InvalidateVisual();
@@ -103,6 +148,19 @@ public sealed class VideoSurface : Control
         if (destination.Width <= 0 || destination.Height <= 0) return;
 
         context.DrawImage(_bitmap, new Rect(0, 0, _width, _height), destination);
+
+        var rendered = Interlocked.Increment(ref _renderedFrames);
+        if (rendered == 1 || rendered % 120 == 0)
+        {
+            _logger.LogTrace(
+                "VideoSurface rendered bitmap. renderCalls={RenderCalls} presentedFrames={PresentedFrames} bounds={BoundsWidth}x{BoundsHeight} bitmap={BitmapWidth}x{BitmapHeight}",
+                rendered,
+                Interlocked.Read(ref _presentedFrames),
+                available.Width,
+                available.Height,
+                _width,
+                _height);
+        }
     }
 
     protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)

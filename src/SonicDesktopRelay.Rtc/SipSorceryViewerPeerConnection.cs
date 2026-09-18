@@ -17,9 +17,18 @@ public sealed class SipSorceryViewerPeerConnection : IViewerPeerConnection
     /// <summary>The RTP clock for video is 90 kHz, fixed by RFC 3551.</summary>
     private const uint VideoClockRate = 90_000;
 
+    // Three 30 fps frames is enough to absorb ordinary packet reordering without turning
+    // loss recovery into visible latency. Actual loss is still validated by our H.264 guard.
+    private static readonly TimeSpan VideoReorderWindow = TimeSpan.FromMilliseconds(100);
+    private static readonly TimeSpan RecoveryPliInterval = TimeSpan.FromSeconds(1);
+
     private readonly RTCPeerConnection _connection;
     private readonly ReceivedAudioTimeline _audioTimeline = new();
+    private readonly H264RtpAccessUnitAssembler _videoAssembler = new();
+    private readonly ViewerVideoRecoveryGate _videoRecovery = new(RecoveryPliInterval);
     private readonly Lock _gate = new();
+
+    private long _pliSent;
     private bool _closed;
 
     public SipSorceryViewerPeerConnection(IceServerSettings ice)
@@ -48,6 +57,12 @@ public sealed class SipSorceryViewerPeerConnection : IViewerPeerConnection
             MediaStreamStatusEnum.RecvOnly);
         _connection.addTrack(videoTrack);
 
+        // Use SIPSorcery's supported reorder buffer first. The integrity guard below remains
+        // necessary because after the reorder timeout a genuinely missing packet is skipped,
+        // while 10.0.16's H264Depacketiser does not validate continuity before FU-A rebuild.
+        _connection.VideoStream?.AddBuffer(VideoReorderWindow);
+        _videoAssembler.AccessUnitDropped += OnAccessUnitDropped;
+
         _connection.onicecandidate += candidate =>
         {
             if (candidate is null) return;
@@ -69,16 +84,58 @@ public sealed class SipSorceryViewerPeerConnection : IViewerPeerConnection
                 _audioTimeline.Map(frame.EncodedAudio, frame.DurationMilliSeconds));
         };
 
-        _connection.OnVideoFrameReceived += (_, timestamp, frame, _) =>
+        // Do not trust SIPSorcery 10.0.16's reconstructed H.264 frame event here. Its
+        // depacketizer sorts packets for a timestamp but can concatenate FU-A fragments across
+        // a proven RTP sequence gap. Consume the supported low-level RTP event instead, after
+        // SIPSorcery's reorder buffer, and only forward integrity-checked access units.
+        _connection.OnRtpPacketReceived += (_, mediaType, packet) =>
         {
-            if (frame is null || frame.Length == 0) return;
+            if (mediaType != SDPMediaTypesEnum.video || packet is null) return;
 
-            // The wire carries no picture size: the decoder reads it from the SPS, and a
-            // resolution change mid-session arrives as a new SPS rather than as metadata.
+            var payload = packet.GetPayloadBytes();
+            var accessUnit = _videoAssembler.Push(
+                packet.Header.SequenceNumber,
+                packet.Header.Timestamp,
+                packet.Header.MarkerBit != 0,
+                payload);
+
+            if (accessUnit is not { } complete)
+                return;
+
+            bool recoveryWasActive;
+            bool deliver;
+            lock (_gate)
+            {
+                if (_closed) return;
+                recoveryWasActive = _videoRecovery.Active;
+                deliver = _videoRecovery.ShouldDeliver(complete.IsIdr);
+            }
+
+            if (!deliver)
+            {
+                EmitDiagnostic(
+                    "viewer.video.access_unit.suppressed",
+                    message:
+                        $"reason=awaiting-idr timestamp={complete.Timestamp} " +
+                        $"suppressed={_videoRecovery.SuspectAccessUnitsSuppressed}");
+                return;
+            }
+
+            if (recoveryWasActive && complete.IsIdr)
+            {
+                EmitDiagnostic(
+                    "viewer.video.recovery.completed",
+                    message:
+                        $"timestamp={complete.Timestamp} recoveryEpisodes={_videoRecovery.RecoveryEpisodes} " +
+                        $"recoveryKeyframesRequested={_videoRecovery.RecoveryKeyframesRequested} pliSent={Interlocked.Read(ref _pliSent)}");
+            }
+
+            // The wire carries no picture size: Media Foundation reads it from SPS. Legitimate
+            // SPS-driven size changes therefore continue through the normal decoder path.
             VideoSampleReceived?.Invoke(new EncodedVideoSample(
-                frame,
-                TimeSpan.FromSeconds(timestamp / (double)VideoClockRate),
-                LooksLikeKeyFrame(frame),
+                complete.Data,
+                TimeSpan.FromSeconds(complete.Timestamp / (double)VideoClockRate),
+                complete.IsIdr,
                 Width: 0,
                 Height: 0));
         };
@@ -89,7 +146,8 @@ public sealed class SipSorceryViewerPeerConnection : IViewerPeerConnection
 
             // The publisher emits keyframes on demand only, so a viewer that has just
             // connected holds no reference frame at all until it asks for one.
-            if (state == RTCPeerConnectionState.connected) RequestKeyFrame();
+            if (state == RTCPeerConnectionState.connected)
+                RequestRecoveryKeyFrame("initial-connection");
         };
     }
 
@@ -204,54 +262,94 @@ public sealed class SipSorceryViewerPeerConnection : IViewerPeerConnection
             message));
     }
 
-    public void RequestKeyFrame()
+    public void RequestKeyFrame() => RequestRecoveryKeyFrame("stall");
+
+    private void OnAccessUnitDropped(H264AccessUnitDrop drop)
     {
+        EmitDiagnostic(
+            "viewer.rtp_access_unit.dropped",
+            message:
+                $"kind={drop.Kind} reason={drop.Reason} timestamp={drop.Timestamp} " +
+                $"previousSequence={drop.PreviousSequence?.ToString() ?? "-"} " +
+                $"nextSequence={drop.NextSequence?.ToString() ?? "-"} missingPackets={drop.MissingPackets} " +
+                $"rtpPacketsReceived={_videoAssembler.RtpPacketsReceived} " +
+                $"rtpPacketsLost={_videoAssembler.RtpPacketsLost} rtpSequenceGaps={_videoAssembler.RtpSequenceGaps} " +
+                $"rtpPacketsReordered={_videoAssembler.RtpPacketsReordered} " +
+                $"incompleteAccessUnitsDropped={_videoAssembler.IncompleteAccessUnitsDropped} " +
+                $"corruptAccessUnitsDropped={_videoAssembler.CorruptAccessUnitsDropped}");
+
+        RequestRecoveryKeyFrame($"rtp-{drop.Reason}");
+    }
+
+    private void RequestRecoveryKeyFrame(string reason)
+    {
+        bool started;
+        bool shouldSend;
+
         lock (_gate)
         {
             if (_closed) return;
+
+            started = !_videoRecovery.Active;
+            _videoRecovery.BeginRecovery();
+            shouldSend = _videoRecovery.TryRequestPli(DateTimeOffset.UtcNow);
         }
 
-        // Before the transport is up there is no RTCP session and no remote SSRC to name, so
-        // there is nothing to send. Asking early is normal — the pipeline's watchdog does not
-        // know how far negotiation has got — and must be a no-op, not a throw.
+        if (started)
+        {
+            EmitDiagnostic(
+                "viewer.video.recovery.started",
+                message:
+                    $"reason={reason} recoveryEpisodes={_videoRecovery.RecoveryEpisodes} " +
+                    $"rtpPacketsLost={_videoAssembler.RtpPacketsLost} " +
+                    $"incompleteAccessUnitsDropped={_videoAssembler.IncompleteAccessUnitsDropped}");
+        }
+
+        if (!shouldSend)
+        {
+            EmitDiagnostic(
+                "viewer.video.recovery.pli_coalesced",
+                message:
+                    $"reason={reason} minimumIntervalMs={RecoveryPliInterval.TotalMilliseconds:0} " +
+                    $"recoveryKeyframesRequested={_videoRecovery.RecoveryKeyframesRequested}");
+            return;
+        }
+
+        if (!TrySendPli())
+            return;
+
+        var sent = Interlocked.Increment(ref _pliSent);
+        EmitDiagnostic(
+            "viewer.video.recovery.pli_sent",
+            message:
+                $"reason={reason} pliSent={sent} " +
+                $"recoveryKeyframesRequested={_videoRecovery.RecoveryKeyframesRequested}");
+    }
+
+    private bool TrySendPli()
+    {
+        lock (_gate)
+        {
+            if (_closed) return false;
+        }
+
+        // Before the transport is up there is no RTCP session and no remote SSRC to name.
         var session = _connection.VideoRtcpSession;
-        if (session is null) return;
-        if (_connection.VideoRemoteTrack is not { } remote) return;
+        if (session is null) return false;
+        if (_connection.VideoRemoteTrack is not { } remote) return false;
 
         try
         {
-            _connection.SendRtcpFeedback(SDPMediaTypesEnum.video,
+            _connection.SendRtcpFeedback(
+                SDPMediaTypesEnum.video,
                 new RTCPFeedback(session.Ssrc, remote.Ssrc, PSFBFeedbackTypesEnum.PLI));
+            return true;
         }
         catch (Exception e) when (e is ObjectDisposedException or InvalidOperationException
                                       or ApplicationException or System.Net.Sockets.SocketException)
         {
-            // A PLI that cannot leave is not worth ending the session over; the next stall
-            // check will try again.
+            return false;
         }
-    }
-
-    /// <summary>
-    /// True when the access unit carries an IDR or a parameter set. Purely informational —
-    /// the decoder does not need to be told — so it stops at the first NAL that answers.
-    /// </summary>
-    private static bool LooksLikeKeyFrame(byte[] frame)
-    {
-        for (var i = 0; i + 3 < frame.Length; i++)
-        {
-            if (frame[i] != 0x00 || frame[i + 1] != 0x00) continue;
-
-            int header;
-            if (frame[i + 2] == 0x01) header = frame[i + 3];
-            else if (frame[i + 2] == 0x00 && i + 4 < frame.Length && frame[i + 3] == 0x01) header = frame[i + 4];
-            else continue;
-
-            var nalType = header & 0x1F;
-            // 5 = IDR slice, 7 = SPS, 8 = PPS.
-            if (nalType is 5 or 7 or 8) return true;
-        }
-
-        return false;
     }
 
     public ValueTask DisposeAsync()

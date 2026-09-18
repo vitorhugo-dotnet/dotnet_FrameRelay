@@ -44,6 +44,26 @@ public sealed class MediaFoundationH264DecoderTests
     }
 
     [Fact]
+    public void Dimensionless_rtp_decoder_handles_a_mid_stream_resolution_increase()
+    {
+        if (!Available) return;
+
+        using var encoder = new MediaFoundationH264Encoder();
+        using var decoder = new MediaFoundationH264Decoder();
+        DecodeUntilOutput(encoder, decoder, 320, 180, stripTransportDimensions: true);
+
+        var frame = DecodeUntilOutput(
+            encoder,
+            decoder,
+            640,
+            360,
+            stripTransportDimensions: true);
+
+        Assert.Equal(640, frame.Width);
+        Assert.Equal(360, frame.Height);
+    }
+
+    [Fact]
     public void A_decoder_handles_a_mid_stream_resolution_change()
     {
         if (!Available) return;

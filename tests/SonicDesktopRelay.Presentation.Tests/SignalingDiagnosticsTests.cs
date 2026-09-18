@@ -179,6 +179,12 @@ public sealed class SignalingDiagnosticsTests
             remove { }
         }
 
+        public event Action<string>? NegotiationFailed
+        {
+            add { }
+            remove { }
+        }
+
         public Task StartAsync(CancellationToken ct) => Task.CompletedTask;
 
         public Task StopAsync() => Task.CompletedTask;

@@ -113,7 +113,27 @@ public readonly record struct EncodedVideoSample(
     TimeSpan Timestamp,
     bool IsKeyFrame,
     int Width,
-    int Height);
+    int Height,
+    TimeSpan Duration)
+{
+    private static readonly TimeSpan LegacyThirtyFpsDuration =
+        TimeSpan.FromTicks(TimeSpan.TicksPerSecond / 30);
+
+    /// <summary>
+    /// Compatibility constructor for receive/test paths that do not use sample duration.
+    /// Publisher encoders must use the six-argument constructor so RTC timing follows the
+    /// effective configured cadence instead of silently assuming 30 FPS.
+    /// </summary>
+    public EncodedVideoSample(
+        ReadOnlyMemory<byte> data,
+        TimeSpan timestamp,
+        bool isKeyFrame,
+        int width,
+        int height)
+        : this(data, timestamp, isKeyFrame, width, height, LegacyThirtyFpsDuration)
+    {
+    }
+}
 
 
 public enum KeyFrameRequestReason

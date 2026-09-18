@@ -72,7 +72,7 @@ internal sealed class H264RtpAccessUnitAssembler
                 null,
                 null,
                 0);
-            ResetFrame();
+            ResetFrame(advanceTransport: true);
         }
 
         if (_timestamp is null && _lastCompletedSequence is { } completedSequence)
@@ -113,7 +113,7 @@ internal sealed class H264RtpAccessUnitAssembler
                     packet.SequenceNumber,
                     packet.SequenceNumber,
                     0);
-                ResetFrame();
+                ResetFrame(advanceTransport: true);
                 return null;
             }
         }
@@ -135,7 +135,7 @@ internal sealed class H264RtpAccessUnitAssembler
                 null,
                 null,
                 missing);
-            ResetFrame();
+            ResetFrame(advanceTransport: true);
             return null;
         }
 
@@ -158,7 +158,7 @@ internal sealed class H264RtpAccessUnitAssembler
                     unchecked((ushort)(expected - 1)),
                     next,
                     1);
-                ResetFrame();
+                ResetFrame(advanceTransport: true);
                 return null;
             }
 
@@ -175,13 +175,13 @@ internal sealed class H264RtpAccessUnitAssembler
                 null,
                 null,
                 0);
-            ResetFrame();
+            ResetFrame(advanceTransport: true);
             return null;
         }
 
         if (!ValidateH264Payloads(ordered, timestamp))
         {
-            ResetFrame();
+            ResetFrame(advanceTransport: true);
             return null;
         }
 
@@ -201,8 +201,7 @@ internal sealed class H264RtpAccessUnitAssembler
                 accessUnit = result.ToArray();
         }
 
-        _lastCompletedSequence = ordered[^1].SequenceNumber;
-        ResetFrame();
+        ResetFrame(advanceTransport: true);
 
         if (accessUnit is null || accessUnit.Length == 0)
         {
@@ -372,8 +371,11 @@ internal sealed class H264RtpAccessUnitAssembler
             missingPackets));
     }
 
-    private void ResetFrame()
+    private void ResetFrame(bool advanceTransport)
     {
+        if (advanceTransport && _lastArrivalSequence is { } lastSequence)
+            _lastCompletedSequence = lastSequence;
+
         _packets.Clear();
         _timestamp = null;
         _lastArrivalSequence = null;

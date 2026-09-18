@@ -38,8 +38,16 @@ public sealed class SessionRuntime(
         remove => _signalingDiagnostics.Added -= value;
     }
 
-    public async Task StartSharingAsync(MonitorInfo monitor, int maxViewers, CancellationToken ct)
+    public Task StartSharingAsync(MonitorInfo monitor, int maxViewers, CancellationToken ct) =>
+        StartSharingAsync(monitor, VideoPublishProfile.Default, maxViewers, ct);
+
+    public async Task StartSharingAsync(
+        MonitorInfo monitor,
+        VideoPublishProfile profile,
+        int maxViewers,
+        CancellationToken ct)
     {
+        ArgumentNullException.ThrowIfNull(profile);
         RequireIdle();
         Publish(Snapshot with { Phase = SessionPhase.Preparing, Error = null });
         try
@@ -52,7 +60,7 @@ public sealed class SessionRuntime(
             {
                 try
                 {
-                    await publishHost.StartAsync(monitor, ct);
+                    await publishHost.StartAsync(monitor, profile, ct);
                 }
                 catch (Exception e) when (e is InvalidOperationException or PlatformNotSupportedException)
                 {
@@ -65,7 +73,7 @@ public sealed class SessionRuntime(
                 }
             }
 
-            var quality = VideoQuality.Default;
+            var quality = VideoQuality.InitialFor(profile);
             Publish(new SessionSnapshot(SessionPhase.Sharing, created.Code, created.SessionId, 0,
                 _connection!.State, null, publishHost?.EncoderName, quality.FramesPerSecond,
                 quality.ScaleFor(monitor.Width, monitor.Height).Height));

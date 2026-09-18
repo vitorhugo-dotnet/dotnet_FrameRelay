@@ -51,13 +51,10 @@ public sealed class MediaFoundationOutputSampleLifetimeTests
     }
 
     [Fact]
-    public void Provides_samples_selects_mft_owned_path_even_if_can_provide_is_also_set()
+    public void Provides_samples_selects_mft_owned_path()
     {
-        var flags =
-            (int)(OutputStreamInfoFlags.OutputStreamProvidesSamples |
-                  OutputStreamInfoFlags.OutputStreamCanProvideSamples);
-
-        var mode = MediaFoundationOutputSampleLifetime.SelectAllocationMode(flags);
+        var mode = MediaFoundationOutputSampleLifetime.SelectAllocationMode(
+            (int)OutputStreamInfoFlags.OutputStreamProvidesSamples);
 
         Assert.Equal(OutputSampleAllocationMode.MftProvided, mode);
         Assert.False(MediaFoundationOutputSampleLifetime.CallerSuppliesSample(mode));

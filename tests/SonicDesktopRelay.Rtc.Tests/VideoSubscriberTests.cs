@@ -49,7 +49,9 @@ public sealed class VideoSubscriberTests
 
         Assert.Contains(diagnostics, x => x.Event == "viewer.offer.received");
         Assert.Contains(diagnostics, x => x.Event == "viewer.answer.send.begin");
-        Assert.Contains(diagnostics, x => x.Event == "viewer.answer.send.ok");
+        var sentAnswer = Assert.Single(diagnostics, x => x.Event == "viewer.answer.send.ok");
+        Assert.Equal("stable", sentAnswer.SignalingState);
+        Assert.Equal("connected", sentAnswer.ConnectionState);
 
         var serialized = JsonSerializer.Serialize(diagnostics);
         Assert.DoesNotContain("offer-sdp", serialized, StringComparison.Ordinal);
@@ -416,16 +418,22 @@ public sealed class VideoSubscriberTests
 
         public event Action<EncodedAudioSample>? AudioSampleReceived;
 
-        public event Action<ViewerNegotiationDiagnosticEntry>? Diagnostic
-        {
-            add { }
-            remove { }
-        }
+        public event Action<ViewerNegotiationDiagnosticEntry>? Diagnostic;
 
         public Task<string> CreateAnswerAsync(string offerSdp, CancellationToken ct)
         {
             ReceivedOffer = offerSdp;
             if (answerFailure is not null) return Task.FromException<string>(answerFailure);
+
+            Diagnostic?.Invoke(new ViewerNegotiationDiagnosticEntry(
+                DateTimeOffset.UtcNow,
+                "viewer.local_description.ok",
+                "stable",
+                "complete",
+                "connected",
+                "connected",
+                SetDescriptionResult: "OK"));
+
             return Task.FromResult("answer-sdp");
         }
 

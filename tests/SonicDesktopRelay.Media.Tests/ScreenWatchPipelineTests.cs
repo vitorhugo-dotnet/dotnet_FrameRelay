@@ -46,7 +46,7 @@ public sealed class ScreenWatchPipelineTests
     }
 
     [Fact]
-    public void A_dropped_decode_after_receiving_asks_for_one_recovery_keyframe()
+    public void A_null_decode_after_receiving_does_not_imply_packet_loss()
     {
         var decoder = new FakeDecoder();
         using var pipeline = new ScreenWatchPipeline(decoder, new FakeTimeProvider(Start));
@@ -58,12 +58,12 @@ public sealed class ScreenWatchPipelineTests
         pipeline.Submit(Sample());
         pipeline.Submit(Sample());
 
-        Assert.Equal(1, requests);
+        Assert.Equal(0, requests);
         Assert.Equal(WatchState.Receiving, pipeline.State);
     }
 
     [Fact]
-    public void A_good_frame_rearms_decode_loss_recovery()
+    public void Good_and_null_decoder_results_do_not_generate_recovery_feedback()
     {
         var decoder = new FakeDecoder();
         using var pipeline = new ScreenWatchPipeline(decoder, new FakeTimeProvider(Start));
@@ -78,7 +78,7 @@ public sealed class ScreenWatchPipelineTests
         decoder.ReturnNull = true;
         pipeline.Submit(Sample());
 
-        Assert.Equal(2, requests);
+        Assert.Equal(0, requests);
     }
 
     [Fact]
@@ -235,7 +235,7 @@ public sealed class ScreenWatchPipelineTests
     }
 
     [Fact]
-    public void Diagnostics_count_null_decodes_and_recovery_keyframe_requests()
+    public void Diagnostics_count_null_decodes_without_false_recovery_keyframes()
     {
         var decoder = new FakeDecoder();
         using var pipeline = new ScreenWatchPipeline(decoder, new FakeTimeProvider(Start));
@@ -246,7 +246,7 @@ public sealed class ScreenWatchPipelineTests
         pipeline.Submit(Sample());
 
         Assert.Equal(2, pipeline.NullDecodeResults);
-        Assert.Equal(1, pipeline.KeyFrameRequests);
+        Assert.Equal(0, pipeline.KeyFrameRequests);
     }
 
     private static EncodedVideoSample Sample() =>

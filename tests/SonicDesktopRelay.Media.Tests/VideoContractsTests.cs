@@ -15,12 +15,32 @@ public sealed class VideoContractsTests
     }
 
     [Fact]
-    public void Reducing_quality_steps_down_height_and_bitrate()
+    public void Reducing_quality_spends_bitrate_before_desktop_resolution()
     {
         var reduced = VideoQuality.Default.Reduced();
 
-        Assert.Equal(720, reduced.MaxHeight);
-        Assert.True(reduced.TargetBitsPerSecond < VideoQuality.Default.TargetBitsPerSecond);
+        Assert.Equal(1080, reduced.MaxHeight);
+        Assert.Equal(3_000_000, reduced.TargetBitsPerSecond);
+    }
+
+    [Fact]
+    public void Resolution_reduces_only_after_lower_1080p_bitrate_rungs_are_exhausted()
+    {
+        var quality = VideoQuality.Default.Reduced().Reduced().Reduced();
+
+        Assert.Equal(720, quality.MaxHeight);
+        Assert.Equal(2_000_000, quality.TargetBitsPerSecond);
+    }
+
+    [Fact]
+    public void Improving_quality_walks_back_toward_default_one_step_at_a_time()
+    {
+        var degraded = VideoQuality.Default.Reduced().Reduced();
+
+        var improved = degraded.Improved();
+
+        Assert.Equal(1080, improved.MaxHeight);
+        Assert.Equal(3_000_000, improved.TargetBitsPerSecond);
     }
 
     [Fact]

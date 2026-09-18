@@ -9,10 +9,15 @@ public readonly record struct MonitorInfo(string Id, string Name, int Width, int
 /// </summary>
 public sealed record VideoQuality(int MaxHeight, int FramesPerSecond, int TargetBitsPerSecond)
 {
+    // Desktop sharing is resolution-sensitive. Spend bitrate before pixels: transient or
+    // moderate congestion should keep text at native 1080p whenever the encoder can do so.
     private static readonly VideoQuality[] Ladder =
     [
         new(1080, 30, 4_000_000),
+        new(1080, 30, 3_000_000),
+        new(1080, 30, 2_000_000),
         new(720, 30, 2_000_000),
+        new(720, 30, 1_500_000),
         new(540, 20, 1_000_000),
         new(360, 15, 600_000)
     ];
@@ -25,9 +30,17 @@ public sealed record VideoQuality(int MaxHeight, int FramesPerSecond, int Target
     /// </summary>
     public VideoQuality Reduced()
     {
-        var index = Array.FindIndex(Ladder, x => x.MaxHeight == MaxHeight);
+        var index = Array.FindIndex(Ladder, x => x == this);
         if (index < 0) return Ladder[^1];
         return index >= Ladder.Length - 1 ? Ladder[^1] : Ladder[index + 1];
+    }
+
+    /// <summary>The next rung toward the configured/default desktop quality, or the ceiling.</summary>
+    public VideoQuality Improved()
+    {
+        var index = Array.FindIndex(Ladder, x => x == this);
+        if (index <= 0) return Ladder[0];
+        return Ladder[index - 1];
     }
 
     /// <summary>
@@ -62,3 +75,14 @@ public readonly record struct EncodedVideoSample(
     bool IsKeyFrame,
     int Width,
     int Height);
+
+
+public enum KeyFrameRequestReason
+{
+    Manual,
+    InitialConnection,
+    RtcpPli,
+    RtcpFir,
+    PacketLoss,
+    QualityChange
+}

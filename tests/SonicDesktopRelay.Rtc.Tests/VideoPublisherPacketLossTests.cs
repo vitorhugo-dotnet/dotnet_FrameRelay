@@ -61,7 +61,7 @@ public sealed class VideoPublisherPacketLossTests
         public Guid ParticipantId { get; } = participantId;
 
         public event Action<string, string?, int?>? IceCandidateGathered { add { } remove { } }
-        public event Action? KeyFrameRequested { add { } remove { } }
+        public event Action<KeyFrameRequestReason>? KeyFrameRequested { add { } remove { } }
         public event Action<double>? PacketLossReported;
 
         public Task<string> CreateOfferAsync(CancellationToken ct) => Task.FromResult("offer");

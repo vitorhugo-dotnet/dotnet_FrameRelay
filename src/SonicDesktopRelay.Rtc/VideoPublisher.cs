@@ -16,12 +16,6 @@ public sealed class VideoPublisher(
     ISignalingConnection signaling,
     AudioPublishPipeline? audioPipeline = null) : IAsyncDisposable
 {
-    /// <summary>
-    /// Below this, loss is ordinary internet weather and reacting to it would make the picture
-    /// worse for everyone over nothing.
-    /// </summary>
-    private const double PoorReceptionLossRatio = 0.05;
-
     private readonly ConcurrentDictionary<Guid, IPeerConnection> _peers = new();
     private bool _subscribed;
 
@@ -44,12 +38,13 @@ public sealed class VideoPublisher(
         peer.KeyFrameRequested += pipeline.RequestKeyFrame;
         peer.PacketLossReported += loss =>
         {
-            if (loss <= 0) return;
+            // Recovery and congestion are different signals. Any actual loss can justify one
+            // coalesced clean point; every RTCP sample, including zero loss, feeds the separate
+            // hysteretic quality policy so degraded sessions can recover later.
+            if (loss > 0)
+                pipeline.RequestKeyFrame(KeyFrameRequestReason.PacketLoss);
 
-            // Any reported loss can break an inter-frame decode chain, so recover immediately.
-            // Only sustained/high loss is allowed to reduce the global stream quality.
-            if (loss >= PoorReceptionLossRatio) pipeline.ReportPoorReception();
-            else pipeline.RequestKeyFrame();
+            pipeline.ReportReception(participantId, loss);
         };
 
         EnsureSubscribed();
@@ -68,6 +63,7 @@ public sealed class VideoPublisher(
 
     public async Task RemoveViewerAsync(Guid participantId)
     {
+        pipeline.RemoveReceptionSource(participantId);
         if (!_peers.TryRemove(participantId, out var peer)) return;
         await peer.DisposeAsync();
     }

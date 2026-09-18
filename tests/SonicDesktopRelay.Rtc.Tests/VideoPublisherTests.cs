@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Time.Testing;
 using SonicDesktopRelay.Media;
 using SonicDesktopRelay.Rtc;
 using SonicDesktopRelay.Signaling;
@@ -133,7 +134,7 @@ public sealed class VideoPublisherTests
     }
 
     [Fact]
-    public async Task Sustained_loss_on_one_viewer_degrades_quality_for_the_session()
+    public async Task One_poor_report_from_one_viewer_does_not_degrade_shared_quality()
     {
         var harness = await Harness.StartedAsync();
         await harness.Publisher.AddViewerAsync(ViewerA, CancellationToken.None);
@@ -141,7 +142,30 @@ public sealed class VideoPublisherTests
 
         harness.Peers.Created[0].ReportPacketLoss(0.15);
 
-        Assert.Equal(720, harness.Pipeline.Quality.MaxHeight);
+        Assert.Equal(VideoQuality.Default, harness.Pipeline.Quality);
+    }
+
+    [Fact]
+    public async Task Persistent_loss_from_one_viewer_is_not_erased_by_another_viewers_stable_reports()
+    {
+        var time = new FakeTimeProvider(DateTimeOffset.UnixEpoch);
+        var harness = await Harness.StartedAsync(time);
+        await harness.Publisher.AddViewerAsync(ViewerA, CancellationToken.None);
+        await harness.Publisher.AddViewerAsync(ViewerB, CancellationToken.None);
+        var poorViewer = harness.Peers.Created[0];
+        var stableViewer = harness.Peers.Created[1];
+
+        poorViewer.ReportPacketLoss(0.10);
+        stableViewer.ReportPacketLoss(0);
+        time.Advance(TimeSpan.FromSeconds(2.5));
+        poorViewer.ReportPacketLoss(0.10);
+        stableViewer.ReportPacketLoss(0);
+        time.Advance(TimeSpan.FromSeconds(2.5));
+        poorViewer.ReportPacketLoss(0.10);
+        stableViewer.ReportPacketLoss(0);
+
+        Assert.Equal(1080, harness.Pipeline.Quality.MaxHeight);
+        Assert.Equal(3_000_000, harness.Pipeline.Quality.TargetBitsPerSecond);
     }
 
     [Fact]
@@ -182,17 +206,18 @@ public sealed class VideoPublisherTests
         public required FakeSignaling Signaling { get; init; }
         public required VideoPublisher Publisher { get; init; }
 
-        public static async Task<Harness> StartedAsync()
+        public static async Task<Harness> StartedAsync(TimeProvider? time = null)
         {
+            var effectiveTime = time ?? TimeProvider.System;
             var capture = new FakeCapture();
             var encoder = new FakeEncoder();
-            var pipeline = new ScreenPublishPipeline(capture, encoder);
+            var pipeline = new ScreenPublishPipeline(capture, encoder, time: effectiveTime);
             var audioCapture = new FakeAudioCapture();
             var audioEncoder = new FakeAudioEncoder();
             var audioPipeline = new AudioPublishPipeline(
                 audioCapture,
                 audioEncoder,
-                new MediaSessionClock(TimeProvider.System));
+                new MediaSessionClock(effectiveTime));
             var peers = new FakePeerFactory();
             var signaling = new FakeSignaling();
             var publisher = new VideoPublisher(pipeline, peers, signaling, audioPipeline);
@@ -301,7 +326,7 @@ public sealed class VideoPublisherTests
         public bool Disposed { get; private set; }
 
         public event Action<string, string?, int?>? IceCandidateGathered;
-        public event Action? KeyFrameRequested;
+        public event Action<KeyFrameRequestReason>? KeyFrameRequested;
         public event Action<double>? PacketLossReported;
 
         public Task<string> CreateOfferAsync(CancellationToken ct) => Task.FromResult("offer-sdp");
@@ -325,7 +350,7 @@ public sealed class VideoPublisherTests
         public void GatherCandidate(string candidate, string? mid, int? index) =>
             IceCandidateGathered?.Invoke(candidate, mid, index);
 
-        public void RequestKeyFrame() => KeyFrameRequested?.Invoke();
+        public void RequestKeyFrame() => KeyFrameRequested?.Invoke(KeyFrameRequestReason.RtcpPli);
 
         public void ReportPacketLoss(double loss) => PacketLossReported?.Invoke(loss);
 

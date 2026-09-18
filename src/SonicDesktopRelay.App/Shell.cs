@@ -198,9 +198,20 @@ public sealed class Shell : INotifyPropertyChanged
         var rejected = host.DecoderRejections.Count == 0
             ? "no rejected MFTs"
             : $"rejected MFTs: {string.Join("; ", host.DecoderRejections)}";
+        var lastFrame = host.LastDecodedFrameAt is { } decodedAt
+            ? decodedAt.ToString("HH:mm:ss.fff")
+            : "never";
+        var frameAge = host.LastDecodedFrameAge is { } age
+            ? $"{Math.Max(0, age.TotalSeconds):F1}s"
+            : "n/a";
+        var decoderFailure = string.IsNullOrWhiteSpace(host.VideoDecoderFailure)
+            ? "none"
+            : host.VideoDecoderFailure;
 
         return $"Video: Media Foundation H.264 [{transform}] | Audio: {audio} | " +
-               $"watch={snapshot.Watching?.ToString() ?? "not watching"} | {rejected}";
+               $"watch={snapshot.Watching?.ToString() ?? "not watching"} | " +
+               $"videoAccessUnits={host.VideoAccessUnitsReceived} decodedFrames={host.DecodedFrames} " +
+               $"lastFrame={lastFrame} age={frameAge} decoderFailure={decoderFailure} | {rejected}";
     }
 
     /// <summary>Refreshes <see cref="Monitors"/> from the OS and keeps a sensible selection.</summary>
@@ -257,6 +268,7 @@ public sealed class Shell : INotifyPropertyChanged
             _composition.Runtime.Changed += OnSnapshot;
             _composition.Runtime.SignalingDiagnosticAdded += OnSignalingDiagnostic;
             _composition.WatchHost.WebRtcDiagnosticAdded += OnWebRtcDiagnostic;
+            _composition.WatchHost.VideoDiagnosticsChanged += OnVideoDiagnosticsChanged;
             _composition.WatchHost.FrameDecoded += PublishFrame;
             ViewModel.Apply(_composition.Runtime.Snapshot);
         }
@@ -329,6 +341,9 @@ public sealed class Shell : INotifyPropertyChanged
         if (SignalingDiagnostics.Count > SignalingDiagnosticBuffer.DefaultCapacity)
             SignalingDiagnostics.RemoveAt(SignalingDiagnostics.Count - 1);
     });
+
+    private void OnVideoDiagnosticsChanged() =>
+        Dispatcher.UIThread.Post(() => Raise(nameof(MediaStatusText)));
 
     private void OnWebRtcDiagnostic(ViewerNegotiationDiagnosticEntry entry)
     {

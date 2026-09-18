@@ -25,6 +25,8 @@ public sealed class ScreenWatchPipeline(IVideoDecoder decoder, TimeProvider time
     private static readonly TimeSpan StallAfter = TimeSpan.FromSeconds(4);
 
     private DateTimeOffset? _lastFrameAt;
+    private long _videoAccessUnitsReceived;
+    private long _decodedFrames;
     private bool _decodeRecoveryAsked;
     private bool _stallKeyFrameAsked;
     private WatchState _state = WatchState.Waiting;
@@ -39,8 +41,15 @@ public sealed class ScreenWatchPipeline(IVideoDecoder decoder, TimeProvider time
 
     public string DecoderName => decoder.Name;
 
+    public long VideoAccessUnitsReceived => Interlocked.Read(ref _videoAccessUnitsReceived);
+
+    public long DecodedFrames => Interlocked.Read(ref _decodedFrames);
+
+    public DateTimeOffset? LastDecodedFrameAt => _lastFrameAt;
+
     public void Submit(EncodedVideoSample sample)
     {
+        Interlocked.Increment(ref _videoAccessUnitsReceived);
         if (_state == WatchState.Failed) return;
 
         VideoFrame? frame;
@@ -69,6 +78,7 @@ public sealed class ScreenWatchPipeline(IVideoDecoder decoder, TimeProvider time
         }
 
         _lastFrameAt = time.GetUtcNow();
+        Interlocked.Increment(ref _decodedFrames);
         _decodeRecoveryAsked = false;
         _stallKeyFrameAsked = false;
         SetState(WatchState.Receiving);

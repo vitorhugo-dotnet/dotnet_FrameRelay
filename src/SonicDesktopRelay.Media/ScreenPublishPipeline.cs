@@ -278,6 +278,9 @@ public sealed class ScreenPublishPipeline(
         var oldResolution = ResolutionFor(oldQuality);
         var newResolution = ResolutionFor(newQuality);
 
+        if (oldQuality.FramesPerSecond != newQuality.FramesPerSecond)
+            capture.SetFrameRate(newQuality.FramesPerSecond);
+
         _logger.LogWarning(
             "{QualityEvent} reason={Reason} receptionSource={ReceptionSource} reportedLoss={ReportedLoss:F4} " +
             "oldResolution={OldResolution} newResolution={NewResolution} " +

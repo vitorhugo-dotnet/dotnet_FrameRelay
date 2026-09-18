@@ -71,7 +71,7 @@ public sealed class FrameRelayLogging : IDisposable
                     "{Message:lj} {Properties:j}{NewLine}{Exception}")
             .CreateLogger();
 
-        var factory = LoggerFactory.Create(builder =>
+        var factory = Microsoft.Extensions.Logging.LoggerFactory.Create(builder =>
         {
             builder.SetMinimumLevel(LogLevel.Trace);
             builder.AddSerilog(serilog, dispose: false);

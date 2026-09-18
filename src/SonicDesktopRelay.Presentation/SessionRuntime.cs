@@ -16,10 +16,15 @@ public sealed class SessionRuntime(
     IVideoWatchHost? watchHost = null,
     SignalingDiagnosticBuffer? signalingDiagnostics = null)
 {
+    private const int PendingViewerSignalingCapacity = 128;
+
     private readonly SignalingDiagnosticBuffer _signalingDiagnostics = signalingDiagnostics ?? new();
+    private readonly object _pendingViewerSignalingGate = new();
+    private readonly Queue<SignalingEnvelope> _pendingViewerSignaling = new();
     private ISignalingConnection? _connection;
     private bool _isOwner;
     private bool _watchHooked;
+    private bool _watchReady;
 
     public SessionSnapshot Snapshot { get; private set; } = SessionSnapshot.Idle;
 
@@ -86,24 +91,27 @@ public sealed class SessionRuntime(
                 if (!_watchHooked)
                 {
                     watchHost.WatchStateChanged += OnWatchState;
+                    watchHost.NegotiationFailed += OnWatchNegotiationFailed;
                     _watchHooked = true;
                 }
 
                 try
                 {
                     await watchHost.StartAsync(ct);
+                    await MarkWatchHostReadyAsync(ct);
                 }
                 catch (Exception e) when (e is InvalidOperationException or PlatformNotSupportedException)
                 {
                     // Same reasoning as the publishing side: the socket is up but nothing can
                     // be rendered over it, and leaving the runtime in Joining would wedge it.
+                    ClearPendingViewerSignaling();
                     await watchHost.StopAsync();
                     await FailAsync("media_unavailable");
                     return;
                 }
             }
 
-            Publish(new SessionSnapshot(SessionPhase.Watching, null, sessionId, 0, _connection!.State, null,
+            Publish(new SessionSnapshot(SessionPhase.Watching, null, sessionId, 0, _connection!.State, Snapshot.Error,
                 Watching: watchHost is null ? null : WatchState.Waiting,
                 DecoderName: watchHost?.DecoderName));
         }
@@ -121,7 +129,11 @@ public sealed class SessionRuntime(
         // Capture stops before the session ends: the last thing a viewer should see is the
         // screen going away, not frames arriving for a session the server has already closed.
         if (publishHost is not null) await publishHost.StopAsync();
-        if (watchHost is not null) await watchHost.StopAsync();
+        if (watchHost is not null)
+        {
+            ClearPendingViewerSignaling();
+            await watchHost.StopAsync();
+        }
 
         // Only the publishing device may end a session for everyone; a viewer leaving simply
         // drops its own connection, and calling end as a viewer would be a 403 at best.
@@ -164,6 +176,7 @@ public sealed class SessionRuntime(
         await _connection.DisposeAsync();
         _connection = null;
         _isOwner = false;
+        ClearPendingViewerSignaling();
     }
 
     private void OnFrame(SignalingEnvelope envelope)
@@ -192,6 +205,12 @@ public sealed class SessionRuntime(
             case SignalingMessageTypes.WebRtcIceCandidate when watching:
                 if (watchHost is not null)
                     _ = watchHost.HandleSignalingAsync(envelope, CancellationToken.None);
+                break;
+
+            case SignalingMessageTypes.PublisherReady when phase == SessionPhase.Joining:
+            case SignalingMessageTypes.WebRtcOffer when phase == SessionPhase.Joining:
+            case SignalingMessageTypes.WebRtcIceCandidate when phase == SessionPhase.Joining:
+                BufferViewerSignaling(envelope);
                 break;
 
             case SignalingMessageTypes.SessionJoined when sharing:
@@ -239,9 +258,9 @@ public sealed class SessionRuntime(
 
         return type switch
         {
-            SignalingMessageTypes.PublisherReady when watching => watchHost is not null,
-            SignalingMessageTypes.WebRtcOffer when watching => watchHost is not null,
-            SignalingMessageTypes.WebRtcIceCandidate when watching => watchHost is not null,
+            SignalingMessageTypes.PublisherReady when watching || phase == SessionPhase.Joining => watchHost is not null,
+            SignalingMessageTypes.WebRtcOffer when watching || phase == SessionPhase.Joining => watchHost is not null,
+            SignalingMessageTypes.WebRtcIceCandidate when watching || phase == SessionPhase.Joining => watchHost is not null,
             SignalingMessageTypes.SessionJoined when sharing => true,
             SignalingMessageTypes.ParticipantReconnected when sharing => true,
             SignalingMessageTypes.SessionLeft when sharing => true,
@@ -251,6 +270,56 @@ public sealed class SessionRuntime(
             SignalingMessageTypes.SessionEnded => true,
             _ => false
         };
+    }
+
+    private void BufferViewerSignaling(SignalingEnvelope envelope)
+    {
+        if (watchHost is null) return;
+
+        lock (_pendingViewerSignalingGate)
+        {
+            if (_watchReady)
+            {
+                _ = watchHost.HandleSignalingAsync(envelope, CancellationToken.None);
+                return;
+            }
+
+            if (_pendingViewerSignaling.Count == PendingViewerSignalingCapacity)
+                _pendingViewerSignaling.Dequeue();
+
+            _pendingViewerSignaling.Enqueue(envelope);
+        }
+    }
+
+    private async Task MarkWatchHostReadyAsync(CancellationToken ct)
+    {
+        if (watchHost is null) return;
+
+        while (true)
+        {
+            SignalingEnvelope? next;
+            lock (_pendingViewerSignalingGate)
+            {
+                if (_pendingViewerSignaling.Count == 0)
+                {
+                    _watchReady = true;
+                    return;
+                }
+
+                next = _pendingViewerSignaling.Dequeue();
+            }
+
+            await watchHost.HandleSignalingAsync(next, ct);
+        }
+    }
+
+    private void ClearPendingViewerSignaling()
+    {
+        lock (_pendingViewerSignalingGate)
+        {
+            _watchReady = false;
+            _pendingViewerSignaling.Clear();
+        }
     }
 
     private void AddViewer(SignalingEnvelope envelope)
@@ -287,6 +356,12 @@ public sealed class SessionRuntime(
     {
         if (Snapshot.Phase != SessionPhase.Watching) return;
         Publish(Snapshot with { Watching = state });
+    }
+
+    private void OnWatchNegotiationFailed(string failure)
+    {
+        if (Snapshot.Phase is not (SessionPhase.Joining or SessionPhase.Watching)) return;
+        Publish(Snapshot with { Error = failure });
     }
 
     private async Task FailAsync(string code)

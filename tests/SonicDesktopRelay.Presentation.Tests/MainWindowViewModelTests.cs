@@ -98,6 +98,18 @@ public sealed class MainWindowViewModelTests
         Assert.Equal("Sharing — 2 watching", viewModel.StatusText);
     }
 
+    [Fact]
+    public void A_viewer_negotiation_failure_replaces_the_generic_waiting_message()
+    {
+        var viewModel = new MainWindowViewModel();
+        const string failure = "WebRTC negotiation failed at setRemoteDescription: VideoIncompatible";
+
+        viewModel.Apply(new SessionSnapshot(SessionPhase.Watching, null, Guid.NewGuid(), 0,
+            SignalingState.Connected, failure, Watching: WatchState.Waiting));
+
+        Assert.Equal(failure, viewModel.StatusText);
+    }
+
     [Theory]
     [InlineData(WatchState.Waiting, "Connected — waiting for the first frame")]
     [InlineData(WatchState.Receiving, "Watching")]

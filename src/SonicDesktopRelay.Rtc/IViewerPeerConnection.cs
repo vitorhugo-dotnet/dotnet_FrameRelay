@@ -24,6 +24,9 @@ public interface IViewerPeerConnection : IAsyncDisposable
     /// </summary>
     event Action<EncodedAudioSample>? AudioSampleReceived;
 
+    /// <summary>Metadata-only WebRTC negotiation and peer-state diagnostics.</summary>
+    event Action<ViewerNegotiationDiagnosticEntry>? Diagnostic;
+
     /// <summary>Applies the publisher's offer and produces the answer SDP.</summary>
     Task<string> CreateAnswerAsync(string offerSdp, CancellationToken ct);
 

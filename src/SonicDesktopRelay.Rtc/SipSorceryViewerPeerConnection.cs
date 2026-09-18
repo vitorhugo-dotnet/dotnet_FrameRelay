@@ -51,8 +51,16 @@ public sealed class SipSorceryViewerPeerConnection : IViewerPeerConnection
         _connection.onicecandidate += candidate =>
         {
             if (candidate is null) return;
+            EmitDiagnostic("viewer.ice_candidate.gathered");
             IceCandidateGathered?.Invoke(candidate.candidate, candidate.sdpMid, candidate.sdpMLineIndex);
         };
+
+        _connection.onsignalingstatechange += () =>
+            EmitDiagnostic("viewer.signaling_state.changed");
+        _connection.onicegatheringstatechange += _ =>
+            EmitDiagnostic("viewer.ice_gathering_state.changed");
+        _connection.oniceconnectionstatechange += _ =>
+            EmitDiagnostic("viewer.ice_connection_state.changed");
 
         _connection.OnAudioFrameReceived += frame =>
         {
@@ -77,6 +85,8 @@ public sealed class SipSorceryViewerPeerConnection : IViewerPeerConnection
 
         _connection.onconnectionstatechange += state =>
         {
+            EmitDiagnostic("viewer.connection_state.changed");
+
             // The publisher emits keyframes on demand only, so a viewer that has just
             // connected holds no reference frame at all until it asks for one.
             if (state == RTCPeerConnectionState.connected) RequestKeyFrame();
@@ -89,8 +99,12 @@ public sealed class SipSorceryViewerPeerConnection : IViewerPeerConnection
 
     public event Action<EncodedAudioSample>? AudioSampleReceived;
 
+    public event Action<ViewerNegotiationDiagnosticEntry>? Diagnostic;
+
     public async Task<string> CreateAnswerAsync(string offerSdp, CancellationToken ct)
     {
+        EmitDiagnostic("viewer.remote_description.begin");
+
         SetDescriptionResultEnum result;
         try
         {
@@ -99,14 +113,65 @@ public sealed class SipSorceryViewerPeerConnection : IViewerPeerConnection
         }
         catch (Exception e)
         {
-            throw new InvalidOperationException("The publisher's offer could not be parsed.", e);
+            const string reason = "The publisher's offer could not be parsed.";
+            EmitDiagnostic(
+                "viewer.remote_description.failed",
+                exceptionType: e.GetType().Name,
+                message: reason);
+            throw new ViewerNegotiationException("setRemoteDescription", reason, e);
         }
 
         if (result != SetDescriptionResultEnum.OK)
-            throw new InvalidOperationException($"The publisher's offer was rejected: {result}.");
+        {
+            var reason = $"The publisher's offer was rejected: {result}.";
+            EmitDiagnostic(
+                "viewer.remote_description.failed",
+                setDescriptionResult: result.ToString(),
+                message: reason);
+            throw new ViewerNegotiationException("setRemoteDescription", reason);
+        }
 
-        var answer = _connection.createAnswer(null);
-        await _connection.setLocalDescription(answer).WaitAsync(ct);
+        EmitDiagnostic(
+            "viewer.remote_description.ok",
+            setDescriptionResult: result.ToString());
+
+        RTCSessionDescriptionInit answer;
+        EmitDiagnostic("viewer.answer.create.begin");
+        try
+        {
+            answer = _connection.createAnswer(null);
+            EmitDiagnostic("viewer.answer.create.ok");
+        }
+        catch (Exception e)
+        {
+            var reason = $"SIPSorcery could not create the viewer answer: {e.Message}";
+            EmitDiagnostic(
+                "viewer.answer.create.failed",
+                exceptionType: e.GetType().Name,
+                message: reason);
+            throw new ViewerNegotiationException("createAnswer", reason, e);
+        }
+
+        EmitDiagnostic("viewer.local_description.begin");
+        try
+        {
+            await _connection.setLocalDescription(answer).WaitAsync(ct);
+            EmitDiagnostic("viewer.local_description.ok");
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception e)
+        {
+            var reason = $"SIPSorcery could not set the viewer local answer: {e.Message}";
+            EmitDiagnostic(
+                "viewer.local_description.failed",
+                exceptionType: e.GetType().Name,
+                message: reason);
+            throw new ViewerNegotiationException("setLocalDescription", reason, e);
+        }
+
         return answer.sdp;
     }
 
@@ -119,6 +184,24 @@ public sealed class SipSorceryViewerPeerConnection : IViewerPeerConnection
             sdpMLineIndex = (ushort)(sdpMLineIndex ?? 0)
         });
         return Task.CompletedTask;
+    }
+
+    private void EmitDiagnostic(
+        string eventName,
+        string? setDescriptionResult = null,
+        string? exceptionType = null,
+        string? message = null)
+    {
+        Diagnostic?.Invoke(new ViewerNegotiationDiagnosticEntry(
+            DateTimeOffset.UtcNow,
+            eventName,
+            _connection.signalingState.ToString(),
+            _connection.iceGatheringState.ToString(),
+            _connection.iceConnectionState.ToString(),
+            _connection.connectionState.ToString(),
+            setDescriptionResult,
+            exceptionType,
+            message));
     }
 
     public void RequestKeyFrame()

@@ -4,7 +4,7 @@
              x:Class="SonicDesktopRelay.App.Views.DiagnosticsView"
              x:DataType="app:Shell">
     <Grid Margin="{StaticResource PagePadding}"
-          RowDefinitions="Auto,Auto,Auto,*,Auto,*">
+          RowDefinitions="Auto,Auto,Auto,*,Auto,*,Auto,*">
         <TextBlock Grid.Row="0"
                    Text="Diagnostics"
                    Margin="0,0,0,16"
@@ -70,6 +70,37 @@
                 CornerRadius="{StaticResource ControlCornerRadius}">
             <ScrollViewer>
                 <ItemsControl ItemsSource="{Binding SignalingDiagnostics}" Margin="{StaticResource RailPadding}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="x:String">
+                            <SelectableTextBlock Text="{Binding}"
+                                                 FontFamily="Consolas, monospace"
+                                                 FontSize="{StaticResource FontSizeSm}"
+                                                 Foreground="{StaticResource TextSecondaryBrush}" />
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </ScrollViewer>
+        </Border>
+
+        <StackPanel Grid.Row="6" Margin="0,16,0,8">
+            <TextBlock Text="Viewer WebRTC"
+                       FontSize="{StaticResource FontSizeSm}"
+                       FontWeight="SemiBold"
+                       Foreground="{StaticResource TextPrimaryBrush}" />
+            <TextBlock Text="Offer/answer stages and peer-state transitions. Metadata only; SDP, ICE candidate contents and credentials are never stored."
+                       Margin="0,4,0,0"
+                       TextWrapping="Wrap"
+                       FontSize="{StaticResource FontSizeSm}"
+                       Foreground="{StaticResource TextSecondaryBrush}" />
+        </StackPanel>
+
+        <Border Grid.Row="7"
+                Background="{StaticResource SurfaceRaisedBrush}"
+                BorderBrush="{StaticResource BorderBrush}"
+                BorderThickness="1"
+                CornerRadius="{StaticResource ControlCornerRadius}">
+            <ScrollViewer>
+                <ItemsControl ItemsSource="{Binding WebRtcDiagnostics}" Margin="{StaticResource RailPadding}">
                     <ItemsControl.ItemTemplate>
                         <DataTemplate x:DataType="x:String">
                             <SelectableTextBlock Text="{Binding}"

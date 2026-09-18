@@ -7,6 +7,7 @@ using SonicDesktopRelay.Core;
 using SonicDesktopRelay.Media;
 using SonicDesktopRelay.Media.Windows;
 using SonicDesktopRelay.Presentation;
+using SonicDesktopRelay.Rtc;
 
 namespace SonicDesktopRelay.App;
 
@@ -51,6 +52,9 @@ public sealed class Shell : INotifyPropertyChanged
 
     /// <summary>The Diagnostics page's bounded signaling metadata history.</summary>
     public ObservableCollection<string> SignalingDiagnostics { get; } = [];
+
+    /// <summary>The Diagnostics page's metadata-only viewer WebRTC negotiation history.</summary>
+    public ObservableCollection<string> WebRtcDiagnostics { get; } = [];
 
     public string BackendAddress
     {
@@ -252,6 +256,7 @@ public sealed class Shell : INotifyPropertyChanged
             _composition = new AppComposition(settings, _deviceName);
             _composition.Runtime.Changed += OnSnapshot;
             _composition.Runtime.SignalingDiagnosticAdded += OnSignalingDiagnostic;
+            _composition.WatchHost.WebRtcDiagnosticAdded += OnWebRtcDiagnostic;
             _composition.WatchHost.FrameDecoded += PublishFrame;
             ViewModel.Apply(_composition.Runtime.Snapshot);
         }
@@ -324,6 +329,30 @@ public sealed class Shell : INotifyPropertyChanged
         if (SignalingDiagnostics.Count > SignalingDiagnosticBuffer.DefaultCapacity)
             SignalingDiagnostics.RemoveAt(SignalingDiagnostics.Count - 1);
     });
+
+    private void OnWebRtcDiagnostic(ViewerNegotiationDiagnosticEntry entry)
+    {
+        // Capture phase before crossing to the dispatcher: the session snapshot may advance
+        // before the posted UI action runs.
+        var phase = _composition?.Runtime.Snapshot.Phase ?? ViewModel.Snapshot.Phase;
+
+        Dispatcher.UIThread.Post(() =>
+        {
+            var result = entry.SetDescriptionResult is null ? "" : $" result={entry.SetDescriptionResult}";
+            var error = entry.ExceptionType is null ? "" : $" exception={entry.ExceptionType}";
+            var message = entry.Message is null ? "" : $" message={entry.Message}";
+
+            WebRtcDiagnostics.Insert(0,
+                $"{entry.Timestamp:HH:mm:ss.fff} {entry.Event} phase={phase} " +
+                $"signaling={entry.SignalingState} iceGathering={entry.IceGatheringState} " +
+                $"iceConnection={entry.IceConnectionState} connection={entry.ConnectionState} " +
+                $"from={entry.From?.ToString() ?? "-"} to={entry.To?.ToString() ?? "-"}" +
+                $"{result}{error}{message}");
+
+            if (WebRtcDiagnostics.Count > SignalingDiagnosticBuffer.DefaultCapacity)
+                WebRtcDiagnostics.RemoveAt(WebRtcDiagnostics.Count - 1);
+        });
+    }
 
     private void Raise([CallerMemberName] string? property = null) =>
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(property));

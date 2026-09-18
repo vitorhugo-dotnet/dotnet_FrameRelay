@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.Extensions.Time.Testing;
 using SonicDesktopRelay.Media;
 using SonicDesktopRelay.Signaling;
@@ -35,6 +36,27 @@ public sealed class VideoSubscriberTests
             CancellationToken.None);
 
         Assert.Equal(Publisher, harness.Subscriber.PublisherId);
+    }
+
+    [Fact]
+    public async Task A_successful_offer_emits_metadata_only_offer_and_answer_send_diagnostics()
+    {
+        var harness = new Harness();
+        var diagnostics = new List<ViewerNegotiationDiagnosticEntry>();
+        harness.Subscriber.Diagnostic += diagnostics.Add;
+
+        await harness.OfferAsync();
+
+        Assert.Contains(diagnostics, x => x.Event == "viewer.offer.received");
+        Assert.Contains(diagnostics, x => x.Event == "viewer.answer.send.begin");
+        var sentAnswer = Assert.Single(diagnostics, x => x.Event == "viewer.answer.send.ok");
+        Assert.Equal("stable", sentAnswer.SignalingState);
+        Assert.Equal("connected", sentAnswer.ConnectionState);
+
+        var serialized = JsonSerializer.Serialize(diagnostics);
+        Assert.DoesNotContain("offer-sdp", serialized, StringComparison.Ordinal);
+        Assert.DoesNotContain("answer-sdp", serialized, StringComparison.Ordinal);
+        Assert.DoesNotContain("candidate:", serialized, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -84,18 +106,117 @@ public sealed class VideoSubscriberTests
     }
 
     [Fact]
+    public async Task Ice_candidates_received_before_the_offer_are_buffered_and_applied_in_order()
+    {
+        var harness = new Harness();
+
+        await harness.Subscriber.HandleAsync(
+            Frame(SignalingMessageTypes.WebRtcIceCandidate, Publisher,
+                """{"candidate":"candidate:early-1","sdpMid":"0","sdpMLineIndex":0}"""),
+            CancellationToken.None);
+        await harness.Subscriber.HandleAsync(
+            Frame(SignalingMessageTypes.WebRtcIceCandidate, Publisher,
+                """{"candidate":"candidate:early-2","sdpMid":"0","sdpMLineIndex":0}"""),
+            CancellationToken.None);
+
+        await harness.OfferAsync();
+
+        Assert.Equal(
+            ["candidate:early-1", "candidate:early-2"],
+            harness.Peers.Created!.RemoteCandidates);
+    }
+
+    [Fact]
+    public async Task Early_ice_buffer_is_bounded_per_participant()
+    {
+        var harness = new Harness();
+
+        for (var i = 0; i < 65; i++)
+        {
+            await harness.Subscriber.HandleAsync(
+                Frame(SignalingMessageTypes.WebRtcIceCandidate, Publisher,
+                    JsonSerializer.Serialize(new
+                    {
+                        candidate = $"candidate:{i}",
+                        sdpMid = "0",
+                        sdpMLineIndex = 0
+                    })),
+                CancellationToken.None);
+        }
+
+        await harness.OfferAsync();
+
+        Assert.Equal(64, harness.Peers.Created!.RemoteCandidates.Count);
+        Assert.Equal("candidate:0", harness.Peers.Created.RemoteCandidates[0]);
+        Assert.Equal("candidate:63", harness.Peers.Created.RemoteCandidates[^1]);
+    }
+
+    [Fact]
+    public async Task A_negotiation_failure_does_not_escape_the_signaling_callback_and_disposes_the_peer()
+    {
+        var harness = new Harness();
+        harness.Peers.AnswerFailure = new InvalidOperationException("synthetic negotiation failure");
+        string? reportedFailure = null;
+        harness.Subscriber.NegotiationFailed += failure => reportedFailure = failure;
+
+        var failure = await Record.ExceptionAsync(harness.OfferAsync);
+
+        Assert.Null(failure);
+        Assert.True(harness.Peers.Created!.Disposed);
+        Assert.Empty(harness.Signaling.Sent);
+        Assert.Equal("WebRTC negotiation failed at createAnswer: synthetic negotiation failure", reportedFailure);
+    }
+
+    [Fact]
+    public async Task A_peer_negotiation_failure_preserves_the_exact_failed_stage()
+    {
+        var harness = new Harness();
+        harness.Peers.AnswerFailure = new ViewerNegotiationException(
+            "setLocalDescription",
+            "synthetic local-description failure");
+        string? reportedFailure = null;
+        harness.Subscriber.NegotiationFailed += failure => reportedFailure = failure;
+
+        await harness.OfferAsync();
+
+        Assert.Equal(
+            "WebRTC negotiation failed at setLocalDescription: synthetic local-description failure",
+            reportedFailure);
+        Assert.True(harness.Peers.Created!.Disposed);
+    }
+
+    [Fact]
+    public async Task Ice_candidates_from_an_unrelated_participant_are_ignored()
+    {
+        var harness = new Harness();
+        await harness.ReadyAsync();
+        await harness.OfferAsync();
+
+        await harness.Subscriber.HandleAsync(
+            Frame(SignalingMessageTypes.WebRtcIceCandidate, Stranger,
+                """{"candidate":"candidate:stranger","sdpMid":"0","sdpMLineIndex":0}"""),
+            CancellationToken.None);
+
+        Assert.Empty(harness.Peers.Created!.RemoteCandidates);
+    }
+
+    [Fact]
     public async Task A_gathered_candidate_is_signalled_to_the_publisher()
     {
         var harness = new Harness();
         await harness.ReadyAsync();
         await harness.OfferAsync();
         harness.Signaling.Sent.Clear();
+        var diagnostics = new List<ViewerNegotiationDiagnosticEntry>();
+        harness.Subscriber.Diagnostic += diagnostics.Add;
 
         harness.Peers.Created!.GatherCandidate("candidate:2", "0", 0);
 
         var sent = Assert.Single(harness.Signaling.Sent);
         Assert.Equal(SignalingMessageTypes.WebRtcIceCandidate, sent.Type);
         Assert.Equal(Publisher, sent.To);
+        Assert.Contains(diagnostics, x => x.Event == "viewer.ice_candidate.send");
+        Assert.DoesNotContain("candidate:2", JsonSerializer.Serialize(diagnostics), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -276,15 +397,17 @@ public sealed class VideoSubscriberTests
 
         public int CreateCalls { get; private set; }
 
+        public Exception? AnswerFailure { get; set; }
+
         public IViewerPeerConnection Create()
         {
             CreateCalls++;
-            Created = new FakeViewerPeer();
+            Created = new FakeViewerPeer(AnswerFailure);
             return Created;
         }
     }
 
-    private sealed class FakeViewerPeer : IViewerPeerConnection
+    private sealed class FakeViewerPeer(Exception? answerFailure) : IViewerPeerConnection
     {
         public string? ReceivedOffer { get; private set; }
 
@@ -300,9 +423,22 @@ public sealed class VideoSubscriberTests
 
         public event Action<EncodedAudioSample>? AudioSampleReceived;
 
+        public event Action<ViewerNegotiationDiagnosticEntry>? Diagnostic;
+
         public Task<string> CreateAnswerAsync(string offerSdp, CancellationToken ct)
         {
             ReceivedOffer = offerSdp;
+            if (answerFailure is not null) return Task.FromException<string>(answerFailure);
+
+            Diagnostic?.Invoke(new ViewerNegotiationDiagnosticEntry(
+                DateTimeOffset.UtcNow,
+                "viewer.local_description.ok",
+                "stable",
+                "complete",
+                "connected",
+                "connected",
+                SetDescriptionResult: "OK"));
+
             return Task.FromResult("answer-sdp");
         }
 

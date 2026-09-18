@@ -94,6 +94,12 @@ public interface IVideoWatchHost : IAsyncDisposable
     /// <summary>Waiting, receiving, stalled or failed. Raised off the UI thread.</summary>
     event Action<WatchState>? WatchStateChanged;
 
+    /// <summary>
+    /// An actionable WebRTC offer/answer failure. The value must never contain SDP,
+    /// ICE candidate contents, credentials or media payloads.
+    /// </summary>
+    event Action<string>? NegotiationFailed;
+
     Task StartAsync(CancellationToken ct);
 
     Task StopAsync();

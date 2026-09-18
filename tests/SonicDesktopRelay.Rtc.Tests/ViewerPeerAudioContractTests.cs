@@ -46,6 +46,12 @@ public sealed class ViewerPeerAudioContractTests
             remove => AudioReceived -= value;
         }
 
+        public event Action<ViewerNegotiationDiagnosticEntry>? Diagnostic
+        {
+            add { }
+            remove { }
+        }
+
         public Task<string> CreateAnswerAsync(string offerSdp, CancellationToken ct) => Task.FromResult("answer");
 
         public Task AddIceCandidateAsync(string candidate, string? sdpMid, int? sdpMLineIndex, CancellationToken ct) =>

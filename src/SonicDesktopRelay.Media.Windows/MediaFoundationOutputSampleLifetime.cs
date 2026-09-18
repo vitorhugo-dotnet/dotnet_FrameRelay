@@ -26,8 +26,8 @@ internal static class MediaFoundationOutputSampleLifetime
     {
         var flags = (OutputStreamInfoFlags)outputStreamFlags;
 
-        // PROVIDES_SAMPLES forbids a caller-provided pSample, so it takes precedence
-        // if an MFT reports both allocation-capability flags.
+        // PROVIDES_SAMPLES forbids a caller-provided pSample. Check it first so even
+        // malformed flags cannot make us pass a caller sample into that allocation mode.
         if ((flags & OutputStreamInfoFlags.OutputStreamProvidesSamples) != 0)
             return OutputSampleAllocationMode.MftProvided;
 

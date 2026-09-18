@@ -84,6 +84,55 @@ public sealed class VideoSubscriberTests
     }
 
     [Fact]
+    public async Task Ice_candidates_received_before_the_offer_are_buffered_and_applied_in_order()
+    {
+        var harness = new Harness();
+
+        await harness.Subscriber.HandleAsync(
+            Frame(SignalingMessageTypes.WebRtcIceCandidate, Publisher,
+                """{"candidate":"candidate:early-1","sdpMid":"0","sdpMLineIndex":0}"""),
+            CancellationToken.None);
+        await harness.Subscriber.HandleAsync(
+            Frame(SignalingMessageTypes.WebRtcIceCandidate, Publisher,
+                """{"candidate":"candidate:early-2","sdpMid":"0","sdpMLineIndex":0}"""),
+            CancellationToken.None);
+
+        await harness.OfferAsync();
+
+        Assert.Equal(
+            ["candidate:early-1", "candidate:early-2"],
+            harness.Peers.Created!.RemoteCandidates);
+    }
+
+    [Fact]
+    public async Task A_negotiation_failure_does_not_escape_the_signaling_callback_and_disposes_the_peer()
+    {
+        var harness = new Harness();
+        harness.Peers.AnswerFailure = new InvalidOperationException("synthetic negotiation failure");
+
+        var failure = await Record.ExceptionAsync(harness.OfferAsync);
+
+        Assert.Null(failure);
+        Assert.True(harness.Peers.Created!.Disposed);
+        Assert.Empty(harness.Signaling.Sent);
+    }
+
+    [Fact]
+    public async Task Ice_candidates_from_an_unrelated_participant_are_ignored()
+    {
+        var harness = new Harness();
+        await harness.ReadyAsync();
+        await harness.OfferAsync();
+
+        await harness.Subscriber.HandleAsync(
+            Frame(SignalingMessageTypes.WebRtcIceCandidate, Stranger,
+                """{"candidate":"candidate:stranger","sdpMid":"0","sdpMLineIndex":0}"""),
+            CancellationToken.None);
+
+        Assert.Empty(harness.Peers.Created!.RemoteCandidates);
+    }
+
+    [Fact]
     public async Task A_gathered_candidate_is_signalled_to_the_publisher()
     {
         var harness = new Harness();
@@ -276,15 +325,17 @@ public sealed class VideoSubscriberTests
 
         public int CreateCalls { get; private set; }
 
+        public Exception? AnswerFailure { get; set; }
+
         public IViewerPeerConnection Create()
         {
             CreateCalls++;
-            Created = new FakeViewerPeer();
+            Created = new FakeViewerPeer(AnswerFailure);
             return Created;
         }
     }
 
-    private sealed class FakeViewerPeer : IViewerPeerConnection
+    private sealed class FakeViewerPeer(Exception? answerFailure) : IViewerPeerConnection
     {
         public string? ReceivedOffer { get; private set; }
 
@@ -303,6 +354,7 @@ public sealed class VideoSubscriberTests
         public Task<string> CreateAnswerAsync(string offerSdp, CancellationToken ct)
         {
             ReceivedOffer = offerSdp;
+            if (answerFailure is not null) return Task.FromException<string>(answerFailure);
             return Task.FromResult("answer-sdp");
         }
 

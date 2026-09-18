@@ -82,7 +82,11 @@ Media diagnostics include enough boundary information to determine where a video
 making progress, including capture/encode counts, received H.264 access units, keyframes,
 decoder results and failures, recovery keyframe requests, decoded frames, UI delivery, surface
 presentation, and sampled render activity. Media Foundation failures include the decoder stage,
-exception type, HRESULT, and stack trace where available.
+exception type, HRESULT, and stack trace where available. Decoder output diagnostics also record
+the Media Foundation output-stream flags, `PROVIDES_SAMPLES` / `CAN_PROVIDE_SAMPLES`, selected
+caller-vs-MFT allocation mode, whether FrameRelay supplied a sample, whether `ProcessOutput`
+returned a sample, and sampled HRESULT/stream-change results. Per-frame details stay at
+Debug/Trace rather than Information.
 
 Signaling and WebRTC logging is metadata-only. FrameRelay does **not** write SDP bodies, ICE
 candidate contents, credentials, or audio/video payloads to the diagnostic log.

@@ -1,3 +1,4 @@
+using System.Net.Sockets;
 using SIPSorcery.Net;
 using Xunit;
 
@@ -29,6 +30,22 @@ public sealed class RtcTransportDiagnosticsTests
         Assert.Equal(expectedProtocol, result.Protocol);
         Assert.Equal(localType.ToString(), result.LocalCandidateType);
         Assert.Equal(remoteType.ToString(), result.RemoteCandidateType);
+    }
+
+    [Fact]
+    public void Local_turn_server_transport_overrides_the_relay_candidate_protocol()
+    {
+        // SIPSorcery 10.0.16 advertises relay candidates as UDP even when the TURN server
+        // control transport is TCP. The selected local relay retains its IceServer.Protocol.
+        var result = RtcTransportClassifier.Classify(
+            RTCIceCandidateType.relay,
+            RTCIceCandidateType.host,
+            RTCIceProtocol.udp,
+            RTCIceProtocol.udp,
+            ProtocolType.Tcp);
+
+        Assert.Equal("TURN", result.Path);
+        Assert.Equal("TCP", result.Protocol);
     }
 
     [Fact]

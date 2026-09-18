@@ -123,29 +123,35 @@ public sealed class ScreenPublishPipelineTests
     }
 
     [Fact]
-    public async Task Poor_reception_degrades_the_session_quality()
+    public async Task One_poor_reception_sample_does_not_degrade_the_session_quality()
     {
         var capture = new FakeCapture();
         var encoder = new FakeEncoder();
         await using var pipeline = new ScreenPublishPipeline(capture, encoder);
         await pipeline.StartAsync(Monitor, CancellationToken.None);
 
-        pipeline.ReportPoorReception();
+        pipeline.ReportReception(0.10);
 
-        Assert.Equal(720, pipeline.Quality.MaxHeight);
+        Assert.Equal(VideoQuality.Default, pipeline.Quality);
     }
 
     [Fact]
-    public async Task Degrading_also_forces_a_keyframe_so_viewers_resync_at_the_new_size()
+    public async Task A_real_quality_change_forces_a_clean_encoder_recovery_point()
     {
+        var time = new FakeTimeProvider(DateTimeOffset.UnixEpoch);
         var capture = new FakeCapture();
         var encoder = new FakeEncoder();
-        await using var pipeline = new ScreenPublishPipeline(capture, encoder);
+        await using var pipeline = new ScreenPublishPipeline(capture, encoder, time: time);
         await pipeline.StartAsync(Monitor, CancellationToken.None);
 
-        pipeline.ReportPoorReception();
+        pipeline.ReportReception(0.10);
+        time.Advance(TimeSpan.FromSeconds(2.5));
+        pipeline.ReportReception(0.10);
+        time.Advance(TimeSpan.FromSeconds(2.5));
+        pipeline.ReportReception(0.10);
 
         Assert.Equal(1, encoder.KeyFrameRequests);
+        Assert.Equal(3_000_000, pipeline.Quality.TargetBitsPerSecond);
     }
 
     [Fact]
@@ -196,10 +202,13 @@ public sealed class ScreenPublishPipelineTests
         await using var pipeline = new ScreenPublishPipeline(capture, encoder);
         await pipeline.StartAsync(Monitor, CancellationToken.None);
 
-        pipeline.RequestKeyFrame();
-        pipeline.ReportPoorReception();
+        pipeline.RequestKeyFrame(KeyFrameRequestReason.RtcpPli);
+        pipeline.RequestKeyFrame(KeyFrameRequestReason.PacketLoss);
 
-        Assert.Equal(2, pipeline.KeyFrameRequests);
+        Assert.Equal(1, pipeline.KeyFrameRequests);
+        Assert.Equal(2, pipeline.KeyFrameRequestSignals);
+        Assert.Equal(1, pipeline.CoalescedKeyFrameRequests);
+        Assert.Equal(1, pipeline.PliReceived);
     }
 
     private sealed class FakeCapture : IScreenCaptureSource

@@ -38,7 +38,7 @@ The CI job also rejects tracked legacy codec files/references outside historical
 `IMFTransform::GetOutputStreamInfo`:
 
 - `MFT_OUTPUT_STREAM_PROVIDES_SAMPLES`: the MFT owns allocation and FrameRelay passes no sample.
-- `MFT_OUTPUT_STREAM_CAN_PROVIDE_SAMPLES`: FrameRelay deliberately supplies its reusable
+- `MFT_OUTPUT_STREAM_CAN_PROVIDE_SAMPLES`: FrameRelay deliberately supplies a
   caller-allocated output sample.
 - neither flag: caller allocation is required.
 

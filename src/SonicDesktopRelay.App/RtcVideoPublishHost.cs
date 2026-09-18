@@ -21,12 +21,15 @@ public sealed class RtcVideoPublishHost(
     private readonly SemaphoreSlim _gate = new(1, 1);
 
     private ScreenPublishPipeline? _pipeline;
+    private MediaFoundationH264Encoder? _encoder;
     private AudioPublishPipeline? _audioPipeline;
     private WasapiLoopbackAudioSource? _audioSource;
     private VideoPublisher? _publisher;
     private string? _audioPipelineFailure;
 
     public string? EncoderName { get; private set; }
+
+    public NativeVideoDiagnostics? VideoDiagnostics => _encoder?.Diagnostics;
 
     public string? AudioEncoderName => _audioPipeline?.EncoderName;
 
@@ -56,12 +59,14 @@ public sealed class RtcVideoPublishHost(
 
             var ice = await LoadIceAsync(ct);
 
-            var encoder = new FFmpegH264Encoder();
+            var clock = new MediaSessionClock(TimeProvider.System);
+            var encoder = new MediaFoundationH264Encoder();
+            _encoder = encoder;
             EncoderName = encoder.Name;
             EncoderRejections = encoder.RejectionLog;
 
             var capture = new GraphicsCaptureScreenSource();
-            var pipeline = new ScreenPublishPipeline(capture, encoder);
+            var pipeline = new ScreenPublishPipeline(capture, encoder, clock);
 
             await pipeline.StartAsync(monitor, ct);
             _pipeline = pipeline;
@@ -73,7 +78,7 @@ public sealed class RtcVideoPublishHost(
             var candidateAudioPipeline = new AudioPublishPipeline(
                 audioSource,
                 new OpusAudioCodec(channels: 2),
-                new MediaSessionClock(TimeProvider.System));
+                clock);
             candidateAudioPipeline.Failed += OnAudioPipelineFailed;
 
             try
@@ -176,6 +181,7 @@ public sealed class RtcVideoPublishHost(
             // the GPU encode session is released the moment the share stops.
             await _pipeline.DisposeAsync();
             _pipeline = null;
+            _encoder = null;
         }
     }
 }

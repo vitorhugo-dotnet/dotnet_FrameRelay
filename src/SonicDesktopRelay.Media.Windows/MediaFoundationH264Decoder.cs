@@ -507,7 +507,8 @@ public sealed class MediaFoundationH264Decoder : IVideoDecoder
             var callerSuppliesSample =
                 MediaFoundationOutputSampleLifetime.CallerSuppliesSample(allocationMode);
 
-            if (_lastOutputStreamFlags != streamInfo.Flags)
+            var allocationChanged = _lastOutputStreamFlags != streamInfo.Flags;
+            if (allocationChanged)
             {
                 _lastOutputStreamFlags = streamInfo.Flags;
                 _logger.LogDebug(
@@ -548,19 +549,27 @@ public sealed class MediaFoundationH264Decoder : IVideoDecoder
 
                 var callerPointer = callerSample?.NativePointer ?? IntPtr.Zero;
                 var returnedPointer = output.Sample?.NativePointer ?? IntPtr.Zero;
-                _logger.LogTrace(
-                    "H.264 decoder ProcessOutput completed. hresult=0x{HResult:X8} processStatus={ProcessStatus} outputStatus={OutputStatus} allocationMode={AllocationMode} callerSuppliedSample={CallerSuppliedSample} returnedSample={ReturnedSample} callerPointer={CallerPointer} returnedPointer={ReturnedPointer} sameNativePointer={SameNativePointer}",
-                    result.Code,
-                    processStatus,
-                    output.Status,
-                    allocationMode,
-                    callerSuppliesSample,
-                    output.Sample is not null,
-                    callerPointer,
-                    returnedPointer,
-                    callerPointer != IntPtr.Zero &&
-                    returnedPointer != IntPtr.Zero &&
-                    callerPointer == returnedPointer);
+                var traceOwnership =
+                    allocationChanged ||
+                    result.Code == StreamChangeHResult ||
+                    (result.Failure && result.Code != NeedMoreInputHResult);
+
+                if (traceOwnership)
+                {
+                    _logger.LogTrace(
+                        "H.264 decoder ProcessOutput completed. hresult=0x{HResult:X8} processStatus={ProcessStatus} outputStatus={OutputStatus} allocationMode={AllocationMode} callerSuppliedSample={CallerSuppliedSample} returnedSample={ReturnedSample} callerPointer={CallerPointer} returnedPointer={ReturnedPointer} sameNativePointer={SameNativePointer}",
+                        result.Code,
+                        processStatus,
+                        output.Status,
+                        allocationMode,
+                        callerSuppliesSample,
+                        output.Sample is not null,
+                        callerPointer,
+                        returnedPointer,
+                        callerPointer != IntPtr.Zero &&
+                        returnedPointer != IntPtr.Zero &&
+                        callerPointer == returnedPointer);
+                }
 
                 if (result.Code == NeedMoreInputHResult)
                     return last;
@@ -620,13 +629,16 @@ public sealed class MediaFoundationH264Decoder : IVideoDecoder
                     returnedSamplePresent: output.Sample is not null,
                     eventsPresent: output.Events is not null);
 
-                _logger.LogTrace(
-                    "H.264 decoder output cleanup. allocationMode={AllocationMode} disposeCallerSample={DisposeCallerSample} disposeReturnedSample={DisposeReturnedSample} detachReturnedWrapper={DetachReturnedWrapper} disposeEvents={DisposeEvents}",
-                    allocationMode,
-                    cleanup.DisposeCallerSample,
-                    cleanup.DisposeReturnedSample,
-                    cleanup.DetachReturnedWrapper,
-                    cleanup.DisposeEvents);
+                if (traceOwnership)
+                {
+                    _logger.LogTrace(
+                        "H.264 decoder output cleanup. allocationMode={AllocationMode} disposeCallerSample={DisposeCallerSample} disposeReturnedSample={DisposeReturnedSample} detachReturnedWrapper={DetachReturnedWrapper} disposeEvents={DisposeEvents}",
+                        allocationMode,
+                        cleanup.DisposeCallerSample,
+                        cleanup.DisposeReturnedSample,
+                        cleanup.DetachReturnedWrapper,
+                        cleanup.DisposeEvents);
+                }
 
                 if (cleanup.DisposeEvents)
                     output.Events!.Dispose();

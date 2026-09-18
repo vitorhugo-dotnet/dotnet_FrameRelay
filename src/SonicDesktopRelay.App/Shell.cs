@@ -152,27 +152,51 @@ public sealed class Shell : INotifyPropertyChanged
     {
         var host = _composition?.PublishHost;
         if (host?.StartFailure is { } failure) return $"Media failed to start: {failure}";
-        if (host?.EncoderName is not { } encoder) return "Encoder: not started";
+        if (host?.EncoderName is not { } encoder) return "Video: not started";
+
+        var video = host.VideoDiagnostics;
+        var transform = video is null
+            ? encoder
+            : $"{video.TransformName} (clsid={video.TransformClsid:B}, {video.Acceleration}, " +
+              $"{video.InputFormat}->{video.OutputFormat}, {video.Width}x{video.Height}@" +
+              $"{video.FramesPerSecond}, {video.Bitrate} bps)";
+
+        var audio = host.AudioDegradedReason is { } audioFailure
+            ? $"audio degraded: {audioFailure}"
+            : $"WASAPI loopback [{host.AudioCaptureEndpoint ?? "default render endpoint"}] -> " +
+              $"{host.AudioEncoderName ?? "Opus"} 48 kHz stereo";
 
         var rejected = host.EncoderRejections.Count == 0
-            ? "none rejected"
-            : string.Join("; ", host.EncoderRejections);
-        return $"Encoder: {encoder} — {snapshot.VideoHeight}p{snapshot.FramesPerSecond}, "
-               + $"{snapshot.ViewerCount} viewer(s), FFmpeg at {FFmpegLoader.LibraryPath ?? "not found"} "
-               + $"({rejected})";
+            ? "no rejected MFTs"
+            : $"rejected MFTs: {string.Join("; ", host.EncoderRejections)}";
+
+        return $"Video: Windows.Graphics.Capture -> Media Foundation H.264 [{transform}] | " +
+               $"Audio: {audio} | viewers={snapshot.ViewerCount} | {rejected}";
     }
 
     private string WatchStatusText(SessionSnapshot snapshot)
     {
         var host = _composition?.WatchHost;
         if (host?.StartFailure is { } failure) return $"Media failed to start: {failure}";
-        if (host?.DecoderName is not { } decoder) return "Decoder: not started";
+        if (host?.DecoderName is not { } decoder) return "Video: not started";
+
+        var video = host.VideoDiagnostics;
+        var transform = video is null
+            ? decoder
+            : $"{video.TransformName} (clsid={video.TransformClsid:B}, {video.Acceleration}, " +
+              $"{video.InputFormat}->{video.OutputFormat}, " +
+              $"{(video.Width > 0 && video.Height > 0 ? $"{video.Width}x{video.Height}" : "geometry pending")})";
+
+        var audio = host.AudioDegradedReason is { } audioFailure
+            ? $"audio degraded: {audioFailure}"
+            : $"Opus 48 kHz stereo -> {host.AudioSinkName ?? "WASAPI default render endpoint"}";
 
         var rejected = host.DecoderRejections.Count == 0
-            ? "none rejected"
-            : string.Join("; ", host.DecoderRejections);
-        return $"Decoder: {decoder} — {snapshot.Watching?.ToString() ?? "not watching"}, "
-               + $"FFmpeg at {FFmpegLoader.LibraryPath ?? "not found"} ({rejected})";
+            ? "no rejected MFTs"
+            : $"rejected MFTs: {string.Join("; ", host.DecoderRejections)}";
+
+        return $"Video: Media Foundation H.264 [{transform}] | Audio: {audio} | " +
+               $"watch={snapshot.Watching?.ToString() ?? "not watching"} | {rejected}";
     }
 
     /// <summary>Refreshes <see cref="Monitors"/> from the OS and keeps a sensible selection.</summary>

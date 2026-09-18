@@ -7,7 +7,12 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="Concentus" Version="2.2.2" />
     <PackageReference Include="SIPSorcery" Version="10.0.16" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="SonicDesktopRelay.Rtc.Tests" />
   </ItemGroup>
 
   <PropertyGroup>

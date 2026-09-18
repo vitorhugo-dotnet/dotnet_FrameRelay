@@ -30,7 +30,6 @@ public sealed class VideoSubscriberTests
     {
         var harness = new Harness();
 
-        // The payload is attacker-controlled; `from` is the server's word. Only `from` counts.
         await harness.Subscriber.HandleAsync(
             Frame(SignalingMessageTypes.PublisherReady, Publisher, $$"""{"participantId":"{{Stranger}}"}"""),
             CancellationToken.None);
@@ -114,6 +113,30 @@ public sealed class VideoSubscriberTests
     }
 
     [Fact]
+    public async Task A_received_audio_sample_reaches_the_audio_watch_pipeline()
+    {
+        var video = new WatchPipelineDriver();
+        var peers = new FakeViewerPeerFactory();
+        var signaling = new FakeSignaling();
+        var decoder = new FakeAudioDecoder();
+        var sink = new FakeAudioSink();
+        await using var audio = new AudioWatchPipeline(decoder, sink);
+        await audio.StartAsync(CancellationToken.None);
+        await using var subscriber = new VideoSubscriber(video.Pipeline, audio, peers, signaling);
+
+        await subscriber.HandleAsync(
+            Frame(SignalingMessageTypes.WebRtcOffer, Publisher, """{"type":"offer","sdp":"offer-sdp"}"""),
+            CancellationToken.None);
+
+        peers.Created!.ReceiveAudio(new EncodedAudioSample(
+            new byte[] { 1, 2, 3 }, 960, TimeSpan.FromMilliseconds(20), TimeSpan.FromMilliseconds(40)));
+
+        Assert.Equal(1, decoder.DecodeCalls);
+        var frame = Assert.Single(sink.Frames);
+        Assert.Equal(TimeSpan.FromMilliseconds(40), frame.Timestamp);
+    }
+
+    [Fact]
     public async Task A_stalled_pipeline_sends_a_keyframe_request_to_the_peer()
     {
         var harness = new Harness();
@@ -137,8 +160,6 @@ public sealed class VideoSubscriberTests
             Frame(SignalingMessageTypes.WebRtcOffer, Publisher, """{"type":"offer","sdp":"second-sdp"}"""),
             CancellationToken.None);
 
-        // The publisher renegotiates when the monitor resolution changes; that must not build
-        // a second peer connection and leak the first.
         Assert.Same(first, harness.Peers.Created);
         Assert.Equal("second-sdp", harness.Peers.Created!.ReceivedOffer);
     }
@@ -148,9 +169,6 @@ public sealed class VideoSubscriberTests
     {
         var harness = new Harness();
 
-        // The publishing half of this app sends webrtc.offer straight off session.joined and
-        // never sends publisher.ready, so a viewer that waited for it would never connect to
-        // its own product. The authenticated `from` of the first offer is just as trustworthy.
         await harness.OfferAsync();
 
         Assert.Equal(Publisher, harness.Subscriber.PublisherId);
@@ -188,11 +206,6 @@ public sealed class VideoSubscriberTests
             CancellationToken.None);
     }
 
-    /// <summary>
-    /// Drives a real <see cref="ScreenWatchPipeline"/> over a fake clock. A stall is produced
-    /// the way the real one is — the watchdog fires with no frame in the window — rather than
-    /// by adding a test-only hook to production code.
-    /// </summary>
     private sealed class WatchPipelineDriver
     {
         private readonly FakeTimeProvider _time = new(Start);
@@ -227,6 +240,36 @@ public sealed class VideoSubscriberTests
         }
     }
 
+    private sealed class FakeAudioDecoder : IAudioDecoder
+    {
+        public string Name => "fake-opus";
+        public int DecodeCalls { get; private set; }
+
+        public AudioFrame? Decode(EncodedAudioSample sample)
+        {
+            DecodeCalls++;
+            return new AudioFrame(new byte[sample.SampleCount * 2 * 2], 48_000, 2, sample.SampleCount, sample.Timestamp);
+        }
+
+        public void Dispose()
+        {
+        }
+    }
+
+    private sealed class FakeAudioSink : IAudioSink
+    {
+        public string Name => "fake-sink";
+        public List<AudioFrame> Frames { get; } = [];
+
+        public Task StartAsync(CancellationToken ct) => Task.CompletedTask;
+
+        public void Write(AudioFrame frame) => Frames.Add(frame);
+
+        public Task StopAsync() => Task.CompletedTask;
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
     private sealed class FakeViewerPeerFactory : IViewerPeerConnectionFactory
     {
         public FakeViewerPeer? Created { get; private set; }
@@ -255,6 +298,8 @@ public sealed class VideoSubscriberTests
 
         public event Action<EncodedVideoSample>? VideoSampleReceived;
 
+        public event Action<EncodedAudioSample>? AudioSampleReceived;
+
         public Task<string> CreateAnswerAsync(string offerSdp, CancellationToken ct)
         {
             ReceivedOffer = offerSdp;
@@ -273,6 +318,8 @@ public sealed class VideoSubscriberTests
             IceCandidateGathered?.Invoke(candidate, mid, index);
 
         public void ReceiveVideo(EncodedVideoSample sample) => VideoSampleReceived?.Invoke(sample);
+
+        public void ReceiveAudio(EncodedAudioSample sample) => AudioSampleReceived?.Invoke(sample);
 
         public ValueTask DisposeAsync()
         {

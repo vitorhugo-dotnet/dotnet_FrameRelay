@@ -33,7 +33,4 @@
     <ProjectReference Include="..\SonicDesktopRelay.Signaling\SonicDesktopRelay.Signaling.csproj" />
   </ItemGroup>
 
-  <!-- Ships the FFmpeg 8.1 shared libraries inside the app's own output, so an install has
-       nothing left to download. See build/FFmpeg.props and THIRD-PARTY-NOTICES.md. -->
-  <Import Project="..\..\build\FFmpeg.targets" />
 </Project>

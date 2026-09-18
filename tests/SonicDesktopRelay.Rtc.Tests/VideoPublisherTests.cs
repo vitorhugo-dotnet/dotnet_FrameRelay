@@ -19,9 +19,6 @@ public sealed class VideoPublisherTests
         await harness.Publisher.AddViewerAsync(ViewerA, CancellationToken.None);
 
         Assert.Equal(1, harness.Publisher.PeerCount);
-        // publisher.ready then webrtc.offer, in that order: the handshake
-        // dotnet_SonicRelay/docs/protocol.md documents. A viewer written against those docs
-        // learns who the publisher is from the first frame and would never answer without it.
         Assert.Equal(
             [SignalingMessageTypes.PublisherReady, SignalingMessageTypes.WebRtcOffer],
             harness.Signaling.Sent.Select(x => x.Type).ToArray());
@@ -39,6 +36,19 @@ public sealed class VideoPublisherTests
 
         Assert.Equal(1, harness.Encoder.EncodeCalls);
         Assert.All(harness.Peers.Created, peer => Assert.Single(peer.SentSamples));
+    }
+
+    [Fact]
+    public async Task One_audio_encode_is_fanned_out_to_all_viewer_peers()
+    {
+        var harness = await Harness.StartedAsync();
+        await harness.Publisher.AddViewerAsync(ViewerA, CancellationToken.None);
+        await harness.Publisher.AddViewerAsync(ViewerB, CancellationToken.None);
+
+        harness.AudioCapture.Emit();
+
+        Assert.Equal(1, harness.AudioEncoder.EncodeCalls);
+        Assert.All(harness.Peers.Created, peer => Assert.Single(peer.SentAudioSamples));
     }
 
     [Fact]
@@ -163,15 +173,13 @@ public sealed class VideoPublisherTests
     private sealed class Harness
     {
         public required FakeCapture Capture { get; init; }
-
         public required FakeEncoder Encoder { get; init; }
-
         public required ScreenPublishPipeline Pipeline { get; init; }
-
+        public required FakeAudioCapture AudioCapture { get; init; }
+        public required FakeAudioEncoder AudioEncoder { get; init; }
+        public required AudioPublishPipeline AudioPipeline { get; init; }
         public required FakePeerFactory Peers { get; init; }
-
         public required FakeSignaling Signaling { get; init; }
-
         public required VideoPublisher Publisher { get; init; }
 
         public static async Task<Harness> StartedAsync()
@@ -179,15 +187,25 @@ public sealed class VideoPublisherTests
             var capture = new FakeCapture();
             var encoder = new FakeEncoder();
             var pipeline = new ScreenPublishPipeline(capture, encoder);
+            var audioCapture = new FakeAudioCapture();
+            var audioEncoder = new FakeAudioEncoder();
+            var audioPipeline = new AudioPublishPipeline(
+                audioCapture,
+                audioEncoder,
+                new MediaSessionClock(TimeProvider.System));
             var peers = new FakePeerFactory();
             var signaling = new FakeSignaling();
-            var publisher = new VideoPublisher(pipeline, peers, signaling);
+            var publisher = new VideoPublisher(pipeline, peers, signaling, audioPipeline);
             await pipeline.StartAsync(Monitor, CancellationToken.None);
+            await audioPipeline.StartAsync(CancellationToken.None);
             return new Harness
             {
                 Capture = capture,
                 Encoder = encoder,
                 Pipeline = pipeline,
+                AudioCapture = audioCapture,
+                AudioEncoder = audioEncoder,
+                AudioPipeline = audioPipeline,
                 Peers = peers,
                 Signaling = signaling,
                 Publisher = publisher
@@ -198,7 +216,6 @@ public sealed class VideoPublisherTests
     private sealed class FakeCapture : IScreenCaptureSource
     {
         public MonitorInfo Monitor { get; private set; }
-
         public event Action<VideoFrame>? FrameCaptured;
 
         public Task StartAsync(MonitorInfo monitor, VideoQuality quality, CancellationToken ct)
@@ -217,9 +234,7 @@ public sealed class VideoPublisherTests
     private sealed class FakeEncoder : IVideoEncoder
     {
         public string Name => "fake";
-
         public int EncodeCalls { get; private set; }
-
         public int KeyFrameRequests { get; private set; }
 
         public EncodedVideoSample? Encode(VideoFrame frame, VideoQuality quality)
@@ -229,10 +244,39 @@ public sealed class VideoPublisherTests
         }
 
         public void RequestKeyFrame() => KeyFrameRequests++;
+        public void Dispose() { }
+    }
 
-        public void Dispose()
+    private sealed class FakeAudioCapture : IAudioCaptureSource
+    {
+        public event Action<AudioFrame>? AudioCaptured;
+
+        public Task StartAsync(CancellationToken ct) => Task.CompletedTask;
+
+        public Task StopAsync() => Task.CompletedTask;
+
+        public void Emit() => AudioCaptured?.Invoke(new AudioFrame(
+            new byte[960 * 2 * sizeof(short)],
+            48_000,
+            2,
+            960,
+            TimeSpan.Zero));
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class FakeAudioEncoder : IAudioEncoder
+    {
+        public string Name => "fake-opus";
+        public int EncodeCalls { get; private set; }
+
+        public EncodedAudioSample? Encode(AudioFrame frame)
         {
+            EncodeCalls++;
+            return new EncodedAudioSample(new byte[24], frame.SampleCount, frame.Duration, frame.Timestamp);
         }
+
+        public void Dispose() { }
     }
 
     private sealed class FakePeerFactory : IPeerConnectionFactory
@@ -250,19 +294,14 @@ public sealed class VideoPublisherTests
     private sealed class FakePeer(Guid participantId) : IPeerConnection
     {
         public Guid ParticipantId { get; } = participantId;
-
         public List<EncodedVideoSample> SentSamples { get; } = [];
-
+        public List<EncodedAudioSample> SentAudioSamples { get; } = [];
         public List<string> RemoteCandidates { get; } = [];
-
         public string? AppliedAnswer { get; private set; }
-
         public bool Disposed { get; private set; }
 
         public event Action<string, string?, int?>? IceCandidateGathered;
-
         public event Action? KeyFrameRequested;
-
         public event Action<double>? PacketLossReported;
 
         public Task<string> CreateOfferAsync(CancellationToken ct) => Task.FromResult("offer-sdp");
@@ -281,6 +320,8 @@ public sealed class VideoPublisherTests
 
         public void SendVideo(EncodedVideoSample sample) => SentSamples.Add(sample);
 
+        public void SendAudio(EncodedAudioSample sample) => SentAudioSamples.Add(sample);
+
         public void GatherCandidate(string candidate, string? mid, int? index) =>
             IceCandidateGathered?.Invoke(candidate, mid, index);
 
@@ -298,11 +339,8 @@ public sealed class VideoPublisherTests
     private sealed class FakeSignaling : ISignalingConnection
     {
         public List<(string Type, Guid? To, object? Payload)> Sent { get; } = [];
-
         public SignalingState State => SignalingState.Connected;
 
-        // Nothing in these tests drives the publisher from inbound frames — HandleAsync is
-        // called directly — so the events exist only to satisfy the interface.
         public event Action<SignalingEnvelope>? FrameReceived
         {
             add { }

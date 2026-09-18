@@ -1,3 +1,4 @@
+using SonicDesktopRelay.Media;
 using SonicDesktopRelay.Rtc;
 using Xunit;
 
@@ -9,27 +10,22 @@ public sealed class SipSorceryPeerConnectionTests
         [new IceServer("stun:stun.example.com:3478", null, null)], ForceRelay: false);
 
     [Fact]
-    public async Task An_offer_advertises_a_sendonly_h264_video_track()
+    public async Task An_offer_advertises_audio_first_sendonly_opus_and_h264()
     {
         var factory = new SipSorceryPeerConnectionFactory(Ice);
         await using var peer = factory.Create(Guid.NewGuid());
 
         var sdp = await peer.CreateOfferAsync(CancellationToken.None);
 
+        Assert.Contains("m=audio", sdp);
+        Assert.Contains("opus/48000", sdp, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("m=video", sdp);
         Assert.Contains("H264", sdp, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("a=sendonly", sdp);
-    }
-
-    [Fact]
-    public async Task The_offer_contains_no_audio_track_in_this_phase()
-    {
-        var factory = new SipSorceryPeerConnectionFactory(Ice);
-        await using var peer = factory.Create(Guid.NewGuid());
-
-        var sdp = await peer.CreateOfferAsync(CancellationToken.None);
-
-        Assert.DoesNotContain("m=audio", sdp);
+        Assert.Contains("packetization-mode=1", sdp, StringComparison.OrdinalIgnoreCase);
+        Assert.True(
+            sdp.IndexOf("m=audio", StringComparison.Ordinal) <
+            sdp.IndexOf("m=video", StringComparison.Ordinal));
+        Assert.Equal(2, sdp.Split("a=sendonly", StringSplitOptions.None).Length - 1);
     }
 
     [Fact]
@@ -62,10 +58,25 @@ public sealed class SipSorceryPeerConnectionTests
         await using var peer = factory.Create(Guid.NewGuid());
         await peer.CreateOfferAsync(CancellationToken.None);
 
-        // Frames keep arriving from the pipeline while negotiation is still in flight; the
-        // peer must drop them quietly rather than take down the capture loop.
         var exception = Record.Exception(() => peer.SendVideo(
-            new Media.EncodedVideoSample(new byte[8], TimeSpan.Zero, true, 1920, 1080)));
+            new EncodedVideoSample(new byte[8], TimeSpan.Zero, true, 1920, 1080)));
+
+        Assert.Null(exception);
+    }
+
+    [Fact]
+    public async Task Sending_audio_before_the_answer_arrives_does_not_throw()
+    {
+        var factory = new SipSorceryPeerConnectionFactory(Ice);
+        await using var peer = factory.Create(Guid.NewGuid());
+        await peer.CreateOfferAsync(CancellationToken.None);
+
+        var exception = Record.Exception(() => peer.SendAudio(
+            new EncodedAudioSample(
+                new byte[] { 1, 2, 3 },
+                SampleCount: 960,
+                Duration: TimeSpan.FromMilliseconds(20),
+                Timestamp: TimeSpan.Zero)));
 
         Assert.Null(exception);
     }

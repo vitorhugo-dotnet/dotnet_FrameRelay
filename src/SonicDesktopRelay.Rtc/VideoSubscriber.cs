@@ -5,12 +5,13 @@ using SonicDesktopRelay.Signaling;
 namespace SonicDesktopRelay.Rtc;
 
 /// <summary>
-/// The viewer half of negotiation: one publisher, one peer connection, one decode pipeline.
-/// Where <see cref="VideoPublisher"/> fans one encode out to many peers, this owns exactly
-/// one — a viewer watches a single screen.
+/// The viewer half of negotiation: one publisher, one peer connection, and independent video
+/// and audio decode pipelines. Where <see cref="VideoPublisher"/> fans one encode out to many
+/// peers, this owns exactly one — a viewer watches a single publisher.
 /// </summary>
 public sealed class VideoSubscriber(
     ScreenWatchPipeline pipeline,
+    AudioWatchPipeline? audioPipeline,
     IViewerPeerConnectionFactory peers,
     ISignalingConnection signaling) : IAsyncDisposable
 {
@@ -19,6 +20,14 @@ public sealed class VideoSubscriber(
     private IViewerPeerConnection? _peer;
     private bool _keyFrameHooked;
     private bool _disposed;
+
+    public VideoSubscriber(
+        ScreenWatchPipeline pipeline,
+        IViewerPeerConnectionFactory peers,
+        ISignalingConnection signaling)
+        : this(pipeline, null, peers, signaling)
+    {
+    }
 
     /// <summary>
     /// The one participant this viewer will accept media from. Learned from the authenticated
@@ -98,6 +107,8 @@ public sealed class VideoSubscriber(
         };
 
         peer.VideoSampleReceived += pipeline.Submit;
+        if (audioPipeline is not null)
+            peer.AudioSampleReceived += audioPipeline.Push;
 
         if (!_keyFrameHooked)
         {

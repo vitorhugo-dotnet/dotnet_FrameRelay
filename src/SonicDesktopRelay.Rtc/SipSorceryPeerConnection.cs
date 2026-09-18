@@ -5,8 +5,8 @@ using SonicDesktopRelay.Media;
 namespace SonicDesktopRelay.Rtc;
 
 /// <summary>
-/// A viewer's connection, backed by SIPSorcery. The video track is <c>sendonly</c>: this phase
-/// publishes a screen and receives nothing back.
+/// A viewer's connection, backed by SIPSorcery. The media tracks are send-only: this side
+/// publishes screen video + system audio and receives no media back.
 /// </summary>
 public sealed class SipSorceryPeerConnection : IPeerConnection
 {
@@ -34,6 +34,14 @@ public sealed class SipSorceryPeerConnection : IPeerConnection
         };
         _connection = new RTCPeerConnection(configuration);
 
+        // SIPSorcery 10.0.16 currently iterates audio before video when building BUNDLE SDP and
+        // places ICE candidates on that first media section. Keeping audio first makes the BUNDLE
+        // tag and candidate section agree until upstream issue #1763 is fixed.
+        var audioTrack = new MediaStreamTrack(
+            AudioCommonlyUsedFormats.OpusWebRTC,
+            MediaStreamStatusEnum.SendOnly);
+        _connection.addTrack(audioTrack);
+
         // packetization-mode=1 is what every browser and native decoder expects for H.264 over
         // WebRTC; without it a viewer negotiates single-NAL mode and chokes on the first frame
         // larger than an MTU.
@@ -56,8 +64,6 @@ public sealed class SipSorceryPeerConnection : IPeerConnection
 
         _connection.onconnectionstatechange += state =>
         {
-            // A viewer that has just connected has no reference frame at all, and keyframes are
-            // only produced on demand here, so ask for one the moment the transport is usable.
             if (state == RTCPeerConnectionState.connected) KeyFrameRequested?.Invoke();
         };
     }
@@ -101,31 +107,50 @@ public sealed class SipSorceryPeerConnection : IPeerConnection
 
     public void SendVideo(EncodedVideoSample sample)
     {
-        // Frames keep coming from the shared pipeline while this particular viewer is still
-        // negotiating. Dropping them is correct: the viewer has no decoder yet, and throwing
-        // would take down the capture loop that every other viewer depends on.
-        lock (_gate)
-        {
-            if (_closed || !_negotiated) return;
-        }
-
-        if (_connection.connectionState != RTCPeerConnectionState.connected) return;
+        if (!CanSendMedia()) return;
 
         try
         {
             _connection.SendVideo(VideoClockRate / 30, sample.Data.ToArray());
         }
-        catch (Exception e) when (e is ObjectDisposedException or InvalidOperationException
-                                      or ApplicationException or System.Net.Sockets.SocketException)
+        catch (Exception e) when (IsExpectedTransportFailure(e))
         {
             // One viewer's socket dying must never propagate into the fan-out loop.
         }
     }
 
+    public void SendAudio(EncodedAudioSample sample)
+    {
+        if (sample.SampleCount <= 0 || !CanSendMedia()) return;
+
+        try
+        {
+            // SIPSorcery expects duration in RTP timestamp units. Opus/WebRTC uses a 48 kHz RTP
+            // clock, so a 20 ms frame is 960 units; SampleCount is already exactly that value.
+            _connection.SendAudio((uint)sample.SampleCount, sample.Data.ToArray());
+        }
+        catch (Exception e) when (IsExpectedTransportFailure(e))
+        {
+            // Audio is independent from video: a dead viewer socket is just a dropped sample.
+        }
+    }
+
+    private bool CanSendMedia()
+    {
+        lock (_gate)
+        {
+            if (_closed || !_negotiated) return false;
+        }
+
+        return _connection.connectionState == RTCPeerConnectionState.connected;
+    }
+
+    private static bool IsExpectedTransportFailure(Exception e) =>
+        e is ObjectDisposedException or InvalidOperationException
+            or ApplicationException or System.Net.Sockets.SocketException;
+
     private void OnRtcpReport(RTCPCompoundPacket report)
     {
-        // A PLI (or FIR) is a viewer saying "I cannot decode what you are sending" — the answer
-        // is a keyframe, and with on-demand-only keyframes this is the sole trigger.
         var feedbackType = report.Feedback?.Header?.PayloadFeedbackMessageType;
         if (feedbackType is PSFBFeedbackTypesEnum.PLI or PSFBFeedbackTypesEnum.FIR)
             KeyFrameRequested?.Invoke();
@@ -134,7 +159,6 @@ public sealed class SipSorceryPeerConnection : IPeerConnection
                       ?? report.SenderReport?.ReceptionReports;
         if (samples is null || samples.Count == 0) return;
 
-        // FractionLost is an 8-bit fixed-point fraction of the interval since the last report.
         var worst = samples.Max(x => x.FractionLost);
         PacketLossReported?.Invoke(worst / 256.0);
     }

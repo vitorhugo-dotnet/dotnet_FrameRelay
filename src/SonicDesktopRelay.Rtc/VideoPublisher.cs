@@ -6,13 +6,15 @@ using SonicDesktopRelay.Signaling;
 namespace SonicDesktopRelay.Rtc;
 
 /// <summary>
-/// Owns one peer connection per viewer and feeds all of them from a single encode. Everything
-/// that scales with viewer count lives here; everything that must not is in the pipeline.
+/// Owns one peer connection per viewer and feeds all of them from a single video encode and,
+/// when available, a single audio encode. Everything that scales with viewer count lives here;
+/// capture and encoding remain session-scoped in the media pipelines.
 /// </summary>
 public sealed class VideoPublisher(
     ScreenPublishPipeline pipeline,
     IPeerConnectionFactory peers,
-    ISignalingConnection signaling) : IAsyncDisposable
+    ISignalingConnection signaling,
+    AudioPublishPipeline? audioPipeline = null) : IAsyncDisposable
 {
     /// <summary>
     /// Below this, loss is ordinary internet weather and reacting to it would make the picture
@@ -102,22 +104,34 @@ public sealed class VideoPublisher(
     }
 
     // Subscribed on the first viewer rather than at construction: with nobody watching there
-    // is nothing to send, and an unsubscribed pipeline is the cheap idle state.
+    // is nothing to send, and unsubscribed media pipelines are the cheap idle state.
     private void EnsureSubscribed()
     {
         if (_subscribed) return;
-        pipeline.SampleEncoded += Broadcast;
+        pipeline.SampleEncoded += BroadcastVideo;
+        if (audioPipeline is not null) audioPipeline.SampleEncoded += BroadcastAudio;
         _subscribed = true;
     }
 
-    private void Broadcast(EncodedVideoSample sample)
+    private void BroadcastVideo(EncodedVideoSample sample)
     {
         foreach (var peer in _peers.Values) peer.SendVideo(sample);
     }
 
+    private void BroadcastAudio(EncodedAudioSample sample)
+    {
+        foreach (var peer in _peers.Values) peer.SendAudio(sample);
+    }
+
     public async ValueTask DisposeAsync()
     {
-        if (_subscribed) pipeline.SampleEncoded -= Broadcast;
+        if (_subscribed)
+        {
+            pipeline.SampleEncoded -= BroadcastVideo;
+            if (audioPipeline is not null) audioPipeline.SampleEncoded -= BroadcastAudio;
+            _subscribed = false;
+        }
+
         foreach (var participantId in _peers.Keys) await RemoveViewerAsync(participantId);
     }
 }

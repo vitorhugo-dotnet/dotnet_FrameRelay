@@ -47,13 +47,6 @@ jobs:
           # When a PR number is supplied, build that PR's head; otherwise the selected ref.
           ref: ${{ github.event.inputs.pr_number && format('refs/pull/{0}/head', github.event.inputs.pr_number) || '' }}
 
-      # The FFmpeg shared build the app embeds is around 100 MB. Caching it on the version and
-      # checksum in build/FFmpeg.props means only the first run after a version bump downloads it.
-      - name: Cache the embedded FFmpeg runtime
-        uses: actions/cache@v4
-        with:
-          path: artifacts/ffmpeg
-          key: ffmpeg-${{ runner.os }}-${{ hashFiles('build/FFmpeg.props') }}
 
       - name: Set up .NET
         uses: actions/setup-dotnet@v4
@@ -138,31 +131,44 @@ jobs:
           -p:EnableCompressionInSingleFile=true -p:DebugType=embedded
           --output artifacts/publish/single-file
 
-      # The whole point of embedding FFmpeg is that neither asset needs anything installed, and
-      # the single-file path is the fragile half: content is only bundled because the libraries
-      # are marked AssetType=native. A regression there is invisible until a user's media fails
-      # to start, so it fails the build here instead.
-      - name: Verify FFmpeg is embedded in both assets
+      - name: Verify legacy codec artifacts are absent
         shell: pwsh
         run: |
-          $libraries = @('avcodec-62.dll', 'avutil-60.dll', 'swresample-6.dll', 'swscale-9.dll')
+          $legacyTokens = @(
+            'avcodec-',
+            'avutil-',
+            'swscale-',
+            'swresample-',
+            ('FF' + 'mpeg.AutoGen')
+          )
           $portableDir = Join-Path $env:GITHUB_WORKSPACE 'artifacts/publish/win-x64'
           $exePath = Join-Path $env:GITHUB_WORKSPACE "artifacts/publish/single-file/$env:APP_EXE_NAME"
 
-          $missing = $libraries | Where-Object { -not (Test-Path (Join-Path $portableDir $_)) }
-          if ($missing) {
-            throw "The portable publish output is missing $($missing -join ', '). Check build/FFmpeg.targets."
+          $badFiles = @(
+            Get-ChildItem -Path $portableDir -Recurse -File |
+              Where-Object {
+                $name = $_.Name
+                $legacyTokens | Where-Object {
+                  $name.IndexOf($_, [StringComparison]::OrdinalIgnoreCase) -ge 0
+                }
+              } |
+              Select-Object -ExpandProperty FullName
+          )
+          if ($badFiles.Count -gt 0) {
+            throw "Legacy codec artifacts remain in the portable output: $($badFiles -join ', ')"
           }
 
-          # Bundled entry names are stored uncompressed in the single-file manifest, so the
-          # library names are readable in the EXE even with EnableCompressionInSingleFile.
           $bundle = [System.Text.Encoding]::Latin1.GetString([System.IO.File]::ReadAllBytes($exePath))
-          $unbundled = $libraries | Where-Object { $bundle.IndexOf($_, [StringComparison]::Ordinal) -lt 0 }
-          if ($unbundled) {
-            throw "The single-file EXE does not bundle $($unbundled -join ', '). IncludeNativeLibrariesForSelfExtract only picks up items marked AssetType=native."
+          $embedded = @(
+            $legacyTokens | Where-Object {
+              $bundle.IndexOf($_, [StringComparison]::OrdinalIgnoreCase) -ge 0
+            }
+          )
+          if ($embedded.Count -gt 0) {
+            throw "Legacy codec artifacts remain in the single-file bundle: $($embedded -join ', ')"
           }
 
-          Write-Host "Both assets carry $($libraries -join ', ')."
+          Write-Host 'Portable and single-file outputs contain only the native Windows media path.'
 
       # As in ci.yml: no MSI or setup bundle until phase 4 adds packaging/*.wxs. Pin WiX to
       # v5 when it arrives — v6+ requires accepting the Open Source Maintenance Fee EULA,
@@ -237,7 +243,7 @@ jobs:
           $extraArgs += @(
             '--generate-notes'
             '--notes'
-            "Build version: $version`nCommit: $targetSha`nRuntime: $env:RUNTIME_ID`nFFmpeg 8.1.1 shared libraries are bundled in both assets (GPLv3, see THIRD-PARTY-NOTICES.md)."
+            "Build version: $version`nCommit: $targetSha`nRuntime: $env:RUNTIME_ID`nVideo uses Windows Media Foundation H.264 and system audio uses WASAPI + Opus; no external codec runtime is bundled."
           )
 
           $assets = @(

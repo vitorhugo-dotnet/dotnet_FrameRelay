@@ -5,8 +5,10 @@ namespace SonicDesktopRelay.Media;
 /// <see cref="SampleEncoded"/>, so adding the fourth viewer costs a subscription rather than
 /// a fourth encoder.
 /// </summary>
-public sealed class ScreenPublishPipeline(IScreenCaptureSource capture, IVideoEncoder encoder)
-    : IAsyncDisposable
+public sealed class ScreenPublishPipeline(
+    IScreenCaptureSource capture,
+    IVideoEncoder encoder,
+    MediaSessionClock? clock = null) : IAsyncDisposable
 {
     private bool _running;
 
@@ -58,7 +60,10 @@ public sealed class ScreenPublishPipeline(IScreenCaptureSource capture, IVideoEn
         EncodedVideoSample? sample;
         try
         {
-            sample = encoder.Encode(frame, Quality);
+            var stampedFrame = clock is null
+                ? frame
+                : new VideoFrame(frame.Width, frame.Height, frame.Bgra, clock.Now);
+            sample = encoder.Encode(stampedFrame, Quality);
         }
         catch (Exception e)
         {

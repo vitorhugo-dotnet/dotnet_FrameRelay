@@ -1,375 +1,152 @@
-# Screen publishing
+# Screen publishing and watching
 
-How SonicDesktopRelay gets a monitor onto other people's screens, and what has to be true on
-the machine for it to work.
+The Windows client uses the operating system media stack end to end. Capture, encode and audio
+capture happen once per publishing session; encoded samples are then fanned out to each viewer.
 
-## One capture, one encode, N viewers
+## Publishing pipeline
 
+```text
+Windows.Graphics.Capture
+        |
+        v
+      BGRA
+        |
+        v
+   BGRA -> NV12
+        |
+        v
+Media Foundation H.264 encoder ----+
+                                   |
+WASAPI loopback -> PCM -> Opus ----+--> SIPSorcery WebRTC --> viewers
 ```
-GraphicsCaptureScreenSource  ──frames──▶  ScreenPublishPipeline  ──encoded sample──▶  VideoPublisher
-       (one per session)                   (FFmpegH264Encoder,             │            (one peer per viewer)
-                                            one per session)               ├──▶ peer A
-                                                                           ├──▶ peer B
-                                                                           └──▶ peer C
-```
 
-The capture source and the encoder are created **once per session**, never once per viewer.
-`ScreenPublishPipeline` raises a single `SampleEncoded` event and `VideoPublisher` hands that
-one `EncodedVideoSample` to every peer connection it owns. The fourth viewer therefore costs a
-subscription and an RTP send, not a fourth GPU encode session — which matters because consumer
-NVENC caps concurrent encode sessions, and because a second 1080p30 encode is roughly a second
-CPU or GPU core.
+`GraphicsCaptureScreenSource` is the only screen source. `ScreenPublishPipeline` owns one
+`IVideoEncoder` for the entire session, so adding viewers adds peer subscriptions rather than
+additional encoders.
 
-`ScreenPublishPipelineTests.One_encode_serves_every_subscriber` and
-`VideoPublisherTests.Every_viewer_receives_the_same_encoded_sample` assert this directly: three
-subscribers, one `Encode` call. If either ever fails, the design has been broken.
+### Encoder selection
 
-The consequence is that **quality is a property of the session, not of a connection**. There is
-one target for everyone, so the worst link sets it for all of them (see the ladder below). The
-alternative — a per-viewer target — is a per-viewer encode, which is exactly what this design
-exists to avoid. Simulcast and SVC are a later phase.
+`MediaFoundationH264Encoder` enumerates H.264 Media Foundation transforms in this order:
 
-## Capture
+1. hardware transforms;
+2. system software transforms.
 
-`GraphicsCaptureScreenSource` uses Windows.Graphics.Capture:
+A candidate is accepted only after it can be configured for the requested NV12 -> H.264
+low-latency contract. Asynchronous hardware transforms are driven through
+`MediaFoundationAsyncMftPump`. Every rejected candidate is retained with its reason for
+Diagnostics.
 
-- `GraphicsCaptureSession.IsSupported()` gates everything; it is exposed as
-  `GraphicsCaptureScreenSource.IsSupported` and every caller must check it.
-- The monitor is resolved from `MonitorInfo.Id` (the device name, `\\.\DISPLAY1`) back to an
-  `HMONITOR`, and a `GraphicsCaptureItem` is created through `IGraphicsCaptureItemInterop`.
-- The frame pool is free-threaded with two buffers. Frames arrive on a pool thread.
-- Each frame's D3D surface is copied into a reused staging texture, mapped, and copied out row
-  by row. **The mapped row pitch is not `width * 4`** — D3D pads rows — so copying the block
-  whole produces a sheared image.
-- The `byte[]` handed to `FrameCaptured` is reused between frames. At 1080p30 a fresh array per
-  frame is about 250 MB/s of garbage. Subscribers must consume it before returning; the pipeline
-  encodes synchronously, which is what makes that safe.
-- A resolution change mid-session recreates the pool rather than ending the session.
-- The cursor is captured (`IsCursorCaptureEnabled = true`) — a screen share without the pointer
-  is markedly harder to follow.
-- Delivery is throttled to the session's frame rate: the compositor can deliver well above it,
-  and dropping here is far cheaper than encoding and discarding later.
+The encoder output is normalized to Annex B access units. A fresh encoder and a requested
+recovery frame produce an IDR access unit containing the parameter sets needed by a fresh
+decoder. Resolution or quality changes reopen/reconfigure the native transform and force a
+random-access frame.
 
-Monitors come from `MonitorEnumerator`, which is `EnumDisplayMonitors` + `GetMonitorInfoW`. The
-device name is the id because it is stable across restarts and round-trips to an `HMONITOR`.
+## System audio
 
-## Encoder selection
+`WasapiLoopbackAudioSource` captures the active render endpoint. The publishing path normalizes
+audio to the RTC contract and `OpusAudioCodec` sends 48 kHz stereo Opus on the same peer
+connection as video.
 
-`FFmpegH264Encoder` tries these in order and takes the first that **actually opens**:
+Video is required for a screen-sharing session. System audio is degradable: if the endpoint
+cannot be opened or disappears, video continues and Diagnostics records the audio reason.
 
-1. `h264_nvenc`
-2. `h264_qsv`
-3. `h264_amf`
-4. `libx264`
+## One clock for audio and video
 
-Each candidate is tried by allocating and opening a real 1280×720 encoder context. Merely
-finding the codec is not enough: a machine can ship NVENC and still fail to open it (no driver,
-or every session slot already in use), and finding that out at construction is far better than
-at the first frame.
-
-The winner is `IVideoEncoder.Name`. Every rejected candidate, with the reason FFmpeg gave, is in
-`FFmpegH264Encoder.RejectionLog`. Both are shown on the **Diagnostics** page, together with the
-FFmpeg directory that was loaded — "why is my CPU pinned" is answered there first (`libx264`
-means every hardware path was rejected).
-
-Measured on the development machine (RTX-class NVIDIA GPU, Intel CPU without a usable QSV
-device, no AMD runtime):
-
-| Candidate | Result |
-|---|---|
-| `h264_nvenc` | opened — **selected** |
-| `h264_qsv` | `avcodec_open2` → -22 (Invalid argument); no usable QSV device |
-| `h264_amf` | `amfrt64.dll` failed to open; no AMD runtime installed |
-| `libx264` | opens; the fallback, never reached here |
-
-### Tuning
-
-The GOP is effectively infinite and scene-change detection is off. Screen content is static for
-long stretches, so periodic keyframes are wasted bytes; keyframes are emitted **on demand only**,
-triggered by a viewer's PLI/FIR or by a quality change.
-
-`RequestKeyFrame()` sets `AV_PICTURE_TYPE_I` on the next frame. NVENC needs `forced-idr=1` for
-that to produce a real IDR — without it you get an I-frame that is not an IDR, viewers that lost
-sync stay broken, and the packet is not even flagged as a keyframe. QSV and AMF get the
-equivalent `forced_idr`.
-
-BGRA → YUV420P conversion and scaling happen in one `sws_scale` pass. Output dimensions are
-always even: H.264 4:2:0 chroma subsampling cannot represent odd ones.
-
-## FFmpeg requirement
-
-**FFmpeg 8.1, shared build.** `FFmpeg.AutoGen` 8.1.0 binds to the FFmpeg 8.1 ABI.
-
-Those bindings are used directly rather than through `SIPSorceryMedia.FFmpeg`, which used to
-wrap them here. Its initialiser registers capture devices, and that one call pulls in avdevice,
-avfilter and avformat — 130 MB of libraries for a path this app never takes, since it captures
-through Windows.Graphics.Capture and encodes through avcodec. `FFmpegLoader` does the two things
-that were actually wanted from it: set `ffmpeg.RootPath`, and call
-`DynamicallyLoadedBindings.Initialize()`. That second call is not optional — every `ffmpeg.*`
-function is a delegate that stays null until it runs, so omitting it turns the first FFmpeg call
-into a null dereference. Binding stays lazy afterwards: a function is resolved, and its library
-loaded, the first time it is called, which is why shipping a subset of the libraries works.
-
-A directory is accepted only if it contains **`avcodec-62.dll` and `avutil-60.dll`** — the
-FFmpeg 8.x SONAMEs. This check is on the file names rather than the folder name on purpose:
-FFmpeg 9 ships `avcodec-63.dll`, is ABI-incompatible, and loading it fails later as an opaque
-`DllNotFoundException` or a crash inside native code. **Do not "upgrade" to 9.x.**
-
-### The runtime is bundled
-
-Nobody installs FFmpeg to use SonicDesktopRelay. The build embeds it, and both release assets
-carry it: the portable ZIP has the DLLs beside `SonicDesktopRelay.App.exe`, and the single-file
-EXE has them inside the bundle, extracted by the host on launch.
-
-`build/FFmpeg.props` pins what gets embedded — version, download URL, SHA-256.
-`build/FFmpegAcquisition.targets` fetches it and is imported by `SonicDesktopRelay.Media.Windows`
-alone, so the download has exactly one owner rather than racing two consumers against the same
-cache file; both consumers reference that project, so it has already run by the time they build.
-`build/FFmpeg.targets` then ships what was fetched, imported by `SonicDesktopRelay.App` and by
-`SonicDesktopRelay.Media.Windows.Tests`. Together they:
-
-1. Download `ffmpeg-8.1.1-full_build-shared.zip` once into `artifacts/ffmpeg/` (git-ignored,
-   cached by CI on the contents of `FFmpeg.props`).
-2. Fail the build if its SHA-256 is not the pinned one, deleting the bad archive so the next
-   build re-fetches rather than re-failing.
-3. Unpack only `avcodec-62.dll`, `avutil-60.dll`, `swresample-6.dll` and `swscale-9.dll`.
-   That set is closed under `FFmpeg.AutoGen`'s dependency map for everything this app calls:
-   avcodec needs avutil and swresample, swscale needs avutil. avfilter alone is 109 MB and
-   nothing here builds a filter graph; avdevice enumerates capture devices, which this app does
-   through Windows.Graphics.Capture instead.
-4. Copy them beside the build output, and add them to the publish list as `AssetType=native` so
-   `IncludeNativeLibrariesForSelfExtract` pulls them into the single-file EXE.
-
-Two build-time knobs:
-
-| Property | Effect |
-|---|---|
-| `-p:EmbedFFmpegRuntime=false` | Embed nothing; the app falls back to a system install, as it did before. |
-| `-p:FFmpegRuntimeDirectory=<folder>` | Embed the libraries from an existing shared build instead of downloading — for an offline agent, or to ship an LGPL build. |
-
-The bundled build is GPL v3. [THIRD-PARTY-NOTICES.md](../THIRD-PARTY-NOTICES.md) covers what
-that means for redistribution and what the alternatives cost.
-
-### The search order
-
-`FFmpegLoader` searches, in order:
-
-1. `SONICDESKTOPRELAY_FFMPEG_PATH` — the escape hatch for a non-standard install.
-2. `AppContext.BaseDirectory` — the embedded runtime, in a normal or portable build.
-3. Every directory in `NATIVE_DLL_SEARCH_DIRECTORIES` — the embedded runtime again, this time
-   in a single-file EXE. The host extracts bundled native libraries to a temporary folder and
-   names it there; `AppContext.BaseDirectory` still points at the EXE, so probing that alone
-   would miss it.
-4. The directory holding the running executable, and an `ffmpeg` folder inside either it or
-   `AppContext.BaseDirectory`.
-5. `%LOCALAPPDATA%\Microsoft\WinGet\Packages\Gyan.FFmpeg.Shared_*\ffmpeg-*-full_build-shared\bin`.
-6. Every entry on `PATH`.
-
-Steps 2 to 4 are the shipped runtime; 5 and 6 are what a source build or an
-`EmbedFFmpegRuntime=false` build lands on. It is idempotent and thread-safe, and returns
-`false` with a human-readable reason rather than throwing: "no FFmpeg" is still a supported
-state. The app runs, it just cannot share, and Diagnostics has to be able to say why.
-
-To install a system-wide build for an `EmbedFFmpegRuntime=false` build:
-
-```powershell
-winget install Gyan.FFmpeg.Shared
-```
+A publishing host creates one `MediaSessionClock` and passes it to both the video and audio
+pipelines. Timestamps are assigned at pipeline ingress so both streams share the same monotonic
+origin instead of inheriting unrelated device clocks.
 
 ## Quality ladder
 
-One global target per session, degraded by the worst viewer's RTCP:
+The session uses one global quality target. Sustained packet loss can reduce it for every viewer:
 
 | Rung | Height | FPS | Target bitrate |
-|---|---|---|---|
-| 0 (default) | 1080 | 30 | 4 Mbit/s |
+|---|---:|---:|---:|
+| 0 | 1080 | 30 | 4 Mbit/s |
 | 1 | 720 | 30 | 2 Mbit/s |
 | 2 | 540 | 20 | 1 Mbit/s |
-| 3 (floor) | 360 | 15 | 600 kbit/s |
+| 3 | 360 | 15 | 600 kbit/s |
 
-A viewer reporting an RTCP inbound-loss fraction of **5% or more** steps the session down one
-rung. Below that, loss is ordinary internet weather and reacting to it would make the picture
-worse for everyone over nothing. Degrading terminates at the floor: a session on a bad link
-settles at 360p rather than spiralling. Every step down also forces a keyframe, because the
-dimensions change and viewers would otherwise decode garbage until one happened to arrive.
+Scaling preserves aspect ratio, never upscales, and keeps dimensions compatible with 4:2:0
+chroma. A quality reduction also requests a keyframe so viewers can resynchronize immediately.
 
-Scaling never upscales, preserves aspect ratio, and rounds both dimensions down to even.
+## Watching pipeline
 
-## Negotiation
+```text
+SIPSorcery WebRTC -> H.264 access unit -> Media Foundation decoder
+                                           |
+                                           v
+                                          NV12
+                                           |
+                                           v
+                                          BGRA -> VideoSurface
 
-`SipSorceryPeerConnection` wraps one SIPSorcery `RTCPeerConnection` per viewer with a single
-**`sendonly`** H.264 track (payload type 96, `packetization-mode=1`). This phase publishes and
-receives nothing back. ICE servers come from `GET /api/webrtc/ice-servers`;
-`IceServerSettings.ForceRelay` maps to `RTCIceTransportPolicy.relay`.
-
-Frames that arrive while a particular viewer is still negotiating are dropped quietly. That
-viewer has no decoder yet, and throwing would take down the capture loop every other viewer
-depends on.
-
-Signaling flow, per viewer, over the existing session socket:
-
-1. `session.joined` → `VideoPublisher.AddViewerAsync` creates the peer, sends `publisher.ready`,
-   then `webrtc.offer`. That order is what `dotnet_SonicRelay/docs/protocol.md` specifies: the
-   `publisher.ready` frame is how a viewer learns which participant is the publisher, from the
-   server-authenticated `from` rather than from anything a peer claims about itself.
-2. Gathered ICE candidates go out as `webrtc.ice_candidate`.
-3. `webrtc.answer` and inbound `webrtc.ice_candidate` are routed back to that participant's peer.
-4. `session.left` disposes the peer. `participant.disconnected` does **not** — that means
-   "transiently unreachable", and tearing the peer down would force a full renegotiation for a
-   viewer that is about to come back.
-
-## Known limits of this phase
-
-- One monitor at a time. No window or region capture.
-- No audio. `WASAPI` is a later phase.
-- No simulcast or SVC — one encode, one quality, for everyone.
-- The offer advertises `transport-cc` but not `nack pli` as an `rtcp-fb` attribute, because
-  SIPSorcery generates the media line. PLI-driven keyframes therefore depend on the viewer
-  sending one anyway; the `connected` transition also forces a keyframe, which covers the join
-  case.
-- Never log SDP, ICE candidates, or frame contents.
-
----
-
-# Watching a shared screen
-
-The mirror image of everything above: receive, decode, render.
-
-```
-SipSorceryViewerPeerConnection ──encoded sample──▶ ScreenWatchPipeline ──VideoFrame──▶ VideoSurface
-      (one per session)                            (FFmpegH264Decoder,                 (one recycled
-                                                    one per session)                    WriteableBitmap)
+SIPSorcery WebRTC -> Opus -> PCM -> WASAPI render endpoint
 ```
 
-One publisher means one peer connection, one decoder and one pipeline. Nothing here fans out,
-which is why the viewer side is the simpler half.
+`MediaFoundationH264Decoder` enumerates native H.264 decoders hardware-first and then software.
+Candidates that cannot satisfy the supported transform contract are rejected and recorded.
+Output is selected as NV12 and converted into a reusable BGRA buffer.
 
-## Negotiation, from the viewer's end
+The decoder:
 
-`VideoSubscriber` owns the single peer and the whole viewer half of signaling:
+- accepts the publisher's Annex B access units;
+- returns `null` for corrupt/lost input rather than terminating the session;
+- handles a mid-stream resolution change by rebuilding the transform state;
+- reuses the BGRA conversion buffer for frames with unchanged geometry;
+- reports the live transform name, CLSID, acceleration type, formats and candidate rejections.
 
-1. `publisher.ready` → learn the publisher's `participantId` **from the authenticated `from`
-   field**, never from the payload, and reply `viewer.ready`.
-2. `webrtc.offer` → create the peer on first use, `setRemoteDescription`, `createAnswer`,
-   `setLocalDescription`, send `webrtc.answer` back to the publisher.
-3. Gathered candidates go out as `webrtc.ice_candidate`; inbound ones are applied.
-4. A later offer is a **renegotiation** and lands on the same peer. The publisher renegotiates
-   when the monitor resolution changes, and building a second peer would leak the first.
+The UI hand-off is synchronous because the decoder owns and reuses the BGRA buffer. Posting a
+reference asynchronously would allow the decode thread to overwrite pixels before Avalonia has
+blitted them.
 
-Every frame whose `from` is not the publisher is dropped. A session can hold other viewers, and
-none of them may drive this connection.
+## WebRTC and signaling
 
-The subscriber also accepts the authenticated sender of the **first offer** as the publisher,
-when no `publisher.ready` has arrived. That tolerance exists because phase 2 originally shipped
-a publisher that skipped `publisher.ready` and offered straight off `session.joined` — a viewer
-built strictly to the documented handshake would have ignored every offer this app's own
-publisher sent, while every unit test on both sides passed. The publisher was fixed to send it;
-the fallback stays, because a contract you can only satisfy by reading the other half's source
-is not a contract, and some future publisher will get this wrong again.
+Each viewer gets one SIPSorcery peer connection. The publisher sends one H.264 track and one
+Opus track. ICE configuration comes from `GET /api/webrtc/ice-servers` and the client keeps
+`ForceRelay=false`, so direct/STUN connectivity is attempted first and TURN is a fallback.
 
-`SipSorceryViewerPeerConnection` holds a single **`recvonly`** H.264 track (payload type 96,
-`packetization-mode=1`) and takes frames from `OnVideoFrameReceived` — SIPSorcery reassembles
-RTP into whole access units and hands them over **still encoded**. Decoding is this project's
-job: the decoder has to be ours for the Diagnostics page to be able to name it.
+Signaling uses the existing session WebSocket:
 
-There is **no audio track** in this phase. The publisher does not send one until phase 4, so a
-viewer-side audio path would have nothing to play.
+1. publisher announces readiness;
+2. publisher sends an offer;
+3. viewer answers;
+4. both sides exchange ICE candidates;
+5. RTP/RTCP carries H.264 and Opus.
 
-## Decoder selection
+A publisher encodes once regardless of viewer count. A viewer owns exactly one decoder and one
+audio sink.
 
-`FFmpegH264Decoder` uses the **software `h264` decoder**, and that is a deliberate choice
-rather than a missing feature.
+## Diagnostics
 
-| Candidate | Result |
-|---|---|
-| `h264_cuvid` | opens and decodes correctly — **rejected anyway**, see below |
-| `h264_qsv` | same buffering behaviour through its async pipeline; rejected for the same reason |
-| `h264` | **selected** |
+The Diagnostics page reports runtime state rather than probing a second codec instance:
 
-NVDEC's parser will not release a picture until the *next* packet arrives to close it. Neither
-`AV_CODEC_FLAG_LOW_DELAY` nor `surfaces=1` changes that; it was measured, not assumed. On
-ordinary video that costs latency only. On a **shared screen** it costs correctness: the picture
-is static for long stretches and the publisher only encodes when something moves, so the viewer
-would sit on the second-to-last frame indefinitely — showing a stale window the moment the user
-stopped moving, and only catching up when they moved again. Software H.264 at 1080p30 costs a
-few percent of one core, which is a very cheap price for a picture that is actually current.
+- capture backend;
+- selected Media Foundation encoder/decoder transform;
+- transform CLSID and hardware/software path;
+- input/output pixel formats;
+- active video geometry, frame rate and bitrate when available;
+- rejected transform candidates and reasons;
+- WASAPI capture/render endpoint state;
+- Opus encoder/decoder state;
+- session and bounded signaling metadata.
 
-The decoder is opened by actually opening a context, as the encoder is, and the rejection log is
-on the Diagnostics page beside the encoder's.
+Diagnostics never record SDP bodies, ICE candidate contents, credentials or media payloads.
 
-Frame threading is off (`FF_THREAD_SLICE` only) for the same reason: frame threading holds
-several pictures back before emitting the first.
+## Failure model
 
-## No allocation per frame
+- Failure to start capture or H.264 video is terminal for sharing/watching and is surfaced as
+  `media_unavailable`.
+- Audio startup/runtime failure degrades audio only.
+- Decoder corruption/loss drops the affected frame and waits for recovery rather than tearing
+  down the session.
+- A viewer stall is media state, not signaling state, and can request one recovery keyframe.
 
-This is the phase's defining constraint, the way encode-once was phase 2's. At 1080p30 a fresh
-1080p BGRA buffer per frame is roughly **250 MB/s of garbage**, and the GC pauses that buys show
-up as stutter in exactly the content people notice it in.
+## Packaging
 
-Three buffers exist, all reused and rebuilt only when the picture size changes:
+The application relies on Windows Media Foundation and WASAPI already present in the supported
+operating system. Release packaging therefore contains no separately acquired video-codec DLL
+set. CI checks both the portable folder and single-file executable for legacy codec artifacts.
 
-- the decoder's **input staging buffer** — FFmpeg reads up to `AV_INPUT_BUFFER_PADDING_SIZE`
-  bytes past the end of a packet, so packets are staged rather than pinned in place;
-- the decoder's **BGRA output buffer**, the `sws_scale` target, handed out inside the
-  `VideoFrame` exactly as `GraphicsCaptureScreenSource` hands out its capture buffer — consumers
-  must blit before returning;
-- the surface's **`WriteableBitmap`**, recreated only when the frame size differs from the
-  current one.
-
-Because the decoder's output buffer is reused, the hand-off to the UI thread is
-`Dispatcher.UIThread.**Invoke**`, not `Post`. Posting would let the decode thread write the next
-frame over the buffer before the UI thread had blitted this one — tearing under exactly the load
-that makes it hardest to diagnose. Blocking there costs one memcpy of decode throughput and
-applies backpressure to the receive side, which is the right thing to give up.
-
-`FFmpegH264DecoderTests.The_conversion_buffer_is_reused_between_frames_of_the_same_size` asserts
-the middle one directly, by identity. If it ever fails, the design has been broken.
-
-## Threads
-
-Decoding must not happen on the UI thread; rendering must. Samples arrive on a SIPSorcery
-receive thread, are decoded there, and cross to the UI thread exactly once, at
-`Shell.PublishFrame`, which posts through `Dispatcher.UIThread` the way the shell already does
-for snapshots. `VideoSurface.Present` asserts it with `Dispatcher.UIThread.VerifyAccess()`.
-
-## Stalled is not disconnected
-
-`WatchState` has four values: `Waiting`, `Receiving`, `Stalled`, `Failed`.
-
-A **stall** is four seconds without a decoded frame. It is reported as its own state and never
-as a disconnection, because the peer connection can be perfectly healthy while the media has
-stopped — a frozen publisher, a wedged encoder, a path that has quietly stopped delivering. The
-two have different causes and different fixes, and calling a stall "disconnected" sends the user
-to check their network when the publisher's screen is the thing that has gone quiet.
-
-A stall also changes `SessionSnapshot.Watching`, **never** `SessionSnapshot.Phase`: the session
-is fine, the media is not.
-
-Every stall asks the publisher for exactly **one** keyframe, not one per watchdog tick.
-Flooding a publisher with PLIs is the worst thing to do to a link that is already failing to
-deliver. The ask is re-armed by the next frame that actually decodes.
-
-The pipeline holds no clock of its own — `RtcVideoWatchHost` ticks `CheckForStall()` once a
-second — which is what makes the whole watchdog testable over a `FakeTimeProvider`.
-
-## The picture
-
-`LetterboxGeometry.Fit` lives in `Presentation`, not in the control: it is pure arithmetic, it
-is where the bugs live, and there it is testable without a window. It picks the smaller of the
-width and height scale factors and centres the result, so the picture is letterboxed and
-**never stretched** — a distorted screen share is worse than black bars, because text stops
-being readable and nobody can tell why.
-
-`F11` fills the window with the picture and hides the navigation rail; `Esc` comes back. The key
-is handled on the window rather than on the surface, because a video surface is not focusable
-and nobody expects to have to click the picture first.
-
-## Known limits of this phase
-
-- Software decode only, for the reason above. A zero-delay hardware decoder would be a drop-in
-  addition to the candidate list.
-- No audio, either direction. Phase 4.
-- No jitter buffer and no reordering beyond what SIPSorcery's depacketiser does. A lost packet
-  produces a dropped frame and, eventually, a stall and a PLI.
-- The viewer never renegotiates on its own; it only answers.
-- Never log SDP, ICE candidates, or frame contents.
+See [native-media-validation.md](native-media-validation.md) for the automated and manual
+validation matrix.

@@ -68,6 +68,7 @@ public sealed class VideoPublisherPacketLossTests
         public Task ApplyAnswerAsync(string sdp, CancellationToken ct) => Task.CompletedTask;
         public Task AddIceCandidateAsync(string candidate, string? sdpMid, int? sdpMLineIndex, CancellationToken ct) => Task.CompletedTask;
         public void SendVideo(EncodedVideoSample sample) { }
+        public void SendAudio(EncodedAudioSample sample) { }
         public void ReportPacketLoss(double loss) => PacketLossReported?.Invoke(loss);
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }

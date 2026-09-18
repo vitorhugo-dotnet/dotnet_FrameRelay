@@ -26,10 +26,44 @@ The Windows media integration suite must exercise, not merely discover:
 - decoder handles a mid-stream resolution change;
 - decoder reuses its BGRA conversion buffer;
 - decoder diagnostics project the live transform and rejection log;
+- decoder output-sample ownership tests cover caller-required, caller-optional, and MFT-provided allocation paths without duplicate sample disposal;
+- sustained decode runs beyond the previous 401-access-unit / 396-frame terminal failure point;
 - audio/video publishing share the same `MediaSessionClock`.
 
 The CI job also rejects tracked legacy codec files/references outside historical
 `docs/superpowers/plans` and `docs/superpowers/specs`.
+
+## Decoder output sample ownership
+
+`IMFTransform::ProcessOutput` has three output allocation cases:
+
+- `MFT_OUTPUT_STREAM_PROVIDES_SAMPLES`: pass `pSample = NULL`; the MFT supplies the sample.
+- `MFT_OUTPUT_STREAM_CAN_PROVIDE_SAMPLES`: either side may supply it. FrameRelay deliberately
+  supplies a correctly-sized sample to preserve the existing decode path.
+- neither flag: FrameRelay must allocate and supply the output sample.
+
+Vortice.MediaFoundation 3.8.3 is generated with SharpGenTools 2.4.2-beta. For interface
+fields inside marshalled structs, SharpGen's native-to-managed step constructs a new managed
+wrapper around the returned native pointer without adding a COM reference. Therefore a
+caller-supplied `IMFSample` and `OutputDataBuffer.Sample` can be different managed objects
+while representing the same single caller-owned COM reference.
+
+The decoder must never infer native ownership from managed `ReferenceEquals`. Caller-owned
+paths release the original caller sample exactly once and neutralize the returned non-owning
+wrapper. MFT-owned paths release the returned sample exactly once. `output.Events` is an
+independent COM reference and is always released independently when present.
+
+A useful reproduction log should show the selected `streamFlags`, `providesSamples`,
+`canProvideSamples`, `allocationMode`, whether the caller supplied a sample, the
+`ProcessOutput` HRESULT/status, whether a sample was returned, native-pointer alias evidence,
+and the final cleanup path. Per-output detail is Trace-level; allocation selection is Debug-level.
+
+References:
+
+- https://learn.microsoft.com/windows/win32/api/mftransform/nf-mftransform-imftransform-processoutput
+- https://learn.microsoft.com/windows/win32/api/mftransform/ns-mftransform-mft_output_data_buffer
+- https://learn.microsoft.com/windows/win32/api/mftransform/ns-mftransform-mft_output_stream_info
+- https://github.com/SharpGenTools/SharpGenTools/commit/6990bcafe124a4c22515ad19cee5a081da8db67b
 
 ## Publish-output inspection
 
@@ -55,7 +89,7 @@ On a supported Windows desktop:
 3. Verify Diagnostics identifies hardware or software selection and shows candidate rejection
    reasons when fallback occurs.
 4. Play system audio and verify WASAPI loopback + Opus are active without affecting video.
-5. Join from a second client and verify video decodes/renders and audio plays.
+5. Join from a second client and verify video decodes/renders and audio plays. At 1920x1080, keep continuous screen movement/video playback running for at least two minutes (well beyond the previous ~46 second failure) and verify decoded-frame counters continue increasing without `SEHException` or a `Receiving -> Failed` transition.
 6. Leave the screen static, then resume activity; verify the viewer remains current rather than
    showing a permanently stale frame.
 7. Trigger or simulate packet loss and verify recovery requests a keyframe without restarting the

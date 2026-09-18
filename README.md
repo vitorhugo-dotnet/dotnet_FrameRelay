@@ -50,6 +50,53 @@ formats, geometry/bitrate, candidate rejection reasons, WASAPI endpoint state, O
 session state, and signaling metadata. SDP, ICE candidate contents, credentials, and media
 payloads are not recorded.
 
+## Persistent diagnostic logs
+
+FrameRelay writes local diagnostic logs automatically. They are intended for reproducing issues
+such as a frozen picture, decoder failure, signaling reconnect, or a frame that reaches WebRTC
+but never reaches the Avalonia surface.
+
+Logs are stored per Windows user under:
+
+```text
+%LOCALAPPDATA%\FrameRelay\logs\
+```
+
+The Diagnostics screen also displays the resolved log directory for the current machine.
+
+A new rolling file is used for each day:
+
+```text
+FrameRelay-YYYYMMDD.log
+```
+
+The file sink keeps the most recent 14 daily log files. Logging is enabled from Trace through
+Critical severity. Because Serilog names the .NET Trace level `Verbose`, Trace entries appear as
+`[VRB]` in the file.
+
+Each entry includes a timestamp, severity, logger/source context, managed thread id, structured
+properties, and exception details when present. Unhandled process exceptions, unobserved Task
+exceptions, and unhandled Avalonia UI-thread exceptions are also recorded.
+
+Media diagnostics include enough boundary information to determine where a video session stopped
+making progress, including capture/encode counts, received H.264 access units, keyframes,
+decoder results and failures, recovery keyframe requests, decoded frames, UI delivery, surface
+presentation, and sampled render activity. Media Foundation failures include the decoder stage,
+exception type, HRESULT, and stack trace where available.
+
+Signaling and WebRTC logging is metadata-only. FrameRelay does **not** write SDP bodies, ICE
+candidate contents, credentials, or audio/video payloads to the diagnostic log.
+
+To open the log directory from PowerShell:
+
+```powershell
+explorer.exe "$env:LOCALAPPDATA\FrameRelay\logs"
+```
+
+When reporting a media freeze, reproduce the problem first and attach the log file for that day.
+The most useful comparison is whether received access-unit counters keep increasing after decoded,
+UI-delivered, or rendered-frame counters stop.
+
 ## Projects
 
 | Project | Target | Responsibility |

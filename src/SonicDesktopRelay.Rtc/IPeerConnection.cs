@@ -18,6 +18,11 @@ public interface IPeerConnection : IAsyncDisposable
     /// <summary>Inbound-loss ratio this viewer reported over RTCP, 0..1.</summary>
     event Action<double>? PacketLossReported;
 
+    /// <summary>Safe metadata for the nominated ICE pair once one exists.</summary>
+    event Action<RtcTransportDiagnostics>? TransportDiagnosticsChanged;
+
+    RtcTransportDiagnostics? TransportDiagnostics { get; }
+
     Task<string> CreateOfferAsync(CancellationToken ct);
 
     Task ApplyAnswerAsync(string sdp, CancellationToken ct);

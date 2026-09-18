@@ -44,7 +44,7 @@ public sealed class VideoPublisher(
             if (loss > 0)
                 pipeline.RequestKeyFrame(KeyFrameRequestReason.PacketLoss);
 
-            pipeline.ReportReception(loss);
+            pipeline.ReportReception(participantId, loss);
         };
 
         EnsureSubscribed();
@@ -63,6 +63,7 @@ public sealed class VideoPublisher(
 
     public async Task RemoveViewerAsync(Guid participantId)
     {
+        pipeline.RemoveReceptionSource(participantId);
         if (!_peers.TryRemove(participantId, out var peer)) return;
         await peer.DisposeAsync();
     }

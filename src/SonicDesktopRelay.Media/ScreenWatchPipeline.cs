@@ -33,8 +33,13 @@ public sealed class ScreenWatchPipeline(
         logger ?? NullLogger<ScreenWatchPipeline>.Instance;
 
     private DateTimeOffset? _lastFrameAt;
+    private long _lastAccessUnitUtcTicks;
     private long _videoAccessUnitsReceived;
     private long _decodedFrames;
+    private long _keyAccessUnitsReceived;
+    private long _nullDecodeResults;
+    private long _keyFrameRequests;
+    private long _maximumAccessUnitBytes;
     private bool _decodeRecoveryAsked;
     private bool _stallKeyFrameAsked;
     private WatchState _state = WatchState.Waiting;
@@ -53,6 +58,23 @@ public sealed class ScreenWatchPipeline(
 
     public long DecodedFrames => Interlocked.Read(ref _decodedFrames);
 
+    public long KeyAccessUnitsReceived => Interlocked.Read(ref _keyAccessUnitsReceived);
+
+    public long NullDecodeResults => Interlocked.Read(ref _nullDecodeResults);
+
+    public long KeyFrameRequests => Interlocked.Read(ref _keyFrameRequests);
+
+    public long MaximumAccessUnitBytes => Interlocked.Read(ref _maximumAccessUnitBytes);
+
+    public DateTimeOffset? LastAccessUnitAt
+    {
+        get
+        {
+            var ticks = Interlocked.Read(ref _lastAccessUnitUtcTicks);
+            return ticks == 0 ? null : new DateTimeOffset(ticks, TimeSpan.Zero);
+        }
+    }
+
     public DateTimeOffset? LastDecodedFrameAt => _lastFrameAt;
 
     /// <summary>
@@ -64,6 +86,14 @@ public sealed class ScreenWatchPipeline(
     public void Submit(EncodedVideoSample sample)
     {
         Interlocked.Increment(ref _videoAccessUnitsReceived);
+        Interlocked.Exchange(ref _lastAccessUnitUtcTicks, time.GetUtcNow().UtcTicks);
+        UpdateMaximum(ref _maximumAccessUnitBytes, sample.Data.Length);
+        if (sample.IsKeyFrame)
+            Interlocked.Increment(ref _keyAccessUnitsReceived);
+
+        // Keep transport-side counters moving even after a terminal decoder exception. This is
+        // diagnostic-only: it lets the next reproduction prove whether RTP/access units continue
+        // after the visible picture freezes without changing recovery semantics.
         if (_state == WatchState.Failed) return;
 
         VideoFrame? frame;
@@ -93,13 +123,15 @@ public sealed class ScreenWatchPipeline(
 
         if (frame is null)
         {
+            Interlocked.Increment(ref _nullDecodeResults);
+
             // Once decoding has started, a swallowed frame means the decoder lost sync. Ask
             // immediately rather than waiting for the stall timer, but only once until a good
             // frame proves recovery.
             if (_state == WatchState.Receiving && !_decodeRecoveryAsked)
             {
                 _decodeRecoveryAsked = true;
-                KeyFrameNeeded?.Invoke();
+                RequestKeyFrame("decode-null");
             }
 
             return;
@@ -126,7 +158,31 @@ public sealed class ScreenWatchPipeline(
         // is the worst thing to do to a link that is already failing to deliver.
         if (_stallKeyFrameAsked) return;
         _stallKeyFrameAsked = true;
+        RequestKeyFrame("stall");
+    }
+
+    private void RequestKeyFrame(string reason)
+    {
+        Interlocked.Increment(ref _keyFrameRequests);
+        _logger.LogWarning(
+            "Viewer requested a recovery keyframe. reason={Reason} accessUnits={VideoAccessUnits} " +
+            "decodedFrames={DecodedFrames} nullDecodes={NullDecodeResults}",
+            reason,
+            VideoAccessUnitsReceived,
+            DecodedFrames,
+            NullDecodeResults);
         KeyFrameNeeded?.Invoke();
+    }
+
+    private static void UpdateMaximum(ref long target, long candidate)
+    {
+        var current = Interlocked.Read(ref target);
+        while (candidate > current)
+        {
+            var observed = Interlocked.CompareExchange(ref target, candidate, current);
+            if (observed == current) return;
+            current = observed;
+        }
     }
 
     private void SetState(WatchState state)

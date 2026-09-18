@@ -249,6 +249,8 @@ public sealed class VideoPublisherTests
             return Task.CompletedTask;
         }
 
+        public void SetFrameRate(int framesPerSecond) { }
+
         public Task StopAsync() => Task.CompletedTask;
 
         public void Emit() => FrameCaptured?.Invoke(new VideoFrame(1920, 1080, new byte[16], TimeSpan.Zero));

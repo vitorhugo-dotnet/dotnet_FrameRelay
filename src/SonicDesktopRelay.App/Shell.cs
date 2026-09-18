@@ -3,6 +3,8 @@ using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using System.Runtime.Versioning;
 using Avalonia.Threading;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using SonicDesktopRelay.Core;
 using SonicDesktopRelay.Media;
 using SonicDesktopRelay.Media.Windows;
@@ -23,12 +25,15 @@ public sealed class Shell : INotifyPropertyChanged
     private const int DefaultMaxViewers = 3;
 
     private readonly FileBackendAddressStore _backendAddressStore;
+    private readonly ILogger<Shell> _logger;
     private AppComposition? _composition;
     private string _backendAddress;
     private string _deviceName = Environment.MachineName;
     private string? _shellError;
     private MonitorInfo? _selectedMonitor;
     private bool _isVideoFullScreen;
+    private long _uiFramesDelivered;
+    private long _lastUiFrameUtcTicks;
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
@@ -42,9 +47,25 @@ public sealed class Shell : INotifyPropertyChanged
 
     public Shell()
     {
+        _logger = FrameRelayLogging.Current?.LoggerFactory.CreateLogger<Shell>()
+                  ?? NullLogger<Shell>.Instance;
         _backendAddressStore = new FileBackendAddressStore(FileBackendAddressStore.DefaultPath);
         _backendAddress = _backendAddressStore.Read();
         RefreshMonitors();
+    }
+
+    public string LogDirectory =>
+        FrameRelayLogging.Current?.LogDirectory ?? "logging not initialized";
+
+    public long UiFramesDelivered => Interlocked.Read(ref _uiFramesDelivered);
+
+    public DateTimeOffset? LastUiFrameAt
+    {
+        get
+        {
+            var ticks = Interlocked.Read(ref _lastUiFrameUtcTicks);
+            return ticks == 0 ? null : new DateTimeOffset(ticks, TimeSpan.Zero);
+        }
     }
 
     /// <summary>The Diagnostics page's session-runtime snapshot history.</summary>
@@ -174,8 +195,18 @@ public sealed class Shell : INotifyPropertyChanged
             ? "no rejected MFTs"
             : $"rejected MFTs: {string.Join("; ", host.EncoderRejections)}";
 
+        var lastCapture = host.LastCapturedFrameAt?.ToString("HH:mm:ss.fff") ?? "never";
+        var lastEncoded = host.LastEncodedAccessUnitAt?.ToString("HH:mm:ss.fff") ?? "never";
+        var pipelineFailure = string.IsNullOrWhiteSpace(host.VideoPipelineFailure)
+            ? "none"
+            : host.VideoPipelineFailure;
+
         return $"Video: Windows.Graphics.Capture -> Media Foundation H.264 [{transform}] | " +
-               $"Audio: {audio} | viewers={snapshot.ViewerCount} | {rejected}";
+               $"Audio: {audio} | viewers={snapshot.ViewerCount} | " +
+               $"captured={host.FramesCaptured} encoded={host.EncodedAccessUnits} " +
+               $"keyframes={host.KeyframesProduced} keyframeRequests={host.KeyFrameRequests} " +
+               $"maxAccessUnitBytes={host.MaximumAccessUnitBytes} lastCapture={lastCapture} " +
+               $"lastEncoded={lastEncoded} pipelineFailure={pipelineFailure} | {rejected}";
     }
 
     private string WatchStatusText(SessionSnapshot snapshot)
@@ -198,6 +229,9 @@ public sealed class Shell : INotifyPropertyChanged
         var rejected = host.DecoderRejections.Count == 0
             ? "no rejected MFTs"
             : $"rejected MFTs: {string.Join("; ", host.DecoderRejections)}";
+        var lastAccessUnit = host.LastAccessUnitAt is { } accessUnitAt
+            ? accessUnitAt.ToString("HH:mm:ss.fff")
+            : "never";
         var lastFrame = host.LastDecodedFrameAt is { } decodedAt
             ? decodedAt.ToString("HH:mm:ss.fff")
             : "never";
@@ -208,10 +242,16 @@ public sealed class Shell : INotifyPropertyChanged
             ? "none"
             : host.VideoDecoderFailure;
 
+        var lastUiFrame = LastUiFrameAt?.ToString("HH:mm:ss.fff") ?? "never";
+
         return $"Video: Media Foundation H.264 [{transform}] | Audio: {audio} | " +
                $"watch={snapshot.Watching?.ToString() ?? "not watching"} | " +
-               $"videoAccessUnits={host.VideoAccessUnitsReceived} decodedFrames={host.DecodedFrames} " +
-               $"lastFrame={lastFrame} age={frameAge} decoderFailure={decoderFailure} | {rejected}";
+               $"videoAccessUnits={host.VideoAccessUnitsReceived} keyAccessUnits={host.KeyAccessUnitsReceived} " +
+               $"maxAccessUnitBytes={host.MaximumAccessUnitBytes} nullDecodes={host.NullDecodeResults} " +
+               $"keyframeRequests={host.KeyFrameRequests} decodedFrames={host.DecodedFrames} " +
+               $"lastAccessUnit={lastAccessUnit} lastFrame={lastFrame} age={frameAge} " +
+               $"uiFrames={UiFramesDelivered} lastUiFrame={lastUiFrame} " +
+               $"decoderFailure={decoderFailure} | {rejected}";
     }
 
     /// <summary>Refreshes <see cref="Monitors"/> from the OS and keeps a sensible selection.</summary>
@@ -285,6 +325,12 @@ public sealed class Shell : INotifyPropertyChanged
         }
         catch (Exception e) when (e is HttpRequestException or InvalidOperationException or TaskCanceledException)
         {
+            _logger.LogWarning(
+                e,
+                "Shell operation failed. phase={Phase} signaling={Signaling}",
+                ViewModel.Snapshot.Phase,
+                ViewModel.Snapshot.Signaling);
+
             // The runtime already reports refusals the backend explained. What is left is the
             // backend not answering at all, which no session snapshot can describe.
             ShellError = e.Message;
@@ -310,10 +356,23 @@ public sealed class Shell : INotifyPropertyChanged
         try
         {
             Dispatcher.UIThread.Invoke(() => FrameDecoded?.Invoke(frame));
+
+            var delivered = Interlocked.Increment(ref _uiFramesDelivered);
+            Interlocked.Exchange(ref _lastUiFrameUtcTicks, DateTimeOffset.UtcNow.UtcTicks);
+            if (delivered == 1 || delivered % 120 == 0)
+            {
+                _logger.LogTrace(
+                    "Decoded frame delivered to UI. uiFrames={UiFrames} width={Width} height={Height} timestampMs={TimestampMs:F1}",
+                    delivered,
+                    frame.Width,
+                    frame.Height,
+                    frame.Timestamp.TotalMilliseconds);
+            }
         }
         catch (Exception e) when (e is InvalidOperationException or TaskCanceledException
                                       or OperationCanceledException)
         {
+            _logger.LogDebug(e, "Decoded frame could not be delivered because the UI dispatcher is shutting down.");
             // The dispatcher is shutting down: the window is closing and there is nothing left
             // to draw on. A frame in flight at that moment is not a failure.
         }
@@ -321,26 +380,50 @@ public sealed class Shell : INotifyPropertyChanged
 
     // Snapshots arrive on whatever thread the signaling receive loop is running on; bindings
     // and the observable collection are the UI thread's alone.
-    private void OnSnapshot(SessionSnapshot snapshot) => Dispatcher.UIThread.Post(() =>
+    private void OnSnapshot(SessionSnapshot snapshot)
     {
-        ViewModel.Apply(snapshot);
-        Raise(nameof(MediaStatusText));
-        Diagnostics.Insert(0,
-            $"{DateTimeOffset.Now:HH:mm:ss}  {snapshot.Phase}  signaling={snapshot.Signaling}  " +
-            $"session={snapshot.SessionId?.ToString() ?? "-"}  viewers={snapshot.ViewerCount}");
-    });
+        _logger.LogInformation(
+            "Session snapshot. phase={Phase} signaling={Signaling} session={SessionId} viewers={ViewerCount} watching={Watching}",
+            snapshot.Phase,
+            snapshot.Signaling,
+            snapshot.SessionId,
+            snapshot.ViewerCount,
+            snapshot.Watching);
 
-    private void OnSignalingDiagnostic(SignalingDiagnosticEntry entry) => Dispatcher.UIThread.Post(() =>
+        Dispatcher.UIThread.Post(() =>
+        {
+            ViewModel.Apply(snapshot);
+            Raise(nameof(MediaStatusText));
+            Diagnostics.Insert(0,
+                $"{DateTimeOffset.Now:HH:mm:ss}  {snapshot.Phase}  signaling={snapshot.Signaling}  " +
+                $"session={snapshot.SessionId?.ToString() ?? "-"}  viewers={snapshot.ViewerCount}");
+        });
+    }
+
+    private void OnSignalingDiagnostic(SignalingDiagnosticEntry entry)
     {
-        var handled = entry.Handled is { } value ? value.ToString().ToLowerInvariant() : "-";
-        SignalingDiagnostics.Insert(0,
-            $"{entry.Timestamp:HH:mm:ss.fff} {entry.Direction} {entry.Type} " +
-            $"phase={entry.Phase} signaling={entry.Signaling} " +
-            $"from={entry.From?.ToString() ?? "-"} to={entry.To?.ToString() ?? "-"} handled={handled}");
+        _logger.LogTrace(
+            "Signaling envelope metadata. direction={Direction} type={Type} phase={Phase} signaling={Signaling} from={From} to={To} handled={Handled}",
+            entry.Direction,
+            entry.Type,
+            entry.Phase,
+            entry.Signaling,
+            entry.From,
+            entry.To,
+            entry.Handled);
 
-        if (SignalingDiagnostics.Count > SignalingDiagnosticBuffer.DefaultCapacity)
-            SignalingDiagnostics.RemoveAt(SignalingDiagnostics.Count - 1);
-    });
+        Dispatcher.UIThread.Post(() =>
+        {
+            var handled = entry.Handled is { } value ? value.ToString().ToLowerInvariant() : "-";
+            SignalingDiagnostics.Insert(0,
+                $"{entry.Timestamp:HH:mm:ss.fff} {entry.Direction} {entry.Type} " +
+                $"phase={entry.Phase} signaling={entry.Signaling} " +
+                $"from={entry.From?.ToString() ?? "-"} to={entry.To?.ToString() ?? "-"} handled={handled}");
+
+            if (SignalingDiagnostics.Count > SignalingDiagnosticBuffer.DefaultCapacity)
+                SignalingDiagnostics.RemoveAt(SignalingDiagnostics.Count - 1);
+        });
+    }
 
     private void OnVideoDiagnosticsChanged() =>
         Dispatcher.UIThread.Post(() => Raise(nameof(MediaStatusText)));
@@ -350,6 +433,24 @@ public sealed class Shell : INotifyPropertyChanged
         // Capture phase before crossing to the dispatcher: the session snapshot may advance
         // before the posted UI action runs.
         var phase = _composition?.Runtime.Snapshot.Phase ?? ViewModel.Snapshot.Phase;
+
+        var logLevel = entry.ExceptionType is null && !entry.Event.EndsWith(".failed", StringComparison.Ordinal)
+            ? LogLevel.Information
+            : LogLevel.Warning;
+        _logger.Log(
+            logLevel,
+            "Viewer WebRTC diagnostic. event={Event} phase={Phase} signaling={SignalingState} iceGathering={IceGatheringState} iceConnection={IceConnectionState} connection={ConnectionState} from={From} to={To} result={Result} exception={ExceptionType} message={Message}",
+            entry.Event,
+            phase,
+            entry.SignalingState,
+            entry.IceGatheringState,
+            entry.IceConnectionState,
+            entry.ConnectionState,
+            entry.From,
+            entry.To,
+            entry.SetDescriptionResult,
+            entry.ExceptionType,
+            entry.Message);
 
         Dispatcher.UIThread.Post(() =>
         {

@@ -180,6 +180,34 @@ public sealed class ScreenWatchPipelineTests
         Assert.Equal("fake", pipeline.DecoderName);
     }
 
+    [Fact]
+    public void Diagnostics_count_received_access_units_even_when_decoder_produces_no_frame()
+    {
+        var time = new FakeTimeProvider(Start);
+        using var pipeline = new ScreenWatchPipeline(
+            new FakeDecoder { ReturnNull = true },
+            time);
+
+        pipeline.Submit(Sample());
+
+        Assert.Equal(1, pipeline.VideoAccessUnitsReceived);
+        Assert.Equal(0, pipeline.DecodedFrames);
+        Assert.Null(pipeline.LastDecodedFrameAt);
+    }
+
+    [Fact]
+    public void Diagnostics_record_decoded_frames_and_last_frame_time()
+    {
+        var time = new FakeTimeProvider(Start);
+        using var pipeline = new ScreenWatchPipeline(new FakeDecoder(), time);
+
+        pipeline.Submit(Sample());
+
+        Assert.Equal(1, pipeline.VideoAccessUnitsReceived);
+        Assert.Equal(1, pipeline.DecodedFrames);
+        Assert.Equal(Start, pipeline.LastDecodedFrameAt);
+    }
+
     private static EncodedVideoSample Sample() =>
         new(new byte[8], TimeSpan.Zero, true, 1920, 1080);
 

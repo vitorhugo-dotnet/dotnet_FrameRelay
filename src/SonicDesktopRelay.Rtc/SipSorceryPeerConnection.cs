@@ -177,7 +177,8 @@ public sealed class SipSorceryPeerConnection : IPeerConnection
             local.type,
             remote.type,
             local.protocol,
-            remote.protocol);
+            remote.protocol,
+            local.IceServer?.Protocol);
 
         lock (_gate)
         {

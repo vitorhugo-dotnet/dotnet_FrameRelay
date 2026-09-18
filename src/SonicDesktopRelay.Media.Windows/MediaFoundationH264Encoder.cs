@@ -144,11 +144,12 @@ public sealed class MediaFoundationH264Encoder : IVideoEncoder
                 _forceKeyFrame = false;
             }
 
+            var duration = TimeSpan.FromTicks(TimeSpan.TicksPerSecond / quality.FramesPerSecond);
             var nv12 = _converter.Convert(frame, width, height);
             using var input = CreateInputSample(
                 nv12,
                 frame.Timestamp,
-                TimeSpan.FromTicks(TimeSpan.TicksPerSecond / quality.FramesPerSecond));
+                duration);
 
             if (_asyncPump is not null)
             {
@@ -181,11 +182,11 @@ public sealed class MediaFoundationH264Encoder : IVideoEncoder
                 if (_asyncPump.InputCredits > 0)
                     _asyncInputReady = _asyncPump.TryTakeInput();
 
-                return TryReadOutput(frame.Timestamp, width, height);
+                return TryReadOutput(frame.Timestamp, duration, width, height);
             }
 
             _transform!.ProcessInput(0, input, 0);
-            return TryReadOutput(frame.Timestamp, width, height);
+            return TryReadOutput(frame.Timestamp, duration, width, height);
         }
     }
 
@@ -445,6 +446,7 @@ public sealed class MediaFoundationH264Encoder : IVideoEncoder
 
     private EncodedVideoSample? TryReadOutput(
         TimeSpan timestamp,
+        TimeSpan duration,
         int width,
         int height)
     {
@@ -525,7 +527,7 @@ public sealed class MediaFoundationH264Encoder : IVideoEncoder
                 && clean != 0;
             var keyFrame = cleanPoint || H264AccessUnit.ContainsKeyFrame(annexB);
 
-            return new EncodedVideoSample(annexB, timestamp, keyFrame, width, height);
+            return new EncodedVideoSample(annexB, timestamp, keyFrame, width, height, duration);
         }
         finally
         {

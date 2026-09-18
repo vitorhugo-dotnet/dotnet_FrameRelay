@@ -41,6 +41,7 @@ public sealed class MediaFoundationH264Decoder : IVideoDecoder
     private int _stride;
     private int _outputBufferSize;
     private byte[] _bgra = [];
+    private bool _transportGeometryKnown;
     private bool _configured;
     private bool _disposed;
 
@@ -127,8 +128,13 @@ public sealed class MediaFoundationH264Decoder : IVideoDecoder
 
             try
             {
-                if (!_configured || sample.Width != _visibleWidth || sample.Height != _visibleHeight)
+                var hasTransportGeometry = HasKnownDimensions(sample.Width, sample.Height);
+                if (!_configured ||
+                    (hasTransportGeometry &&
+                     (sample.Width != _visibleWidth || sample.Height != _visibleHeight)))
+                {
                     Reconfigure(sample.Width, sample.Height);
+                }
 
                 using var input = CreateInputSample(sample);
                 _transform!.ProcessInput(0, input, 0);
@@ -232,28 +238,45 @@ public sealed class MediaFoundationH264Decoder : IVideoDecoder
 
     private void Reconfigure(int width, int height)
     {
-        if (width <= 0 || height <= 0)
-            throw new ArgumentOutOfRangeException(nameof(width));
+        var hasTransportGeometry = HasKnownDimensions(width, height);
 
         if (_configured)
         {
-            // Resolution changes arrive on a keyframe from the publisher. A fresh transform
-            // avoids carrying stale reference surfaces or coded geometry across the boundary.
+            // A transport that knows the new size can force a fresh decoder immediately.
+            // RTP does not carry dimensions, so dimensionless sessions stay on the same MFT
+            // and let a new SPS trigger MF_E_TRANSFORM_STREAM_CHANGE instead.
             ReleaseTransform();
             SelectCandidate();
         }
 
         using var inputType = MediaFactory.MFCreateMediaType();
-        SetVideoTypeCommon(inputType, VideoFormatGuids.H264, width, height);
+        if (hasTransportGeometry)
+        {
+            SetVideoTypeCommon(inputType, VideoFormatGuids.H264, width, height);
+        }
+        else
+        {
+            // Microsoft explicitly supports a partial H.264 input type. Feeding SPS/PPS then
+            // makes the decoder expose the real output geometry through a stream change.
+            inputType.Set(MediaTypeAttributeKeys.MajorType, MediaTypeGuids.Video).CheckError();
+            inputType.Set(MediaTypeAttributeKeys.Subtype, VideoFormatGuids.H264).CheckError();
+        }
+
         _transform!.SetInputType(0, inputType, 0);
 
-        _visibleWidth = width;
-        _visibleHeight = height;
-        _codedWidth = width;
-        _codedHeight = height;
-        _stride = width;
+        _transportGeometryKnown = hasTransportGeometry;
+        _visibleWidth = hasTransportGeometry ? width : 0;
+        _visibleHeight = hasTransportGeometry ? height : 0;
+        _codedWidth = hasTransportGeometry ? width : 0;
+        _codedHeight = hasTransportGeometry ? height : 0;
+        _stride = hasTransportGeometry ? width : 0;
+        _outputBufferSize = 0;
+        if (!hasTransportGeometry)
+            _bgra = [];
 
-        SelectNv12OutputType();
+        // With a partial H.264 input type Media Foundation initially exposes a placeholder
+        // output type. Its geometry is intentionally ignored until SPS/PPS causes stream change.
+        SelectNv12OutputType(requireGeometry: hasTransportGeometry);
 
         _transform.ProcessMessage(
             TMessageType.MessageNotifyBeginStreaming,
@@ -264,7 +287,7 @@ public sealed class MediaFoundationH264Decoder : IVideoDecoder
         _configured = true;
     }
 
-    private void SelectNv12OutputType()
+    private void SelectNv12OutputType(bool requireGeometry)
     {
         for (var index = 0; ; index++)
         {
@@ -285,7 +308,8 @@ public sealed class MediaFoundationH264Decoder : IVideoDecoder
                     continue;
 
                 _transform!.SetOutputType(0, available, 0);
-                ReadOutputGeometry(available);
+                if (requireGeometry)
+                    ReadOutputGeometry(available);
                 return;
             }
         }
@@ -302,8 +326,18 @@ public sealed class MediaFoundationH264Decoder : IVideoDecoder
         _codedWidth = codedWidth > 0 ? checked((int)codedWidth) : _visibleWidth;
         _codedHeight = codedHeight > 0 ? checked((int)codedHeight) : _visibleHeight;
 
-        _visibleWidth = Math.Min(_visibleWidth, _codedWidth);
-        _visibleHeight = Math.Min(_visibleHeight, _codedHeight);
+        if (_codedWidth <= 0 || _codedHeight <= 0)
+        {
+            throw new InvalidOperationException(
+                "Media Foundation H.264 decoder output type did not expose a valid frame size.");
+        }
+
+        _visibleWidth = _transportGeometryKnown && _visibleWidth > 0
+            ? Math.Min(_visibleWidth, _codedWidth)
+            : _codedWidth;
+        _visibleHeight = _transportGeometryKnown && _visibleHeight > 0
+            ? Math.Min(_visibleHeight, _codedHeight)
+            : _codedHeight;
 
         _stride = outputType.GetUInt32(
             MediaTypeAttributeKeys.DefaultStride,
@@ -344,7 +378,7 @@ public sealed class MediaFoundationH264Decoder : IVideoDecoder
                 {
                     allocated = MediaFactory.MFCreateSample();
                     using var buffer = MediaFactory.MFCreateMemoryBuffer(
-                        Math.Max(streamInfo.Size, _outputBufferSize));
+                        Math.Max(1, Math.Max(streamInfo.Size, _outputBufferSize)));
                     allocated.AddBuffer(buffer);
                     output.Sample = allocated;
                 }
@@ -360,7 +394,9 @@ public sealed class MediaFoundationH264Decoder : IVideoDecoder
 
                 if (result.Code == StreamChangeHResult)
                 {
-                    SelectNv12OutputType();
+                    // SPS/PPS is authoritative for RTP. The fresh output type now carries the
+                    // actual frame size (and may carry a new size later in the same session).
+                    SelectNv12OutputType(requireGeometry: true);
                     continue;
                 }
 
@@ -500,6 +536,18 @@ public sealed class MediaFoundationH264Decoder : IVideoDecoder
         {
             buffer?.Dispose();
         }
+    }
+
+    private static bool HasKnownDimensions(int width, int height)
+    {
+        if (width < 0 || height < 0 || (width == 0) != (height == 0))
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(width),
+                "H.264 dimensions must either both be positive or both be zero when unknown.");
+        }
+
+        return width > 0;
     }
 
     private static void SetVideoTypeCommon(

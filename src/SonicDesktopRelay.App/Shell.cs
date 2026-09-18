@@ -245,11 +245,23 @@ public sealed class Shell : INotifyPropertyChanged
         var pipelineFailure = string.IsNullOrWhiteSpace(host.VideoPipelineFailure)
             ? "none"
             : host.VideoPipelineFailure;
+        var effective = host.EffectiveQuality is { } quality
+            ? $"{quality.MaxHeight}p@{quality.FramesPerSecond}/{quality.TargetBitsPerSecond}bps"
+            : "pending";
+        var transport = host.TransportDiagnostics.Count == 0
+            ? "pending"
+            : string.Join(",", host.TransportDiagnostics.Values
+                .Select(x => x.ToString())
+                .Distinct(StringComparer.Ordinal));
+        var encodeMs = host.LastEncodeDuration?.TotalMilliseconds.ToString("F2") ?? "n/a";
+        var sendMs = host.LastVideoSendDuration?.TotalMilliseconds.ToString("F2") ?? "n/a";
+        var recoveryMs = host.LastKeyFrameRecoveryLatency?.TotalMilliseconds.ToString("F1") ?? "n/a";
 
         return $"Video: Windows.Graphics.Capture -> Media Foundation H.264 [{transform}] | " +
-               $"Audio: {audio} | viewers={snapshot.ViewerCount} | " +
+               $"Audio: {audio} | viewers={snapshot.ViewerCount} transport={transport} effective={effective} | " +
                $"captured={host.FramesCaptured} encoded={host.EncodedAccessUnits} " +
                $"keyframes={host.KeyframesProduced} keyframeRequests={host.KeyFrameRequests} " +
+               $"keyframeMode={host.KeyFrameMode} recoveryMs={recoveryMs} encodeMs={encodeMs} sendMs={sendMs} " +
                $"maxAccessUnitBytes={host.MaximumAccessUnitBytes} lastCapture={lastCapture} " +
                $"lastEncoded={lastEncoded} pipelineFailure={pipelineFailure} | {rejected}";
     }
@@ -288,9 +300,10 @@ public sealed class Shell : INotifyPropertyChanged
             : host.VideoDecoderFailure;
 
         var lastUiFrame = LastUiFrameAt?.ToString("HH:mm:ss.fff") ?? "never";
+        var transport = host.TransportDiagnostics?.ToString() ?? "pending";
 
         return $"Video: Media Foundation H.264 [{transform}] | Audio: {audio} | " +
-               $"watch={snapshot.Watching?.ToString() ?? "not watching"} | " +
+               $"watch={snapshot.Watching?.ToString() ?? "not watching"} transport={transport} | " +
                $"videoAccessUnits={host.VideoAccessUnitsReceived} keyAccessUnits={host.KeyAccessUnitsReceived} " +
                $"maxAccessUnitBytes={host.MaximumAccessUnitBytes} nullDecodes={host.NullDecodeResults} " +
                $"keyframeRequests={host.KeyFrameRequests} decodedFrames={host.DecodedFrames} " +
@@ -359,6 +372,7 @@ public sealed class Shell : INotifyPropertyChanged
             _composition = new AppComposition(settings, _deviceName);
             _composition.Runtime.Changed += OnSnapshot;
             _composition.Runtime.SignalingDiagnosticAdded += OnSignalingDiagnostic;
+            _composition.PublishHost.VideoDiagnosticsChanged += OnVideoDiagnosticsChanged;
             _composition.WatchHost.WebRtcDiagnosticAdded += OnWebRtcDiagnostic;
             _composition.WatchHost.VideoDiagnosticsChanged += OnVideoDiagnosticsChanged;
             _composition.WatchHost.FrameDecoded += PublishFrame;

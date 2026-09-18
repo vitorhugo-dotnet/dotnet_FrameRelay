@@ -44,6 +44,7 @@ public sealed class ScreenPublishPipeline(
     private long _lastEncodedUtcTicks;
 
     private bool _keyFramePending;
+    private KeyFrameRequestReason? _pendingKeyFrameReason;
     private int _consecutivePoorReports;
     private int _consecutiveStableReports;
     private DateTimeOffset? _poorSince;
@@ -118,6 +119,7 @@ public sealed class ScreenPublishPipeline(
             }
 
             _keyFramePending = true;
+            _pendingKeyFrameReason = reason;
         }
 
         try
@@ -136,7 +138,10 @@ public sealed class ScreenPublishPipeline(
         catch
         {
             lock (_adaptationGate)
+            {
                 _keyFramePending = false;
+                _pendingKeyFrameReason = null;
+            }
             throw;
         }
     }
@@ -349,8 +354,26 @@ public sealed class ScreenPublishPipeline(
         if (encoded.IsKeyFrame)
         {
             Interlocked.Increment(ref _keyframesProduced);
+
+            KeyFrameRequestReason? fulfilledReason;
             lock (_adaptationGate)
+            {
+                fulfilledReason = _keyFramePending ? _pendingKeyFrameReason : null;
                 _keyFramePending = false;
+                _pendingKeyFrameReason = null;
+            }
+
+            if (fulfilledReason is { } reason)
+            {
+                _logger.LogInformation(
+                    "Publisher recovery keyframe produced. reason={Reason} keyframesProduced={KeyframesProduced} " +
+                    "encodedAccessUnits={EncodedAccessUnits} requests={KeyFrameRequests} coalesced={CoalescedKeyFrameRequests}",
+                    reason,
+                    KeyframesProduced,
+                    EncodedAccessUnits,
+                    KeyFrameRequests,
+                    CoalescedKeyFrameRequests);
+            }
         }
 
         SampleEncoded?.Invoke(encoded);

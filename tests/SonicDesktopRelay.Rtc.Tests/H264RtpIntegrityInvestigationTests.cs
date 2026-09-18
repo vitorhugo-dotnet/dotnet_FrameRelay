@@ -63,6 +63,18 @@ public sealed class H264RtpIntegrityTests
     }
 
     [Fact]
+    public void Parameter_set_access_unit_is_safe_non_vcl_metadata()
+    {
+        var assembler = new H264RtpAccessUnitAssembler();
+
+        var completed = assembler.Push(100, Timestamp, marker: true, [0x67, 0x42, 0x00, 0x1F]);
+
+        Assert.NotNull(completed);
+        Assert.False(completed.Value.IsIdr);
+        Assert.False(completed.Value.HasVcl);
+    }
+
+    [Fact]
     public void Missing_fu_a_start_is_rejected()
     {
         var assembler = new H264RtpAccessUnitAssembler();

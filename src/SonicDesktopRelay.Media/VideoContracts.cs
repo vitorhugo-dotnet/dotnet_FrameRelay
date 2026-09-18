@@ -3,6 +3,15 @@ namespace SonicDesktopRelay.Media;
 public readonly record struct MonitorInfo(string Id, string Name, int Width, int Height, bool IsPrimary);
 
 /// <summary>
+/// User-selected ceiling for one publishing session. Adaptive quality may move below this
+/// ceiling, but it must never recover above it.
+/// </summary>
+public sealed record VideoPublishProfile(int MaxHeight, int MaxFramesPerSecond)
+{
+    public static VideoPublishProfile Default { get; } = new(1080, 30);
+}
+
+/// <summary>
 /// The publisher's user-selected ceiling. Adaptive quality may move below these values, never above them.
 /// </summary>
 public sealed record VideoPublishProfile(int MaxHeight, int MaxFramesPerSecond)

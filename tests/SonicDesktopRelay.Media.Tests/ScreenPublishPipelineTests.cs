@@ -227,6 +227,39 @@ public sealed class ScreenPublishPipelineTests
     }
 
     [Fact]
+    public async Task Diagnostics_measure_encode_duration_at_the_existing_pipeline_boundary()
+    {
+        var time = new FakeTimeProvider(DateTimeOffset.UnixEpoch);
+        var capture = new FakeCapture();
+        var encoder = new FakeEncoder
+        {
+            DuringEncode = () => time.Advance(TimeSpan.FromMilliseconds(12))
+        };
+        await using var pipeline = new ScreenPublishPipeline(capture, encoder, time: time);
+        await pipeline.StartAsync(Monitor, CancellationToken.None);
+
+        capture.Emit();
+
+        Assert.Equal(TimeSpan.FromMilliseconds(12), pipeline.LastEncodeDuration);
+    }
+
+    [Fact]
+    public async Task Diagnostics_measure_keyframe_request_to_production_latency()
+    {
+        var time = new FakeTimeProvider(DateTimeOffset.UnixEpoch);
+        var capture = new FakeCapture();
+        var encoder = new FakeEncoder();
+        await using var pipeline = new ScreenPublishPipeline(capture, encoder, time: time);
+        await pipeline.StartAsync(Monitor, CancellationToken.None);
+
+        pipeline.RequestKeyFrame(KeyFrameRequestReason.RtcpPli);
+        time.Advance(TimeSpan.FromMilliseconds(275));
+        capture.Emit();
+
+        Assert.Equal(TimeSpan.FromMilliseconds(275), pipeline.LastKeyFrameRecoveryLatency);
+    }
+
+    [Fact]
     public async Task Diagnostics_count_keyframe_requests_sent_to_the_encoder()
     {
         var capture = new FakeCapture();
@@ -284,10 +317,13 @@ public sealed class ScreenPublishPipelineTests
 
         public bool Throw { get; init; }
 
+        public Action? DuringEncode { get; init; }
+
         public EncodedVideoSample? Encode(VideoFrame frame, VideoQuality quality)
         {
             EncodeCalls++;
             LastFrame = frame;
+            DuringEncode?.Invoke();
             if (Throw) throw new InvalidOperationException("encoder failed");
             return ReturnNull
                 ? null

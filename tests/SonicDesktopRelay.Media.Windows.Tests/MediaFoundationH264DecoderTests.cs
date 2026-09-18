@@ -264,6 +264,20 @@ public sealed class MediaFoundationH264DecoderTests
     }
 
     [Fact]
+    public void Output_events_are_disposed_independently_when_no_sample_is_returned()
+    {
+        var events = new FakeDisposable();
+
+        MediaFoundationOutputSampleLifetime.DisposeOwnedResources(
+            OutputSampleAllocationMode.MftAllocated,
+            callerAllocatedSample: null,
+            processOutputSample: null,
+            events);
+
+        Assert.Equal(1, events.DisposeCount);
+    }
+
+    [Fact]
     public void Successful_output_uses_the_owned_sample_until_conversion_finishes()
     {
         var callerNative = new FakeNativeSample();

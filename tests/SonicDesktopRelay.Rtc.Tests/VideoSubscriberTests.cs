@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.Extensions.Time.Testing;
 using SonicDesktopRelay.Media;
 using SonicDesktopRelay.Signaling;
@@ -35,6 +36,25 @@ public sealed class VideoSubscriberTests
             CancellationToken.None);
 
         Assert.Equal(Publisher, harness.Subscriber.PublisherId);
+    }
+
+    [Fact]
+    public async Task A_successful_offer_emits_metadata_only_offer_and_answer_send_diagnostics()
+    {
+        var harness = new Harness();
+        var diagnostics = new List<ViewerNegotiationDiagnosticEntry>();
+        harness.Subscriber.Diagnostic += diagnostics.Add;
+
+        await harness.OfferAsync();
+
+        Assert.Contains(diagnostics, x => x.Event == "viewer.offer.received");
+        Assert.Contains(diagnostics, x => x.Event == "viewer.answer.send.begin");
+        Assert.Contains(diagnostics, x => x.Event == "viewer.answer.send.ok");
+
+        var serialized = JsonSerializer.Serialize(diagnostics);
+        Assert.DoesNotContain("offer-sdp", serialized, StringComparison.Ordinal);
+        Assert.DoesNotContain("answer-sdp", serialized, StringComparison.Ordinal);
+        Assert.DoesNotContain("candidate:", serialized, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -118,6 +138,24 @@ public sealed class VideoSubscriberTests
         Assert.True(harness.Peers.Created!.Disposed);
         Assert.Empty(harness.Signaling.Sent);
         Assert.Equal("WebRTC negotiation failed at createAnswer: synthetic negotiation failure", reportedFailure);
+    }
+
+    [Fact]
+    public async Task A_peer_negotiation_failure_preserves_the_exact_failed_stage()
+    {
+        var harness = new Harness();
+        harness.Peers.AnswerFailure = new ViewerNegotiationException(
+            "setLocalDescription",
+            "synthetic local-description failure");
+        string? reportedFailure = null;
+        harness.Subscriber.NegotiationFailed += failure => reportedFailure = failure;
+
+        await harness.OfferAsync();
+
+        Assert.Equal(
+            "WebRTC negotiation failed at setLocalDescription: synthetic local-description failure",
+            reportedFailure);
+        Assert.True(harness.Peers.Created!.Disposed);
     }
 
     [Fact]

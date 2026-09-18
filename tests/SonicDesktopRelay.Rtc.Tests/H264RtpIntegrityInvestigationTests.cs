@@ -154,11 +154,22 @@ public sealed class H264RtpIntegrityRecoveryTests
         var recovery = new ViewerVideoRecoveryGate(TimeSpan.FromSeconds(1));
         recovery.BeginRecovery();
 
-        Assert.False(recovery.ShouldDeliver(isIdr: false));
-        Assert.False(recovery.ShouldDeliver(isIdr: false));
+        Assert.False(recovery.ShouldDeliver(isIdr: false, hasVcl: true));
+        Assert.False(recovery.ShouldDeliver(isIdr: false, hasVcl: true));
 
         Assert.Equal(2, recovery.SuspectAccessUnitsSuppressed);
         Assert.True(recovery.Active);
+    }
+
+    [Fact]
+    public void Parameter_sets_are_delivered_without_ending_recovery()
+    {
+        var recovery = new ViewerVideoRecoveryGate(TimeSpan.FromSeconds(1));
+        recovery.BeginRecovery();
+
+        Assert.True(recovery.ShouldDeliver(isIdr: false, hasVcl: false));
+        Assert.True(recovery.Active);
+        Assert.Equal(0, recovery.SuspectAccessUnitsSuppressed);
     }
 
     [Fact]
@@ -167,9 +178,9 @@ public sealed class H264RtpIntegrityRecoveryTests
         var recovery = new ViewerVideoRecoveryGate(TimeSpan.FromSeconds(1));
         recovery.BeginRecovery();
 
-        Assert.True(recovery.ShouldDeliver(isIdr: true));
+        Assert.True(recovery.ShouldDeliver(isIdr: true, hasVcl: true));
         Assert.False(recovery.Active);
-        Assert.True(recovery.ShouldDeliver(isIdr: false));
+        Assert.True(recovery.ShouldDeliver(isIdr: false, hasVcl: true));
 
         recovery.BeginRecovery();
         Assert.True(recovery.TryRequestPli(Start + TimeSpan.FromSeconds(2)));

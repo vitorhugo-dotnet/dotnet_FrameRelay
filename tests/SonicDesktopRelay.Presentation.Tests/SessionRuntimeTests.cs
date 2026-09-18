@@ -494,10 +494,11 @@ public sealed class SessionRuntimeTests
 
         public string? StartFailure { get; init; }
 
-        public Task StartAsync(MonitorInfo monitor, CancellationToken ct)
+        public Task StartAsync(MonitorInfo monitor, VideoPublishProfile profile, CancellationToken ct)
         {
             if (StartFailure is not null) throw new InvalidOperationException(StartFailure);
             StartedOn = monitor;
+            StartedProfile = profile;
             return Task.CompletedTask;
         }
 

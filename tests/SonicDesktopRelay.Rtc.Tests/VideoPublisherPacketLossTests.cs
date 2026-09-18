@@ -35,6 +35,8 @@ public sealed class VideoPublisherPacketLossTests
             return Task.CompletedTask;
         }
 
+        public void SetFrameRate(int framesPerSecond) { }
+
         public Task StopAsync() => Task.CompletedTask;
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }

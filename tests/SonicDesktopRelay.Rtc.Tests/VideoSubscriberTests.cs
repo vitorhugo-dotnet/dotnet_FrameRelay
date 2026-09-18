@@ -392,6 +392,12 @@ public sealed class VideoSubscriberTests
 
         public event Action<EncodedAudioSample>? AudioSampleReceived;
 
+        public event Action<ViewerNegotiationDiagnosticEntry>? Diagnostic
+        {
+            add { }
+            remove { }
+        }
+
         public Task<string> CreateAnswerAsync(string offerSdp, CancellationToken ct)
         {
             ReceivedOffer = offerSdp;

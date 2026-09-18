@@ -62,6 +62,7 @@ public sealed class SipSorceryViewerPeerConnection : IViewerPeerConnection
         // while 10.0.16's H264Depacketiser does not validate continuity before FU-A rebuild.
         _connection.VideoStream?.AddBuffer(VideoReorderWindow);
         _videoAssembler.AccessUnitDropped += OnAccessUnitDropped;
+        _videoAssembler.RtpGapDetected += OnRtpGapDetected;
 
         _connection.onicecandidate += candidate =>
         {
@@ -263,6 +264,20 @@ public sealed class SipSorceryViewerPeerConnection : IViewerPeerConnection
     }
 
     public void RequestKeyFrame() => RequestRecoveryKeyFrame("stall");
+
+    private void OnRtpGapDetected(H264RtpGap gap)
+    {
+        EmitDiagnostic(
+            "viewer.rtp_sequence_gap",
+            message:
+                $"timestamp={gap.Timestamp} previousSequence={gap.PreviousSequence} " +
+                $"nextSequence={gap.NextSequence} missingPackets={gap.MissingPackets} " +
+                $"rtpPacketsReceived={_videoAssembler.RtpPacketsReceived} " +
+                $"rtpPacketsLost={_videoAssembler.RtpPacketsLost} " +
+                $"rtpSequenceGaps={_videoAssembler.RtpSequenceGaps}");
+
+        RequestRecoveryKeyFrame("rtp-sequence-gap");
+    }
 
     private void OnAccessUnitDropped(H264AccessUnitDrop drop)
     {

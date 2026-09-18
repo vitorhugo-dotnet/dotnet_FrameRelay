@@ -25,6 +25,25 @@ public sealed class MediaFoundationH264DecoderTests
     }
 
     [Fact]
+    public void Decoder_accepts_h264_from_rtp_without_dimensions()
+    {
+        if (!Available) return;
+
+        using var encoder = new MediaFoundationH264Encoder();
+        using var decoder = new MediaFoundationH264Decoder();
+
+        var frame = DecodeUntilOutput(
+            encoder,
+            decoder,
+            640,
+            360,
+            stripTransportDimensions: true);
+
+        Assert.Equal(640, frame.Width);
+        Assert.Equal(360, frame.Height);
+    }
+
+    [Fact]
     public void A_decoder_handles_a_mid_stream_resolution_change()
     {
         if (!Available) return;
@@ -83,7 +102,8 @@ public sealed class MediaFoundationH264DecoderTests
         MediaFoundationH264Encoder encoder,
         MediaFoundationH264Decoder decoder,
         int width,
-        int height)
+        int height,
+        bool stripTransportDimensions = false)
     {
         var pixels = new byte[checked(width * height * 4)];
         for (var i = 0; i < pixels.Length; i += 4)
@@ -100,6 +120,9 @@ public sealed class MediaFoundationH264DecoderTests
             var timestamp = TimeSpan.FromTicks(i * TimeSpan.TicksPerSecond / quality.FramesPerSecond);
             var sample = encoder.Encode(new VideoFrame(width, height, pixels, timestamp), quality);
             if (sample is not { } encoded) continue;
+
+            if (stripTransportDimensions)
+                encoded = encoded with { Width = 0, Height = 0 };
 
             var decoded = decoder.Decode(encoded);
             if (decoded is not null) return decoded;

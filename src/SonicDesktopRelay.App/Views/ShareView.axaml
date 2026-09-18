@@ -26,6 +26,40 @@
             </ComboBox>
         </StackPanel>
 
+        <StackPanel Orientation="Horizontal" Spacing="{StaticResource SpaceMd}">
+            <StackPanel Spacing="{StaticResource SpaceXs}">
+                <TextBlock Text="Quality"
+                           FontSize="{StaticResource FontSizeSm}"
+                           Foreground="{StaticResource TextSecondaryBrush}" />
+                <ComboBox Width="170"
+                          ItemsSource="{Binding ShareQualities}"
+                          SelectedItem="{Binding SelectedShareQuality}"
+                          IsEnabled="{Binding ViewModel.CanShare}">
+                    <ComboBox.ItemTemplate>
+                        <DataTemplate x:DataType="app:ShareQualityOption">
+                            <TextBlock Text="{Binding Label}" />
+                        </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                </ComboBox>
+            </StackPanel>
+
+            <StackPanel Spacing="{StaticResource SpaceXs}">
+                <TextBlock Text="Frame rate"
+                           FontSize="{StaticResource FontSizeSm}"
+                           Foreground="{StaticResource TextSecondaryBrush}" />
+                <ComboBox Width="170"
+                          ItemsSource="{Binding ShareFrameRates}"
+                          SelectedItem="{Binding SelectedShareFrameRate}"
+                          IsEnabled="{Binding ViewModel.CanShare}">
+                    <ComboBox.ItemTemplate>
+                        <DataTemplate x:DataType="app:ShareFrameRateOption">
+                            <TextBlock Text="{Binding Label}" />
+                        </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                </ComboBox>
+            </StackPanel>
+        </StackPanel>
+
         <Border Background="{StaticResource SurfaceRaisedBrush}"
                 BorderBrush="{StaticResource BorderBrush}"
                 BorderThickness="1"

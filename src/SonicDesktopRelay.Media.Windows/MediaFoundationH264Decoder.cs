@@ -59,6 +59,7 @@ public sealed class MediaFoundationH264Decoder : IVideoDecoder
     private int _codedHeight;
     private int _stride;
     private int _outputBufferSize;
+    private int _lastOutputStreamFlags = int.MinValue;
     private byte[] _bgra = [];
     private bool _transportGeometryKnown;
     private bool _configured;
@@ -497,10 +498,29 @@ public sealed class MediaFoundationH264Decoder : IVideoDecoder
         for (var attempt = 0; attempt < 8; attempt++)
         {
             var streamInfo = _transform!.GetOutputStreamInfo(0);
+            var allocationMode =
+                MediaFoundationOutputSampleLifetime.SelectAllocationMode(streamInfo.Flags);
             var providesSamples =
                 (streamInfo.Flags & (int)OutputStreamInfoFlags.OutputStreamProvidesSamples) != 0;
+            var canProvideSamples =
+                (streamInfo.Flags & (int)OutputStreamInfoFlags.OutputStreamCanProvideSamples) != 0;
+            var callerSuppliesSample =
+                MediaFoundationOutputSampleLifetime.CallerSuppliesSample(allocationMode);
 
-            IMFSample? allocated = null;
+            if (_lastOutputStreamFlags != streamInfo.Flags)
+            {
+                _lastOutputStreamFlags = streamInfo.Flags;
+                _logger.LogDebug(
+                    "H.264 decoder output allocation selected. streamFlags=0x{StreamFlags:X8} providesSamples={ProvidesSamples} canProvideSamples={CanProvideSamples} allocationMode={AllocationMode} callerSuppliedSample={CallerSuppliedSample} bufferSize={BufferSize}",
+                    streamInfo.Flags,
+                    providesSamples,
+                    canProvideSamples,
+                    allocationMode,
+                    callerSuppliesSample,
+                    streamInfo.Size);
+            }
+
+            IMFSample? callerSample = null;
             var output = new OutputDataBuffer
             {
                 StreamID = 0,
@@ -511,20 +531,36 @@ public sealed class MediaFoundationH264Decoder : IVideoDecoder
 
             try
             {
-                if (!providesSamples)
+                if (callerSuppliesSample)
                 {
-                    allocated = MediaFactory.MFCreateSample();
+                    callerSample = MediaFactory.MFCreateSample();
                     using var buffer = MediaFactory.MFCreateMemoryBuffer(
                         Math.Max(1, Math.Max(streamInfo.Size, _outputBufferSize)));
-                    allocated.AddBuffer(buffer);
-                    output.Sample = allocated;
+                    callerSample.AddBuffer(buffer);
+                    output.Sample = callerSample;
                 }
 
                 var result = _transform.ProcessOutput(
                     ProcessOutputFlags.None,
                     1,
                     ref output,
-                    out _);
+                    out var processStatus);
+
+                var callerPointer = callerSample?.NativePointer ?? IntPtr.Zero;
+                var returnedPointer = output.Sample?.NativePointer ?? IntPtr.Zero;
+                _logger.LogTrace(
+                    "H.264 decoder ProcessOutput completed. hresult=0x{HResult:X8} processStatus={ProcessStatus} outputStatus={OutputStatus} allocationMode={AllocationMode} callerSuppliedSample={CallerSuppliedSample} returnedSample={ReturnedSample} callerPointer={CallerPointer} returnedPointer={ReturnedPointer} sameNativePointer={SameNativePointer}",
+                    result.Code,
+                    processStatus,
+                    output.Status,
+                    allocationMode,
+                    callerSuppliesSample,
+                    output.Sample is not null,
+                    callerPointer,
+                    returnedPointer,
+                    callerPointer != IntPtr.Zero &&
+                    returnedPointer != IntPtr.Zero &&
+                    callerPointer == returnedPointer);
 
                 if (result.Code == NeedMoreInputHResult)
                     return last;
@@ -565,20 +601,48 @@ public sealed class MediaFoundationH264Decoder : IVideoDecoder
                     return last;
                 }
 
-                var decodedSample = output.Sample ?? allocated;
+                // When FrameRelay supplied pSample, Microsoft defines the output as caller-owned.
+                // SharpGen rematerializes the struct field as another managed wrapper around that
+                // same native pointer, so conversion deliberately uses the original owner.
+                var decodedSample = callerSuppliesSample ? callerSample : output.Sample;
                 if (decodedSample is null)
                     return last;
 
+                // Keep the native sample alive until ConvertOutput and its contiguous buffer have
+                // completed. Cleanup happens only in the finally block below.
                 last = ConvertOutput(decodedSample, timestamp) ?? last;
             }
             finally
             {
-                output.Events?.Dispose();
+                var cleanup = MediaFoundationOutputSampleLifetime.PlanCleanup(
+                    allocationMode,
+                    callerSamplePresent: callerSample is not null,
+                    returnedSamplePresent: output.Sample is not null,
+                    eventsPresent: output.Events is not null);
 
-                if (output.Sample is not null && !ReferenceEquals(output.Sample, allocated))
-                    output.Sample.Dispose();
+                _logger.LogTrace(
+                    "H.264 decoder output cleanup. allocationMode={AllocationMode} disposeCallerSample={DisposeCallerSample} disposeReturnedSample={DisposeReturnedSample} detachReturnedWrapper={DetachReturnedWrapper} disposeEvents={DisposeEvents}",
+                    allocationMode,
+                    cleanup.DisposeCallerSample,
+                    cleanup.DisposeReturnedSample,
+                    cleanup.DetachReturnedWrapper,
+                    cleanup.DisposeEvents);
 
-                allocated?.Dispose();
+                if (cleanup.DisposeEvents)
+                    output.Events!.Dispose();
+
+                if (cleanup.DisposeReturnedSample)
+                    output.Sample!.Dispose();
+
+                if (cleanup.DisposeCallerSample)
+                    callerSample!.Dispose();
+
+                // For a caller-owned pSample, SharpGen's struct unmarshalling can create a second
+                // managed IMFSample wrapper for the same pointer without AddRef. It is a non-owning
+                // alias, so neutralize it after the single caller-owned Release rather than
+                // disposing it as if it represented another COM reference.
+                if (cleanup.DetachReturnedWrapper && output.Sample is not null)
+                    output.Sample.NativePointer = IntPtr.Zero;
             }
         }
 

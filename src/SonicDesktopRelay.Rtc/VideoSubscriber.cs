@@ -50,6 +50,10 @@ public sealed class VideoSubscriber(
 
     public event Action<ViewerNegotiationDiagnosticEntry>? Diagnostic;
 
+    public event Action<RtcTransportDiagnostics>? TransportDiagnosticsChanged;
+
+    public RtcTransportDiagnostics? TransportDiagnostics { get; private set; }
+
     public async Task HandleAsync(SignalingEnvelope envelope, CancellationToken ct)
     {
         if (envelope.From is not { } from) return;
@@ -271,6 +275,7 @@ public sealed class VideoSubscriber(
             {
                 _peer = null;
                 _lastPeerDiagnostic = null;
+                TransportDiagnostics = null;
                 _remoteDescriptionReady = false;
                 _pendingCandidates.Clear();
                 dispose = true;
@@ -296,6 +301,16 @@ public sealed class VideoSubscriber(
             _lastPeerDiagnostic = enriched;
             Diagnostic?.Invoke(enriched);
         };
+        peer.TransportDiagnosticsChanged += diagnostics =>
+        {
+            TransportDiagnostics = diagnostics;
+            TransportDiagnosticsChanged?.Invoke(diagnostics);
+        };
+        if (peer.TransportDiagnostics is { } existingTransport)
+        {
+            TransportDiagnostics = existingTransport;
+            TransportDiagnosticsChanged?.Invoke(existingTransport);
+        }
 
         peer.IceCandidateGathered += (candidate, mid, index) =>
         {
@@ -353,6 +368,7 @@ public sealed class VideoSubscriber(
             peer = _peer;
             _peer = null;
             _lastPeerDiagnostic = null;
+            TransportDiagnostics = null;
             _remoteDescriptionReady = false;
             _pendingCandidates.Clear();
         }

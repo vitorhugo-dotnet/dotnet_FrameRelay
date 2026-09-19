@@ -13,6 +13,10 @@ using SonicDesktopRelay.Rtc;
 
 namespace SonicDesktopRelay.App;
 
+public sealed record ShareQualityOption(string Label, int MaxHeight);
+
+public sealed record ShareFrameRateOption(string Label, int FramesPerSecond);
+
 /// <summary>
 /// What the window binds to: the plan's <see cref="MainWindowViewModel"/> for everything the
 /// UI may know about a session, plus the few things only the shell owns — the configured
@@ -31,6 +35,8 @@ public sealed class Shell : INotifyPropertyChanged
     private string _deviceName = Environment.MachineName;
     private string? _shellError;
     private MonitorInfo? _selectedMonitor;
+    private ShareQualityOption? _selectedShareQuality;
+    private ShareFrameRateOption? _selectedShareFrameRate;
     private bool _isVideoFullScreen;
     private long _uiFramesDelivered;
     private long _lastUiFrameUtcTicks;
@@ -51,6 +57,8 @@ public sealed class Shell : INotifyPropertyChanged
                   ?? NullLogger<Shell>.Instance;
         _backendAddressStore = new FileBackendAddressStore(FileBackendAddressStore.DefaultPath);
         _backendAddress = _backendAddressStore.Read();
+        SelectedShareQuality = ShareQualities[0];
+        SelectedShareFrameRate = ShareFrameRates[1];
         RefreshMonitors();
     }
 
@@ -147,6 +155,43 @@ public sealed class Shell : INotifyPropertyChanged
         }
     }
 
+    public IReadOnlyList<ShareQualityOption> ShareQualities { get; } =
+    [
+        new("1080p", 1080),
+        new("720p", 720),
+        new("540p", 540),
+        new("360p", 360)
+    ];
+
+    public IReadOnlyList<ShareFrameRateOption> ShareFrameRates { get; } =
+    [
+        new("15 FPS", 15),
+        new("30 FPS", 30),
+        new("60 FPS", 60)
+    ];
+
+    public ShareQualityOption? SelectedShareQuality
+    {
+        get => _selectedShareQuality;
+        set
+        {
+            if (_selectedShareQuality == value) return;
+            _selectedShareQuality = value;
+            Raise();
+        }
+    }
+
+    public ShareFrameRateOption? SelectedShareFrameRate
+    {
+        get => _selectedShareFrameRate;
+        set
+        {
+            if (_selectedShareFrameRate == value) return;
+            _selectedShareFrameRate = value;
+            Raise();
+        }
+    }
+
     /// <summary>The monitors this machine can share, newest enumeration each time it is read.</summary>
     public ObservableCollection<MonitorInfo> Monitors { get; } = [];
 
@@ -200,11 +245,23 @@ public sealed class Shell : INotifyPropertyChanged
         var pipelineFailure = string.IsNullOrWhiteSpace(host.VideoPipelineFailure)
             ? "none"
             : host.VideoPipelineFailure;
+        var effective = host.EffectiveQuality is { } quality
+            ? $"{quality.MaxHeight}p@{quality.FramesPerSecond}/{quality.TargetBitsPerSecond}bps"
+            : "pending";
+        var transport = host.TransportDiagnostics.Count == 0
+            ? "pending"
+            : string.Join(",", host.TransportDiagnostics.Values
+                .Select(x => x.ToString())
+                .Distinct(StringComparer.Ordinal));
+        var encodeMs = host.LastEncodeDuration?.TotalMilliseconds.ToString("F2") ?? "n/a";
+        var sendMs = host.LastVideoSendDuration?.TotalMilliseconds.ToString("F2") ?? "n/a";
+        var recoveryMs = host.LastKeyFrameRecoveryLatency?.TotalMilliseconds.ToString("F1") ?? "n/a";
 
         return $"Video: Windows.Graphics.Capture -> Media Foundation H.264 [{transform}] | " +
-               $"Audio: {audio} | viewers={snapshot.ViewerCount} | " +
+               $"Audio: {audio} | viewers={snapshot.ViewerCount} transport={transport} effective={effective} | " +
                $"captured={host.FramesCaptured} encoded={host.EncodedAccessUnits} " +
                $"keyframes={host.KeyframesProduced} keyframeRequests={host.KeyFrameRequests} " +
+               $"keyframeMode={host.KeyFrameMode} recoveryMs={recoveryMs} encodeMs={encodeMs} sendMs={sendMs} " +
                $"maxAccessUnitBytes={host.MaximumAccessUnitBytes} lastCapture={lastCapture} " +
                $"lastEncoded={lastEncoded} pipelineFailure={pipelineFailure} | {rejected}";
     }
@@ -243,9 +300,10 @@ public sealed class Shell : INotifyPropertyChanged
             : host.VideoDecoderFailure;
 
         var lastUiFrame = LastUiFrameAt?.ToString("HH:mm:ss.fff") ?? "never";
+        var transport = host.TransportDiagnostics?.ToString() ?? "pending";
 
         return $"Video: Media Foundation H.264 [{transform}] | Audio: {audio} | " +
-               $"watch={snapshot.Watching?.ToString() ?? "not watching"} | " +
+               $"watch={snapshot.Watching?.ToString() ?? "not watching"} transport={transport} | " +
                $"videoAccessUnits={host.VideoAccessUnitsReceived} keyAccessUnits={host.KeyAccessUnitsReceived} " +
                $"maxAccessUnitBytes={host.MaximumAccessUnitBytes} nullDecodes={host.NullDecodeResults} " +
                $"keyframeRequests={host.KeyFrameRequests} decodedFrames={host.DecodedFrames} " +
@@ -276,7 +334,14 @@ public sealed class Shell : INotifyPropertyChanged
             return;
         }
 
-        await GuardAsync(() => runtime.StartSharingAsync(monitor, DefaultMaxViewers, ct));
+        if (SelectedShareQuality is not { } quality || SelectedShareFrameRate is not { } frameRate)
+        {
+            ShellError = "Choose a video quality and frame rate before sharing.";
+            return;
+        }
+
+        var profile = new VideoPublishProfile(quality.MaxHeight, frameRate.FramesPerSecond);
+        await GuardAsync(() => runtime.StartSharingAsync(monitor, profile, DefaultMaxViewers, ct));
     }
 
     public async Task WatchAsync(string code, CancellationToken ct)
@@ -307,6 +372,7 @@ public sealed class Shell : INotifyPropertyChanged
             _composition = new AppComposition(settings, _deviceName);
             _composition.Runtime.Changed += OnSnapshot;
             _composition.Runtime.SignalingDiagnosticAdded += OnSignalingDiagnostic;
+            _composition.PublishHost.VideoDiagnosticsChanged += OnVideoDiagnosticsChanged;
             _composition.WatchHost.WebRtcDiagnosticAdded += OnWebRtcDiagnostic;
             _composition.WatchHost.VideoDiagnosticsChanged += OnVideoDiagnosticsChanged;
             _composition.WatchHost.FrameDecoded += PublishFrame;

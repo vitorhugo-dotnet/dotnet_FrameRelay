@@ -72,7 +72,7 @@ public interface IVideoPublishHost : IAsyncDisposable
 {
     string? EncoderName { get; }
 
-    Task StartAsync(MonitorInfo monitor, CancellationToken ct);
+    Task StartAsync(MonitorInfo monitor, VideoPublishProfile profile, CancellationToken ct);
 
     Task StopAsync();
 

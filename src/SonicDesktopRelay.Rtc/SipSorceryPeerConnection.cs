@@ -13,11 +13,9 @@ public sealed class SipSorceryPeerConnection : IPeerConnection
     /// <summary>H.264 over WebRTC is a dynamic payload type; 96 is the conventional first one.</summary>
     private const int H264PayloadId = 96;
 
-    /// <summary>The RTP clock for video is 90 kHz, fixed by RFC 3551.</summary>
-    private const uint VideoClockRate = 90_000;
-
     private readonly RTCPeerConnection _connection;
     private readonly object _gate = new();
+    private RtcTransportDiagnostics? _transportDiagnostics;
     private bool _negotiated;
     private bool _closed;
 
@@ -62,10 +60,19 @@ public sealed class SipSorceryPeerConnection : IPeerConnection
             OnRtcpReport(report);
         };
 
+        _connection.oniceconnectionstatechange += state =>
+        {
+            if (state == RTCIceConnectionState.connected)
+                RefreshTransportDiagnostics();
+        };
+
         _connection.onconnectionstatechange += state =>
         {
             if (state == RTCPeerConnectionState.connected)
+            {
+                RefreshTransportDiagnostics();
                 KeyFrameRequested?.Invoke(KeyFrameRequestReason.InitialConnection);
+            }
         };
     }
 
@@ -76,6 +83,16 @@ public sealed class SipSorceryPeerConnection : IPeerConnection
     public event Action<KeyFrameRequestReason>? KeyFrameRequested;
 
     public event Action<double>? PacketLossReported;
+
+    public event Action<RtcTransportDiagnostics>? TransportDiagnosticsChanged;
+
+    public RtcTransportDiagnostics? TransportDiagnostics
+    {
+        get
+        {
+            lock (_gate) return _transportDiagnostics;
+        }
+    }
 
     public async Task<string> CreateOfferAsync(CancellationToken ct)
     {
@@ -112,7 +129,7 @@ public sealed class SipSorceryPeerConnection : IPeerConnection
 
         try
         {
-            _connection.SendVideo(VideoClockRate / 30, sample.Data.ToArray());
+            _connection.SendVideo(VideoRtpTiming.ToTimestampUnits(sample.Duration), sample.Data.ToArray());
         }
         catch (Exception e) when (IsExpectedTransportFailure(e))
         {
@@ -149,6 +166,28 @@ public sealed class SipSorceryPeerConnection : IPeerConnection
     private static bool IsExpectedTransportFailure(Exception e) =>
         e is ObjectDisposedException or InvalidOperationException
             or ApplicationException or System.Net.Sockets.SocketException;
+
+    private void RefreshTransportDiagnostics()
+    {
+        var nominated = _connection.GetRtpChannel()?.NominatedEntry;
+        if (nominated?.LocalCandidate is not { } local || nominated.RemoteCandidate is not { } remote)
+            return;
+
+        var next = RtcTransportClassifier.Classify(
+            local.type,
+            remote.type,
+            local.protocol,
+            remote.protocol,
+            local.IceServer?.Protocol);
+
+        lock (_gate)
+        {
+            if (_closed || _transportDiagnostics == next) return;
+            _transportDiagnostics = next;
+        }
+
+        TransportDiagnosticsChanged?.Invoke(next);
+    }
 
     private void OnRtcpReport(RTCPCompoundPacket report)
     {

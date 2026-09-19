@@ -43,12 +43,25 @@ normalizes output to NV12 before the reusable BGRA render buffer.
 
 Audio and video are stamped from the same `MediaSessionClock`. The RTC layer stays P2P-first
 with the backend-provided ICE servers and uses TURN only when direct connectivity cannot be
-established.
+established. Once ICE nominates a pair, Diagnostics classifies the active path as Direct/TURN and
+UDP/TCP using candidate metadata only; addresses, ports, candidate bodies and credentials never
+cross that diagnostics boundary.
+
+Before sharing, the publisher can choose a 1080p/720p/540p/360p quality ceiling and 15/30/60 FPS
+ceiling. Those values are real media controls: capture cadence, Media Foundation configuration
+and RTP video timestamps follow the effective FPS. The existing adaptive controller may move
+below the selected ceiling under sustained packet loss, but it cannot recover above the user's
+selection.
+
+Recovery keyframes use Media Foundation `ICodecAPI`/`CODECAPI_AVEncVideoForceKeyFrame` when
+the selected encoder supports it, so a PLI/FIR does not normally rebuild the H.264 transform.
+Unsupported transforms retain a diagnosed reconfigure fallback for correctness.
 
 The Diagnostics screen reports the live selected native transform, hardware/software path,
-formats, geometry/bitrate, candidate rejection reasons, WASAPI endpoint state, Opus codec state,
-session state, and signaling metadata. SDP, ICE candidate contents, credentials, and media
-payloads are not recorded.
+formats, effective geometry/FPS/bitrate, keyframe mode and recovery latency, sampled encode/send
+timings, selected Direct/TURN transport classification, candidate rejection reasons, WASAPI
+endpoint state, Opus codec state, session state, and signaling metadata. SDP, ICE candidate
+contents, addresses/ports, credentials, and media payloads are not recorded.
 
 ## Persistent diagnostic logs
 

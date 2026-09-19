@@ -24,6 +24,8 @@ public sealed class RtcVideoPublishHost(
     private readonly ILogger<RtcVideoPublishHost> _logger =
         loggerFactory?.CreateLogger<RtcVideoPublishHost>() ?? NullLogger<RtcVideoPublishHost>.Instance;
     private readonly SemaphoreSlim _gate = new(1, 1);
+    private static readonly IReadOnlyDictionary<Guid, RtcTransportDiagnostics> EmptyTransportDiagnostics =
+        new Dictionary<Guid, RtcTransportDiagnostics>();
 
     private ScreenPublishPipeline? _pipeline;
     private MediaFoundationH264Encoder? _encoder;
@@ -35,6 +37,19 @@ public sealed class RtcVideoPublishHost(
     public string? EncoderName { get; private set; }
 
     public NativeVideoDiagnostics? VideoDiagnostics => _encoder?.Diagnostics;
+
+    public VideoQuality? EffectiveQuality => _pipeline?.Quality;
+
+    public string KeyFrameMode => _encoder?.KeyFrameMode ?? "not-started";
+
+    public TimeSpan? LastEncodeDuration => _pipeline?.LastEncodeDuration;
+
+    public TimeSpan? LastKeyFrameRecoveryLatency => _pipeline?.LastKeyFrameRecoveryLatency;
+
+    public TimeSpan? LastVideoSendDuration => _publisher?.LastVideoSendDuration;
+
+    public IReadOnlyDictionary<Guid, RtcTransportDiagnostics> TransportDiagnostics =>
+        _publisher?.TransportDiagnostics ?? EmptyTransportDiagnostics;
 
     public long FramesCaptured => _pipeline?.FramesCaptured ?? 0;
 
@@ -64,7 +79,13 @@ public sealed class RtcVideoPublishHost(
     /// <summary>Each video encoder candidate that was rejected, with the reason it supplied.</summary>
     public IReadOnlyList<string> EncoderRejections { get; private set; } = [];
 
-    public async Task StartAsync(MonitorInfo monitor, CancellationToken ct)
+    /// <summary>
+    /// Raised for structural diagnostics changes such as selected ICE transport. Per-frame timing
+    /// remains sampled/read-on-demand rather than dispatching UI work at video frame rate.
+    /// </summary>
+    public event Action? VideoDiagnosticsChanged;
+
+    public async Task StartAsync(MonitorInfo monitor, VideoPublishProfile profile, CancellationToken ct)
     {
         await _gate.WaitAsync(ct);
         try
@@ -92,7 +113,8 @@ public sealed class RtcVideoPublishHost(
                 encoder,
                 clock,
                 TimeProvider.System,
-                loggerFactory?.CreateLogger<ScreenPublishPipeline>());
+                loggerFactory?.CreateLogger<ScreenPublishPipeline>(),
+                profile);
             // Transfer ownership before capture startup: if the native capture path throws,
             // DisposeStackAsync can still release the capture source and Media Foundation MFT.
             _pipeline = pipeline;
@@ -129,6 +151,7 @@ public sealed class RtcVideoPublishHost(
                 new SipSorceryPeerConnectionFactory(ice),
                 connection,
                 audioPipeline);
+            _publisher.TransportDiagnosticsChanged += OnTransportDiagnosticsChanged;
 
             _logger.LogInformation(
                 "Publisher media stack started. encoder={EncoderName} transform={TransformName} acceleration={Acceleration} monitor={MonitorId} dimensions={Width}x{Height}",
@@ -190,6 +213,18 @@ public sealed class RtcVideoPublishHost(
     private void OnAudioPipelineFailed(Exception error)
         => _audioPipelineFailure ??= error.Message;
 
+    private void OnTransportDiagnosticsChanged(Guid participantId, RtcTransportDiagnostics diagnostics)
+    {
+        _logger.LogInformation(
+            "Publisher WebRTC transport selected. participant={ParticipantId} path={Path} protocol={Protocol} localType={LocalType} remoteType={RemoteType}",
+            participantId,
+            diagnostics.Path,
+            diagnostics.Protocol,
+            diagnostics.LocalCandidateType,
+            diagnostics.RemoteCandidateType);
+        VideoDiagnosticsChanged?.Invoke();
+    }
+
     private async Task<IceServerSettings> LoadIceAsync(CancellationToken ct)
     {
         var response = await iceApi.GetIceServersAsync(ct);
@@ -203,6 +238,7 @@ public sealed class RtcVideoPublishHost(
     {
         if (_publisher is not null)
         {
+            _publisher.TransportDiagnosticsChanged -= OnTransportDiagnosticsChanged;
             await _publisher.DisposeAsync();
             _publisher = null;
         }

@@ -27,6 +27,11 @@ public interface IViewerPeerConnection : IAsyncDisposable
     /// <summary>Metadata-only WebRTC negotiation and peer-state diagnostics.</summary>
     event Action<ViewerNegotiationDiagnosticEntry>? Diagnostic;
 
+    /// <summary>Safe metadata for the nominated ICE pair once one exists.</summary>
+    event Action<RtcTransportDiagnostics>? TransportDiagnosticsChanged;
+
+    RtcTransportDiagnostics? TransportDiagnostics { get; }
+
     /// <summary>Applies the publisher's offer and produces the answer SDP.</summary>
     Task<string> CreateAnswerAsync(string offerSdp, CancellationToken ct);
 

@@ -68,6 +68,8 @@ public sealed class RtcVideoPublishHost(
 
     public int PendingVideoSamples => _publisher?.PendingVideoSamples ?? 0;
 
+    public int ViewersAwaitingKeyFrame => _publisher?.ViewersAwaitingKeyFrame ?? 0;
+
     public long CaptureFramesArrived => _capture?.FramesArrived ?? 0;
 
     public long CaptureFramesDelivered => _capture?.FramesDelivered ?? 0;

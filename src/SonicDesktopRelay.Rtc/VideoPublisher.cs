@@ -18,6 +18,7 @@ public sealed class VideoPublisher(
     TimeProvider? time = null) : IAsyncDisposable
 {
     private readonly ConcurrentDictionary<Guid, IPeerConnection> _peers = new();
+    private readonly ConcurrentDictionary<Guid, VideoSampleSendQueue> _videoQueues = new();
     private readonly ConcurrentDictionary<Guid, RtcTransportDiagnostics> _transportDiagnostics = new();
     private readonly TimeProvider _time = time ?? TimeProvider.System;
     private long _lastVideoSendDurationTicks;
@@ -36,6 +37,12 @@ public sealed class VideoPublisher(
         }
     }
 
+    public long DroppedVideoSamples => _videoQueues.Values.Sum(x => x.DroppedSamples);
+
+    public long VideoSendFailures => _videoQueues.Values.Sum(x => x.SendFailures);
+
+    public int PendingVideoSamples => _videoQueues.Values.Sum(x => x.PendingSamples);
+
     public event Action<Guid, RtcTransportDiagnostics>? TransportDiagnosticsChanged;
 
     public async Task AddViewerAsync(Guid participantId, CancellationToken ct)
@@ -48,6 +55,13 @@ public sealed class VideoPublisher(
             await peer.DisposeAsync();
             return;
         }
+
+        var queue = new VideoSampleSendQueue(
+            peer,
+            duration => Interlocked.Exchange(ref _lastVideoSendDurationTicks, duration.Ticks),
+            () => pipeline.RequestKeyFrame(KeyFrameRequestReason.PacketLoss),
+            _time);
+        _videoQueues[participantId] = queue;
 
         peer.IceCandidateGathered += (candidate, mid, index) =>
             _ = signaling.SendAsync(SignalingMessageTypes.WebRtcIceCandidate, participantId,
@@ -88,6 +102,8 @@ public sealed class VideoPublisher(
     {
         pipeline.RemoveReceptionSource(participantId);
         _transportDiagnostics.TryRemove(participantId, out _);
+        if (_videoQueues.TryRemove(participantId, out var queue))
+            await queue.DisposeAsync();
         if (!_peers.TryRemove(participantId, out var peer)) return;
         await peer.DisposeAsync();
     }
@@ -135,16 +151,7 @@ public sealed class VideoPublisher(
 
     private void BroadcastVideo(EncodedVideoSample sample)
     {
-        var started = _time.GetTimestamp();
-        try
-        {
-            foreach (var peer in _peers.Values) peer.SendVideo(sample);
-        }
-        finally
-        {
-            var elapsed = _time.GetElapsedTime(started);
-            Interlocked.Exchange(ref _lastVideoSendDurationTicks, elapsed.Ticks);
-        }
+        foreach (var queue in _videoQueues.Values) queue.Enqueue(sample);
     }
 
     private void BroadcastAudio(EncodedAudioSample sample)

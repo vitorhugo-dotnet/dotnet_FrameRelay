@@ -262,6 +262,10 @@ public sealed class Shell : INotifyPropertyChanged
                $"captured={host.FramesCaptured} encoded={host.EncodedAccessUnits} " +
                $"keyframes={host.KeyframesProduced} keyframeRequests={host.KeyFrameRequests} " +
                $"keyframeMode={host.KeyFrameMode} recoveryMs={recoveryMs} encodeMs={encodeMs} sendMs={sendMs} " +
+               $"sendPending={host.PendingVideoSamples} sendDropped={host.DroppedVideoSamples} " +
+               $"sendFailures={host.VideoSendFailures} " +
+               $"captureArrived={host.CaptureFramesArrived} captureDelivered={host.CaptureFramesDelivered} " +
+               $"captureDropped={host.CaptureFramesDropped} " +
                $"maxAccessUnitBytes={host.MaximumAccessUnitBytes} lastCapture={lastCapture} " +
                $"lastEncoded={lastEncoded} pipelineFailure={pipelineFailure} | {rejected}";
     }

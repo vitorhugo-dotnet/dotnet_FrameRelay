@@ -18,7 +18,7 @@ namespace SonicDesktopRelay.Media.Windows;
 /// </para>
 /// </summary>
 [SupportedOSPlatform("windows10.0.19041.0")]
-public sealed class GraphicsCaptureScreenSource : IScreenCaptureSource
+public sealed class GraphicsCaptureScreenSource : IScreenCaptureSource, IScreenCaptureDiagnostics
 {
     private const int PoolDepth = 2;
 
@@ -38,6 +38,9 @@ public sealed class GraphicsCaptureScreenSource : IScreenCaptureSource
     private TimeSpan _minimumInterval = TimeSpan.Zero;
     private bool _running;
     private bool _disposed;
+    private long _framesArrived;
+    private long _framesDelivered;
+    private long _framesDropped;
 
     /// <summary>
     /// False on Windows builds without the capture API and inside sessions that cannot use it
@@ -63,6 +66,12 @@ public sealed class GraphicsCaptureScreenSource : IScreenCaptureSource
     public MonitorInfo Monitor { get; private set; }
 
     public event Action<VideoFrame>? FrameCaptured;
+
+    public long FramesArrived => Interlocked.Read(ref _framesArrived);
+
+    public long FramesDelivered => Interlocked.Read(ref _framesDelivered);
+
+    public long FramesDropped => Interlocked.Read(ref _framesDropped);
 
     public Task StartAsync(MonitorInfo monitor, VideoQuality quality, CancellationToken ct)
     {
@@ -205,6 +214,7 @@ public sealed class GraphicsCaptureScreenSource : IScreenCaptureSource
         lock (_gate)
         {
             if (!_running || _context is null || _device is null) return;
+            Interlocked.Increment(ref _framesArrived);
 
             try
             {
@@ -216,11 +226,20 @@ public sealed class GraphicsCaptureScreenSource : IScreenCaptureSource
             {
                 // A device loss or a surface that vanished under us is a dropped frame, not a
                 // dead session: the next FrameArrived recreates whatever went away.
+                Interlocked.Increment(ref _framesDropped);
                 return;
             }
         }
 
-        if (frame is not null) FrameCaptured?.Invoke(frame);
+        if (frame is not null)
+        {
+            Interlocked.Increment(ref _framesDelivered);
+            FrameCaptured?.Invoke(frame);
+        }
+        else
+        {
+            Interlocked.Increment(ref _framesDropped);
+        }
     }
 
     private VideoFrame? TryBuildFrame(Direct3D11CaptureFramePool pool)

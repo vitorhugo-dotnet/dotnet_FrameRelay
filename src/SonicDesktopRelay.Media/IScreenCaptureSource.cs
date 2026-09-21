@@ -17,3 +17,12 @@ public interface IScreenCaptureSource : IAsyncDisposable
 
     Task StopAsync();
 }
+
+public interface IScreenCaptureDiagnostics
+{
+    long FramesArrived { get; }
+
+    long FramesDelivered { get; }
+
+    long FramesDropped { get; }
+}

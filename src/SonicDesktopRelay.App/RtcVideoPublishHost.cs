@@ -76,6 +76,8 @@ public sealed class RtcVideoPublishHost(
 
     public long CaptureFramesDropped => _capture?.FramesDropped ?? 0;
 
+    public long EncodeFramesDropped => _pipeline?.DroppedEncodeFrames ?? 0;
+
     public DateTimeOffset? LastCapturedFrameAt => _pipeline?.LastCapturedFrameAt;
 
     public DateTimeOffset? LastEncodedAccessUnitAt => _pipeline?.LastEncodedAccessUnitAt;

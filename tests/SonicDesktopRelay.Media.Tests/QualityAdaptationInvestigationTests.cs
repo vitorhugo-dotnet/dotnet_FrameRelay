@@ -205,6 +205,7 @@ public sealed class QualityAdaptationTests
         Assert.Equal(1, harness.Encoder.KeyFrameRequests);
 
         harness.Capture.EmitKeyFrame();
+        Assert.True(SpinWait.SpinUntil(() => harness.Pipeline.KeyframesProduced == 1, TimeSpan.FromSeconds(1)));
         harness.Pipeline.RequestKeyFrame(KeyFrameRequestReason.RtcpPli);
 
         Assert.Equal(2, harness.Encoder.KeyFrameRequests);

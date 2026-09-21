@@ -20,6 +20,7 @@ public sealed class ScreenPublishPipelineTests
         time.Advance(TimeSpan.FromMilliseconds(100));
         capture.Emit();
 
+        Assert.True(SpinWait.SpinUntil(() => encoder.LastFrame is not null, TimeSpan.FromSeconds(1)));
         Assert.NotNull(encoder.LastFrame);
         Assert.Equal(TimeSpan.FromMilliseconds(100), encoder.LastFrame!.Timestamp);
     }
@@ -35,9 +36,71 @@ public sealed class ScreenPublishPipelineTests
         await pipeline.StartAsync(Monitor, CancellationToken.None);
 
         capture.Emit();
+        Assert.True(SpinWait.SpinUntil(() => encoder.EncodeCalls == 1, TimeSpan.FromSeconds(1)));
         capture.Emit();
 
+        Assert.True(SpinWait.SpinUntil(() => encoder.EncodeCalls == 2, TimeSpan.FromSeconds(1)));
         Assert.Equal(2, samples.Count);
+    }
+
+    [Fact]
+    public async Task Capture_returns_while_encoder_is_busy_and_encodes_the_latest_pending_frame()
+    {
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var release = new ManualResetEventSlim();
+        var capture = new FakeCapture();
+        var encoder = new FakeEncoder
+        {
+            DuringEncode = () =>
+            {
+                entered.SetResult();
+                release.Wait();
+            }
+        };
+        await using var pipeline = new ScreenPublishPipeline(capture, encoder);
+        await pipeline.StartAsync(Monitor, CancellationToken.None);
+
+        capture.Emit(TimeSpan.FromMilliseconds(1));
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        var captures = Task.Run(() => capture.Emit(TimeSpan.FromMilliseconds(2)));
+
+        var completed = await Task.WhenAny(captures, Task.Delay(TimeSpan.FromSeconds(1)));
+        Assert.Same(captures, completed);
+
+        release.Set();
+        await captures;
+
+        Assert.True(SpinWait.SpinUntil(() => encoder.EncodeCalls >= 2, TimeSpan.FromSeconds(1)));
+        Assert.Equal(
+            [TimeSpan.FromMilliseconds(1), TimeSpan.FromMilliseconds(2)],
+            encoder.EncodedTimestamps);
+    }
+
+    [Fact]
+    public async Task Capture_frame_ownership_survives_source_buffer_reuse()
+    {
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var release = new ManualResetEventSlim();
+        var capture = new FakeCapture();
+        var encoder = new FakeEncoder
+        {
+            DuringEncode = () =>
+            {
+                entered.SetResult();
+                release.Wait();
+            }
+        };
+        await using var pipeline = new ScreenPublishPipeline(capture, encoder);
+        await pipeline.StartAsync(Monitor, CancellationToken.None);
+
+        var sourceBuffer = new byte[] { 7, 8, 9, 10 };
+        capture.Emit(new VideoFrame(2, 2, sourceBuffer, TimeSpan.Zero));
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        sourceBuffer[0] = 99;
+        release.Set();
+
+        Assert.True(SpinWait.SpinUntil(() => encoder.FirstByteValues.Count == 1, TimeSpan.FromSeconds(1)));
+        Assert.Equal(7, encoder.FirstByteValues[0]);
     }
 
     [Fact]
@@ -49,18 +112,20 @@ public sealed class ScreenPublishPipelineTests
         var first = 0;
         var second = 0;
         var third = 0;
-        pipeline.SampleEncoded += _ => first++;
-        pipeline.SampleEncoded += _ => second++;
-        pipeline.SampleEncoded += _ => third++;
+        pipeline.SampleEncoded += _ => Interlocked.Increment(ref first);
+        pipeline.SampleEncoded += _ => Interlocked.Increment(ref second);
+        pipeline.SampleEncoded += _ => Interlocked.Increment(ref third);
         await pipeline.StartAsync(Monitor, CancellationToken.None);
 
         capture.Emit();
 
+        Assert.True(SpinWait.SpinUntil(() => encoder.EncodeCalls == 1, TimeSpan.FromSeconds(1)));
+        Assert.True(SpinWait.SpinUntil(() => Volatile.Read(ref third) == 1, TimeSpan.FromSeconds(1)));
         // Three viewers, one encode. This is the whole point of the design.
         Assert.Equal(1, encoder.EncodeCalls);
-        Assert.Equal(1, first);
-        Assert.Equal(1, second);
-        Assert.Equal(1, third);
+        Assert.Equal(1, Volatile.Read(ref first));
+        Assert.Equal(1, Volatile.Read(ref second));
+        Assert.Equal(1, Volatile.Read(ref third));
     }
 
     [Fact]
@@ -75,6 +140,7 @@ public sealed class ScreenPublishPipelineTests
 
         capture.Emit();
 
+        Assert.True(SpinWait.SpinUntil(() => encoder.EncodeCalls == 1, TimeSpan.FromSeconds(1)));
         Assert.Equal(0, samples);
     }
 
@@ -199,6 +265,7 @@ public sealed class ScreenPublishPipelineTests
         capture.Emit();
         capture.Emit();
 
+        Assert.True(SpinWait.SpinUntil(() => failure is not null, TimeSpan.FromSeconds(1)));
         Assert.NotNull(failure);
         // One throw is enough; the pipeline must not keep feeding a broken encoder.
         Assert.Equal(1, encoder.EncodeCalls);
@@ -216,8 +283,10 @@ public sealed class ScreenPublishPipelineTests
 
         capture.Emit();
         time.Advance(TimeSpan.FromMilliseconds(40));
+        Assert.True(SpinWait.SpinUntil(() => pipeline.EncodedAccessUnits == 1, TimeSpan.FromSeconds(1)));
         capture.Emit();
 
+        Assert.True(SpinWait.SpinUntil(() => pipeline.EncodedAccessUnits == 2, TimeSpan.FromSeconds(1)));
         Assert.Equal(2, pipeline.FramesCaptured);
         Assert.Equal(2, pipeline.EncodedAccessUnits);
         Assert.Equal(2, pipeline.KeyframesProduced);
@@ -240,6 +309,7 @@ public sealed class ScreenPublishPipelineTests
 
         capture.Emit();
 
+        Assert.True(SpinWait.SpinUntil(() => pipeline.LastEncodeDuration is not null, TimeSpan.FromSeconds(1)));
         Assert.Equal(TimeSpan.FromMilliseconds(12), pipeline.LastEncodeDuration);
     }
 
@@ -256,6 +326,7 @@ public sealed class ScreenPublishPipelineTests
         time.Advance(TimeSpan.FromMilliseconds(275));
         capture.Emit();
 
+        Assert.True(SpinWait.SpinUntil(() => pipeline.KeyframesProduced == 1, TimeSpan.FromSeconds(1)));
         Assert.Equal(TimeSpan.FromMilliseconds(275), pipeline.LastKeyFrameRecoveryLatency);
     }
 
@@ -297,8 +368,12 @@ public sealed class ScreenPublishPipelineTests
 
         public Task StopAsync() => Task.CompletedTask;
 
-        public void Emit() => FrameCaptured?.Invoke(
-            new VideoFrame(1920, 1080, new byte[16], TimeSpan.Zero));
+        public void Emit() => Emit(TimeSpan.Zero);
+
+        public void Emit(TimeSpan timestamp) => FrameCaptured?.Invoke(
+            new VideoFrame(1920, 1080, new byte[16], timestamp));
+
+        public void Emit(VideoFrame frame) => FrameCaptured?.Invoke(frame);
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
@@ -307,11 +382,17 @@ public sealed class ScreenPublishPipelineTests
     {
         public string Name => "fake";
 
-        public int EncodeCalls { get; private set; }
+        private int _encodeCalls;
+
+        public int EncodeCalls => Volatile.Read(ref _encodeCalls);
 
         public int KeyFrameRequests { get; private set; }
 
         public VideoFrame? LastFrame { get; private set; }
+
+        public List<TimeSpan> EncodedTimestamps { get; } = [];
+
+        public List<byte> FirstByteValues { get; } = [];
 
         public bool ReturnNull { get; init; }
 
@@ -321,8 +402,10 @@ public sealed class ScreenPublishPipelineTests
 
         public EncodedVideoSample? Encode(VideoFrame frame, VideoQuality quality)
         {
-            EncodeCalls++;
+            Interlocked.Increment(ref _encodeCalls);
             LastFrame = frame;
+            EncodedTimestamps.Add(frame.Timestamp);
+            FirstByteValues.Add(frame.Bgra.Span[0]);
             DuringEncode?.Invoke();
             if (Throw) throw new InvalidOperationException("encoder failed");
             return ReturnNull

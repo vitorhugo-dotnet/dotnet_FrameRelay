@@ -49,8 +49,68 @@ public sealed class VideoPublisherTests
             () => time.Advance(TimeSpan.FromMilliseconds(7));
 
         harness.Capture.Emit();
+        await harness.Peers.Created[0].VideoSendCompleted.Task.WaitAsync(TimeSpan.FromSeconds(1));
 
         Assert.Equal(TimeSpan.FromMilliseconds(7), harness.Publisher.LastVideoSendDuration);
+    }
+
+    [Fact]
+    public async Task A_blocked_viewer_does_not_block_the_next_capture_callback()
+    {
+        var harness = await Harness.StartedAsync();
+        await harness.Publisher.AddViewerAsync(ViewerA, CancellationToken.None);
+        var peer = harness.Peers.Created[0];
+        peer.BlockVideoSends = true;
+
+        var first = Task.Run(harness.Capture.Emit);
+        try
+        {
+            await peer.VideoSendEntered.Task.WaitAsync(TimeSpan.FromSeconds(1));
+
+            var second = Task.Run(harness.Capture.Emit);
+            await second.WaitAsync(TimeSpan.FromMilliseconds(250));
+            peer.BlockVideoSends = false;
+            peer.ReleaseVideoSend();
+            await Task.WhenAll(first, second);
+        }
+        finally
+        {
+            peer.BlockVideoSends = false;
+            peer.ReleaseVideoSend();
+            await first;
+        }
+    }
+
+    [Fact]
+    public async Task A_stale_pending_sample_is_replaced_and_requests_a_clean_point()
+    {
+        var harness = await Harness.StartedAsync();
+        await harness.Publisher.AddViewerAsync(ViewerA, CancellationToken.None);
+        var peer = harness.Peers.Created[0];
+        peer.BlockVideoSends = true;
+
+        var first = Task.Run(harness.Capture.Emit);
+        try
+        {
+            await peer.VideoSendEntered.Task.WaitAsync(TimeSpan.FromSeconds(1));
+            await Task.Run(harness.Capture.Emit);
+            await Task.Run(harness.Capture.Emit);
+
+            Assert.Equal(1, harness.Pipeline.KeyFrameRequests);
+            Assert.Equal(1, harness.Publisher.DroppedVideoSamples);
+
+            peer.BlockVideoSends = false;
+            peer.ReleaseVideoSend();
+            await first;
+            await peer.SecondVideoSendCompleted.Task.WaitAsync(TimeSpan.FromSeconds(1));
+            Assert.Equal(2, peer.SentSamples.Count);
+        }
+        finally
+        {
+            peer.BlockVideoSends = false;
+            peer.ReleaseVideoSend();
+            await first;
+        }
     }
 
     [Fact]
@@ -361,6 +421,20 @@ public sealed class VideoPublisherTests
 
         public Action? DuringVideoSend { get; set; }
 
+        public bool BlockVideoSends { get; set; }
+
+        public TaskCompletionSource VideoSendEntered { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource VideoSendCompleted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource SecondVideoSendCompleted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        private TaskCompletionSource VideoSendRelease { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
         public event Action<string, string?, int?>? IceCandidateGathered;
         public event Action<KeyFrameRequestReason>? KeyFrameRequested;
         public event Action<double>? PacketLossReported;
@@ -385,8 +459,18 @@ public sealed class VideoPublisherTests
         public void SendVideo(EncodedVideoSample sample)
         {
             DuringVideoSend?.Invoke();
+            if (BlockVideoSends)
+            {
+                VideoSendEntered.TrySetResult();
+                VideoSendRelease.Task.GetAwaiter().GetResult();
+            }
+
             SentSamples.Add(sample);
+            VideoSendCompleted.TrySetResult();
+            if (SentSamples.Count == 2) SecondVideoSendCompleted.TrySetResult();
         }
+
+        public void ReleaseVideoSend() => VideoSendRelease.TrySetResult();
 
         public void SendAudio(EncodedAudioSample sample) => SentAudioSamples.Add(sample);
 

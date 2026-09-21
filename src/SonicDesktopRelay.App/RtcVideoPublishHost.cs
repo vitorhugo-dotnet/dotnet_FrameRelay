@@ -29,6 +29,7 @@ public sealed class RtcVideoPublishHost(
 
     private ScreenPublishPipeline? _pipeline;
     private MediaFoundationH264Encoder? _encoder;
+    private GraphicsCaptureScreenSource? _capture;
     private AudioPublishPipeline? _audioPipeline;
     private WasapiLoopbackAudioSource? _audioSource;
     private VideoPublisher? _publisher;
@@ -60,6 +61,18 @@ public sealed class RtcVideoPublishHost(
     public long KeyFrameRequests => _pipeline?.KeyFrameRequests ?? 0;
 
     public long MaximumAccessUnitBytes => _pipeline?.MaximumAccessUnitBytes ?? 0;
+
+    public long DroppedVideoSamples => _publisher?.DroppedVideoSamples ?? 0;
+
+    public long VideoSendFailures => _publisher?.VideoSendFailures ?? 0;
+
+    public int PendingVideoSamples => _publisher?.PendingVideoSamples ?? 0;
+
+    public long CaptureFramesArrived => _capture?.FramesArrived ?? 0;
+
+    public long CaptureFramesDelivered => _capture?.FramesDelivered ?? 0;
+
+    public long CaptureFramesDropped => _capture?.FramesDropped ?? 0;
 
     public DateTimeOffset? LastCapturedFrameAt => _pipeline?.LastCapturedFrameAt;
 
@@ -108,6 +121,7 @@ public sealed class RtcVideoPublishHost(
             EncoderRejections = encoder.RejectionLog;
 
             var capture = new GraphicsCaptureScreenSource();
+            _capture = capture;
             var pipeline = new ScreenPublishPipeline(
                 capture,
                 encoder,
@@ -251,6 +265,7 @@ public sealed class RtcVideoPublishHost(
         }
 
         _audioSource = null;
+        _capture = null;
 
         if (_pipeline is not null)
         {

@@ -35,6 +35,9 @@ public sealed class VideoPublisherTests
 
         harness.Capture.Emit();
 
+        await Task.WhenAll(harness.Peers.Created.Select(peer =>
+            peer.VideoSendCompleted.Task.WaitAsync(TimeSpan.FromSeconds(1))));
+
         Assert.Equal(1, harness.Encoder.EncodeCalls);
         Assert.All(harness.Peers.Created, peer => Assert.Single(peer.SentSamples));
     }

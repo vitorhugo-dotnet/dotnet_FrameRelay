@@ -43,6 +43,8 @@ public sealed class VideoPublisher(
 
     public int PendingVideoSamples => _videoQueues.Values.Sum(x => x.PendingSamples);
 
+    public int ViewersAwaitingKeyFrame => _videoQueues.Values.Count(x => x.AwaitingKeyFrame);
+
     public event Action<Guid, RtcTransportDiagnostics>? TransportDiagnosticsChanged;
 
     public async Task AddViewerAsync(Guid participantId, CancellationToken ct)

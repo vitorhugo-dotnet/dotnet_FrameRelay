@@ -96,23 +96,101 @@ public sealed class VideoPublisherTests
         try
         {
             await peer.VideoSendEntered.Task.WaitAsync(TimeSpan.FromSeconds(1));
+            harness.Encoder.NextIsKeyFrame = false;
             await Task.Run(harness.Capture.Emit);
             await Task.Run(harness.Capture.Emit);
 
             Assert.Equal(1, harness.Pipeline.KeyFrameRequests);
             Assert.Equal(1, harness.Publisher.DroppedVideoSamples);
 
+            harness.Encoder.NextIsKeyFrame = true;
+            await Task.Run(harness.Capture.Emit);
             peer.BlockVideoSends = false;
             peer.ReleaseVideoSend();
             await first;
             await peer.SecondVideoSendCompleted.Task.WaitAsync(TimeSpan.FromSeconds(1));
             Assert.Equal(2, peer.SentSamples.Count);
+            Assert.True(peer.SentSamples[1].IsKeyFrame);
         }
         finally
         {
             peer.BlockVideoSends = false;
             peer.ReleaseVideoSend();
             await first;
+        }
+    }
+
+    [Fact]
+    public async Task A_pending_recovery_keyframe_is_never_replaced_by_a_newer_delta()
+    {
+        var harness = await Harness.StartedAsync();
+        await harness.Publisher.AddViewerAsync(ViewerA, CancellationToken.None);
+        var peer = harness.Peers.Created[0];
+        peer.BlockVideoSends = true;
+
+        harness.Encoder.NextIsKeyFrame = false;
+        var first = Task.Run(harness.Capture.Emit);
+        try
+        {
+            await peer.VideoSendEntered.Task.WaitAsync(TimeSpan.FromSeconds(1));
+
+            harness.Encoder.NextIsKeyFrame = false;
+            await Task.Run(harness.Capture.Emit);
+
+            harness.Encoder.NextIsKeyFrame = true;
+            await Task.Run(harness.Capture.Emit);
+
+            harness.Encoder.NextIsKeyFrame = false;
+            await Task.Run(harness.Capture.Emit);
+
+            peer.BlockVideoSends = false;
+            peer.ReleaseVideoSend();
+            await first;
+            await peer.SecondVideoSendCompleted.Task.WaitAsync(TimeSpan.FromSeconds(1));
+
+            Assert.Equal(2, peer.SentSamples.Count);
+            Assert.True(peer.SentSamples[1].IsKeyFrame);
+        }
+        finally
+        {
+            peer.BlockVideoSends = false;
+            peer.ReleaseVideoSend();
+            await first;
+        }
+    }
+
+    [Fact]
+    public async Task Recovery_requests_from_two_slow_viewers_are_coalesced_by_the_shared_pipeline()
+    {
+        var harness = await Harness.StartedAsync();
+        await harness.Publisher.AddViewerAsync(ViewerA, CancellationToken.None);
+        await harness.Publisher.AddViewerAsync(ViewerB, CancellationToken.None);
+        var firstPeer = harness.Peers.Created[0];
+        var secondPeer = harness.Peers.Created[1];
+        firstPeer.BlockVideoSends = true;
+        secondPeer.BlockVideoSends = true;
+
+        var first = Task.Run(harness.Capture.Emit);
+        var second = Task.Run(harness.Capture.Emit);
+        try
+        {
+            await Task.WhenAll(
+                firstPeer.VideoSendEntered.Task.WaitAsync(TimeSpan.FromSeconds(1)),
+                secondPeer.VideoSendEntered.Task.WaitAsync(TimeSpan.FromSeconds(1)));
+
+            await Task.Run(harness.Capture.Emit);
+            await Task.Run(harness.Capture.Emit);
+
+            Assert.InRange(harness.Pipeline.KeyFrameRequestSignals, 1, 2);
+            Assert.Equal(1, harness.Pipeline.KeyFrameRequests);
+        }
+        finally
+        {
+            firstPeer.BlockVideoSends = false;
+            secondPeer.BlockVideoSends = false;
+            firstPeer.ReleaseVideoSend();
+            secondPeer.ReleaseVideoSend();
+            await Task.WhenAll(first, second);
         }
     }
 
@@ -358,11 +436,14 @@ public sealed class VideoPublisherTests
         public string Name => "fake";
         public int EncodeCalls { get; private set; }
         public int KeyFrameRequests { get; private set; }
+        public bool NextIsKeyFrame { get; set; } = true;
 
         public EncodedVideoSample? Encode(VideoFrame frame, VideoQuality quality)
         {
             EncodeCalls++;
-            return new EncodedVideoSample(new byte[8], frame.Timestamp, true, frame.Width, frame.Height);
+            var isKeyFrame = NextIsKeyFrame;
+            NextIsKeyFrame = false;
+            return new EncodedVideoSample(new byte[8], frame.Timestamp, isKeyFrame, frame.Width, frame.Height);
         }
 
         public void RequestKeyFrame() => KeyFrameRequests++;

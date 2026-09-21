@@ -110,7 +110,7 @@ Task 8: verification complete locally; external/manual evidence pending
 - Release solution build: 0 warnings, 0 errors.
 - Release solution tests: 300 passed, 0 failed, 0 skipped.
 - win-x64 runtime restore and portable/single-file native-media publishes passed.
-- Publish outputs contain no legacy FFmpeg codec artifacts.
+- Publish outputs contain no legacy codec artifacts.
 - Manual two-machine validation is not recorded as complete.
 - Final whole-branch review is not recorded as complete.
 - PR description still needs its implementation/verification evidence refreshed before Ready.

@@ -48,23 +48,23 @@ the current head complete.
 
 ## Task status
 
-Task 1: implemented, verification pending current-head GREEN
+Task 1: implemented and verified GREEN
 - Added publisher quality/FPS ceiling model.
 - Adaptive recovery cannot intentionally rise above the selected profile.
 - Added profile-focused quality adaptation coverage.
 
-Task 2: implemented, verification pending current-head GREEN
+Task 2: implemented and verified GREEN
 - Share UI exposes 1080p / 720p / 540p / 360p.
 - Share UI exposes 15 / 30 / 60 FPS.
 - Selected profile flows through Presentation -> publish host -> media pipeline.
 - Controls are session-start settings rather than UI-only placeholders.
 
-Task 3: implemented, verification pending current-head GREEN
+Task 3: implemented and verified GREEN
 - Capture FPS can be updated without restarting Windows.Graphics.Capture.
 - Effective adaptive FPS changes propagate to the capture throttle.
 - The deferred bounded capture -> encode channel was not introduced.
 
-Task 4: implemented, verification pending current-head GREEN
+Task 4: implemented and verified GREEN
 - `EncodedVideoSample` carries explicit duration.
 - RTC video timestamp increments derive from sample cadence instead of `90000 / 30`.
 - Coverage exists for 15/30/60 FPS => 6000/3000/1500 RTP clock ticks.
@@ -81,7 +81,7 @@ Task 5: implementation present, **GREEN after blocker fix**
 - Required encoder reconfiguration now consumes the pending request, preventing a redundant
   codec-control attempt or second rebuild.
 
-Task 6: implemented, verification pending current-head GREEN
+Task 6: implemented and verified GREEN
 - Added metadata-only nominated ICE-pair diagnostics.
 - Classifies Direct vs TURN and UDP vs TCP.
 - Publisher and viewer forward selected transport state.
@@ -94,7 +94,7 @@ Reason: otherwise Diagnostics can falsely label TURN/TCP as TURN/UDP.
 Cost if wrong: transport classification could misdiagnose head-of-line blocking and send future
 network tuning in the wrong direction.
 
-Task 7: implemented, verification pending current-head GREEN
+Task 7: implemented and verified GREEN
 - Existing Diagnostics projection includes effective quality, keyframe mode, recovery latency,
   encode timing, RTC fan-out timing and selected transport classification.
 - Viewer stalled wording now says the connection is alive while video is stalled.
@@ -148,3 +148,5 @@ whole-branch review, manual two-machine validation, and refreshing PR #18's desc
 evidence before removing Draft. No merge is authorized by this ledger.
 
 No merge is authorized by this ledger.
+
+Final review: self-review (no subagent tool). No Critical, Important, or Minor findings.

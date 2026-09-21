@@ -13,5 +13,7 @@ public interface IScreenCaptureSource : IAsyncDisposable
 
     Task StartAsync(MonitorInfo monitor, VideoQuality quality, CancellationToken ct);
 
+    void SetFrameRate(int framesPerSecond);
+
     Task StopAsync();
 }

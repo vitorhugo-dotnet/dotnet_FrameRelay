@@ -108,6 +108,18 @@ public sealed class GraphicsCaptureScreenSource : IScreenCaptureSource
         return Task.CompletedTask;
     }
 
+    public void SetFrameRate(int framesPerSecond)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (framesPerSecond <= 0)
+            throw new ArgumentOutOfRangeException(nameof(framesPerSecond));
+
+        lock (_gate)
+        {
+            _minimumInterval = TimeSpan.FromSeconds(1.0 / framesPerSecond);
+        }
+    }
+
     public Task StopAsync()
     {
         GraphicsCaptureItem? item;

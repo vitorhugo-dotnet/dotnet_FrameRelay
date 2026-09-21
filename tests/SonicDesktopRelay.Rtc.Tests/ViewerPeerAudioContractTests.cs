@@ -52,6 +52,14 @@ public sealed class ViewerPeerAudioContractTests
             remove { }
         }
 
+        public event Action<RtcTransportDiagnostics>? TransportDiagnosticsChanged
+        {
+            add { }
+            remove { }
+        }
+
+        public RtcTransportDiagnostics? TransportDiagnostics => null;
+
         public Task<string> CreateAnswerAsync(string offerSdp, CancellationToken ct) => Task.FromResult("answer");
 
         public Task AddIceCandidateAsync(string candidate, string? sdpMid, int? sdpMLineIndex, CancellationToken ct) =>

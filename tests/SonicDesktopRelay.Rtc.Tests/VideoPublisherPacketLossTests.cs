@@ -35,6 +35,8 @@ public sealed class VideoPublisherPacketLossTests
             return Task.CompletedTask;
         }
 
+        public void SetFrameRate(int framesPerSecond) { }
+
         public Task StopAsync() => Task.CompletedTask;
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
@@ -63,6 +65,9 @@ public sealed class VideoPublisherPacketLossTests
         public event Action<string, string?, int?>? IceCandidateGathered { add { } remove { } }
         public event Action<KeyFrameRequestReason>? KeyFrameRequested { add { } remove { } }
         public event Action<double>? PacketLossReported;
+        public event Action<RtcTransportDiagnostics>? TransportDiagnosticsChanged { add { } remove { } }
+
+        public RtcTransportDiagnostics? TransportDiagnostics => null;
 
         public Task<string> CreateOfferAsync(CancellationToken ct) => Task.FromResult("offer");
         public Task ApplyAnswerAsync(string sdp, CancellationToken ct) => Task.CompletedTask;

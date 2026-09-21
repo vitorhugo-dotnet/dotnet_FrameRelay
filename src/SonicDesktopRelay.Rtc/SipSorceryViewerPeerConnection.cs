@@ -28,6 +28,7 @@ public sealed class SipSorceryViewerPeerConnection : IViewerPeerConnection
     private readonly ViewerVideoRecoveryGate _videoRecovery = new(RecoveryPliInterval);
     private readonly Lock _gate = new();
 
+    private RtcTransportDiagnostics? _transportDiagnostics;
     private long _pliSent;
     private bool _closed;
 
@@ -75,8 +76,12 @@ public sealed class SipSorceryViewerPeerConnection : IViewerPeerConnection
             EmitDiagnostic("viewer.signaling_state.changed");
         _connection.onicegatheringstatechange += _ =>
             EmitDiagnostic("viewer.ice_gathering_state.changed");
-        _connection.oniceconnectionstatechange += _ =>
+        _connection.oniceconnectionstatechange += state =>
+        {
             EmitDiagnostic("viewer.ice_connection_state.changed");
+            if (state == RTCIceConnectionState.connected)
+                RefreshTransportDiagnostics();
+        };
 
         _connection.OnAudioFrameReceived += frame =>
         {
@@ -148,7 +153,10 @@ public sealed class SipSorceryViewerPeerConnection : IViewerPeerConnection
             // The publisher emits keyframes on demand only, so a viewer that has just
             // connected holds no reference frame at all until it asks for one.
             if (state == RTCPeerConnectionState.connected)
+            {
+                RefreshTransportDiagnostics();
                 RequestRecoveryKeyFrame("initial-connection");
+            }
         };
     }
 
@@ -159,6 +167,16 @@ public sealed class SipSorceryViewerPeerConnection : IViewerPeerConnection
     public event Action<EncodedAudioSample>? AudioSampleReceived;
 
     public event Action<ViewerNegotiationDiagnosticEntry>? Diagnostic;
+
+    public event Action<RtcTransportDiagnostics>? TransportDiagnosticsChanged;
+
+    public RtcTransportDiagnostics? TransportDiagnostics
+    {
+        get
+        {
+            lock (_gate) return _transportDiagnostics;
+        }
+    }
 
     public async Task<string> CreateAnswerAsync(string offerSdp, CancellationToken ct)
     {
@@ -261,6 +279,31 @@ public sealed class SipSorceryViewerPeerConnection : IViewerPeerConnection
             setDescriptionResult,
             exceptionType,
             message));
+    }
+
+    private void RefreshTransportDiagnostics()
+    {
+        var nominated = _connection.GetRtpChannel()?.NominatedEntry;
+        if (nominated?.LocalCandidate is not { } local || nominated.RemoteCandidate is not { } remote)
+            return;
+
+        var next = RtcTransportClassifier.Classify(
+            local.type,
+            remote.type,
+            local.protocol,
+            remote.protocol,
+            local.IceServer?.Protocol);
+
+        lock (_gate)
+        {
+            if (_closed || _transportDiagnostics == next) return;
+            _transportDiagnostics = next;
+        }
+
+        TransportDiagnosticsChanged?.Invoke(next);
+        EmitDiagnostic(
+            "viewer.transport.selected",
+            message: $"path={next.Path} protocol={next.Protocol} localType={next.LocalCandidateType} remoteType={next.RemoteCandidateType}");
     }
 
     public void RequestKeyFrame() => RequestRecoveryKeyFrame("stall");

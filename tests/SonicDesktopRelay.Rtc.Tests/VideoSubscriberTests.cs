@@ -60,6 +60,21 @@ public sealed class VideoSubscriberTests
     }
 
     [Fact]
+    public async Task Selected_transport_is_forwarded_without_raw_candidate_data()
+    {
+        var harness = new Harness();
+        var expected = new RtcTransportDiagnostics("TURN", "UDP", "relay", "host");
+        RtcTransportDiagnostics? observed = null;
+        harness.Subscriber.TransportDiagnosticsChanged += diagnostics => observed = diagnostics;
+
+        await harness.OfferAsync();
+        harness.Peers.Created!.ReportTransport(expected);
+
+        Assert.Equal(expected, observed);
+        Assert.Equal(expected, harness.Subscriber.TransportDiagnostics);
+    }
+
+    [Fact]
     public async Task An_offer_produces_an_answer_addressed_to_the_publisher()
     {
         var harness = new Harness();
@@ -425,6 +440,10 @@ public sealed class VideoSubscriberTests
 
         public event Action<ViewerNegotiationDiagnosticEntry>? Diagnostic;
 
+        public event Action<RtcTransportDiagnostics>? TransportDiagnosticsChanged;
+
+        public RtcTransportDiagnostics? TransportDiagnostics { get; private set; }
+
         public Task<string> CreateAnswerAsync(string offerSdp, CancellationToken ct)
         {
             ReceivedOffer = offerSdp;
@@ -456,6 +475,12 @@ public sealed class VideoSubscriberTests
         public void ReceiveVideo(EncodedVideoSample sample) => VideoSampleReceived?.Invoke(sample);
 
         public void ReceiveAudio(EncodedAudioSample sample) => AudioSampleReceived?.Invoke(sample);
+
+        public void ReportTransport(RtcTransportDiagnostics diagnostics)
+        {
+            TransportDiagnostics = diagnostics;
+            TransportDiagnosticsChanged?.Invoke(diagnostics);
+        }
 
         public ValueTask DisposeAsync()
         {

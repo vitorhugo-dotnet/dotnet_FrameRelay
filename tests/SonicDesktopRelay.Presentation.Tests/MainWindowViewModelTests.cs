@@ -113,7 +113,7 @@ public sealed class MainWindowViewModelTests
     [Theory]
     [InlineData(WatchState.Waiting, "Connected — waiting for the first frame")]
     [InlineData(WatchState.Receiving, "Watching")]
-    [InlineData(WatchState.Stalled, "Connected, but no picture is arriving")]
+    [InlineData(WatchState.Stalled, "Connected — video stalled, showing last received frame")]
     [InlineData(WatchState.Failed, "The picture could not be decoded")]
     public void A_viewer_is_told_what_the_media_is_doing(WatchState state, string expected)
     {

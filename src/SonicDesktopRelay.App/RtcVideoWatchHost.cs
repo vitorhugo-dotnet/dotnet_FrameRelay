@@ -42,6 +42,8 @@ public sealed class RtcVideoWatchHost(
 
     public NativeVideoDiagnostics? VideoDiagnostics => _decoder?.Diagnostics;
 
+    public RtcTransportDiagnostics? TransportDiagnostics => _subscriber?.TransportDiagnostics;
+
     public string? VideoDecoderFailure => _pipeline?.LastFailure ?? _decoder?.LastFailure;
 
     public long VideoAccessUnitsReceived => _pipeline?.VideoAccessUnitsReceived ?? 0;
@@ -173,6 +175,7 @@ public sealed class RtcVideoWatchHost(
 
             subscriber.NegotiationFailed += OnNegotiationFailed;
             subscriber.Diagnostic += OnWebRtcDiagnostic;
+            subscriber.TransportDiagnosticsChanged += OnTransportDiagnosticsChanged;
             _subscriber = subscriber;
 
             _logger.LogInformation(
@@ -257,6 +260,17 @@ public sealed class RtcVideoWatchHost(
     private void OnWebRtcDiagnostic(ViewerNegotiationDiagnosticEntry entry) =>
         WebRtcDiagnosticAdded?.Invoke(entry);
 
+    private void OnTransportDiagnosticsChanged(RtcTransportDiagnostics diagnostics)
+    {
+        _logger.LogInformation(
+            "Viewer WebRTC transport selected. path={Path} protocol={Protocol} localType={LocalType} remoteType={RemoteType}",
+            diagnostics.Path,
+            diagnostics.Protocol,
+            diagnostics.LocalCandidateType,
+            diagnostics.RemoteCandidateType);
+        VideoDiagnosticsChanged?.Invoke();
+    }
+
     private async Task<IceServerSettings> LoadIceAsync(CancellationToken ct)
     {
         var response = await iceApi.GetIceServersAsync(ct);
@@ -278,6 +292,7 @@ public sealed class RtcVideoWatchHost(
         {
             _subscriber.NegotiationFailed -= OnNegotiationFailed;
             _subscriber.Diagnostic -= OnWebRtcDiagnostic;
+            _subscriber.TransportDiagnosticsChanged -= OnTransportDiagnosticsChanged;
             await _subscriber.DisposeAsync();
             _subscriber = null;
         }

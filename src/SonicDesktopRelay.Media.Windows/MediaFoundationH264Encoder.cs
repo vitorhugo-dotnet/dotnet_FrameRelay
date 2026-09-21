@@ -36,14 +36,15 @@ public sealed class MediaFoundationH264Encoder : IVideoEncoder
     private readonly BgraToNv12Converter _converter = new();
     private readonly Lock _gate = new();
     private readonly List<string> _rejections = [];
+    private readonly EncoderKeyFramePolicy _keyFramePolicy = new(null);
 
     private IMFTransform? _transform;
+    private MediaFoundationCodecControl? _codecControl;
     private MediaFoundationAsyncMftPump? _asyncPump;
     private int _width;
     private int _height;
     private int _fps;
     private int _bitrate;
-    private bool _forceKeyFrame;
     private bool _asyncInputReady;
     private bool _disposed;
 
@@ -102,6 +103,8 @@ public sealed class MediaFoundationH264Encoder : IVideoEncoder
 
     public IReadOnlyList<string> RejectionLog => _rejections;
 
+    public string KeyFrameMode { get; private set; } = "not-requested";
+
     public NativeVideoDiagnostics Diagnostics => new(
         "Media Foundation",
         TransformInfo?.Name ?? Name,
@@ -131,8 +134,7 @@ public sealed class MediaFoundationH264Encoder : IVideoEncoder
                 || width != _width
                 || height != _height
                 || quality.FramesPerSecond != _fps
-                || quality.TargetBitsPerSecond != _bitrate
-                || _forceKeyFrame;
+                || quality.TargetBitsPerSecond != _bitrate;
 
             if (requiresReconfigure)
             {
@@ -141,14 +143,34 @@ public sealed class MediaFoundationH264Encoder : IVideoEncoder
                     height,
                     quality.FramesPerSecond,
                     quality.TargetBitsPerSecond);
-                _forceKeyFrame = false;
+
+                // A required configuration change already rebuilds the transform and produces
+                // the clean point needed for recovery. Consume a pending request so the next
+                // input does not force a redundant codec-control attempt or second rebuild.
+                _keyFramePolicy.ConsumeAfterRequiredReconfigure();
             }
 
+            switch (_keyFramePolicy.BeforeNextInput())
+            {
+                case EncoderKeyFrameAction.CodecApi:
+                    KeyFrameMode = "codec-api";
+                    break;
+                case EncoderKeyFrameAction.ReconfigureFallback:
+                    SelectAndConfigure(
+                        width,
+                        height,
+                        quality.FramesPerSecond,
+                        quality.TargetBitsPerSecond);
+                    KeyFrameMode = "reconfigure-fallback";
+                    break;
+            }
+
+            var duration = TimeSpan.FromTicks(TimeSpan.TicksPerSecond / quality.FramesPerSecond);
             var nv12 = _converter.Convert(frame, width, height);
             using var input = CreateInputSample(
                 nv12,
                 frame.Timestamp,
-                TimeSpan.FromTicks(TimeSpan.TicksPerSecond / quality.FramesPerSecond));
+                duration);
 
             if (_asyncPump is not null)
             {
@@ -181,11 +203,11 @@ public sealed class MediaFoundationH264Encoder : IVideoEncoder
                 if (_asyncPump.InputCredits > 0)
                     _asyncInputReady = _asyncPump.TryTakeInput();
 
-                return TryReadOutput(frame.Timestamp, width, height);
+                return TryReadOutput(frame.Timestamp, duration, width, height);
             }
 
             _transform!.ProcessInput(0, input, 0);
-            return TryReadOutput(frame.Timestamp, width, height);
+            return TryReadOutput(frame.Timestamp, duration, width, height);
         }
     }
 
@@ -195,10 +217,7 @@ public sealed class MediaFoundationH264Encoder : IVideoEncoder
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
 
-            // The public Vortice bindings do not expose ICodecAPI today. Reopening the selected
-            // MFT is the deterministic fallback: the first sample of a new encoder instance is
-            // a random-access picture, which gives PLI/FIR the semantics the RTC layer needs.
-            _forceKeyFrame = true;
+            _keyFramePolicy.Request();
         }
     }
 
@@ -241,6 +260,7 @@ public sealed class MediaFoundationH264Encoder : IVideoEncoder
         {
             var friendlyName = ReadFriendlyName(activation);
             IMFTransform? transform = null;
+            MediaFoundationCodecControl? codecControl = null;
             try
             {
                 transform = activation.ActivateObject<IMFTransform>();
@@ -285,9 +305,13 @@ public sealed class MediaFoundationH264Encoder : IVideoEncoder
                 }
 
                 var clsid = ReadClsid(activation);
+                codecControl = new MediaFoundationCodecControl(transform.NativePointer);
                 _transform = transform;
                 _asyncPump = asyncPump;
+                _codecControl = codecControl;
+                _keyFramePolicy.UpdateControl(codecControl);
                 transform = null;
+                codecControl = null;
                 _width = width;
                 _height = height;
                 _fps = fps;
@@ -309,6 +333,7 @@ public sealed class MediaFoundationH264Encoder : IVideoEncoder
             }
             finally
             {
+                codecControl?.Dispose();
                 transform?.Dispose();
             }
         }
@@ -445,6 +470,7 @@ public sealed class MediaFoundationH264Encoder : IVideoEncoder
 
     private EncodedVideoSample? TryReadOutput(
         TimeSpan timestamp,
+        TimeSpan duration,
         int width,
         int height)
     {
@@ -525,7 +551,7 @@ public sealed class MediaFoundationH264Encoder : IVideoEncoder
                 && clean != 0;
             var keyFrame = cleanPoint || H264AccessUnit.ContainsKeyFrame(annexB);
 
-            return new EncodedVideoSample(annexB, timestamp, keyFrame, width, height);
+            return new EncodedVideoSample(annexB, timestamp, keyFrame, width, height, duration);
         }
         finally
         {
@@ -570,6 +596,10 @@ public sealed class MediaFoundationH264Encoder : IVideoEncoder
 
     private void ReleaseTransform()
     {
+        _keyFramePolicy.UpdateControl(null);
+        _codecControl?.Dispose();
+        _codecControl = null;
+
         _asyncPump?.Dispose();
         _asyncPump = null;
         _asyncInputReady = false;

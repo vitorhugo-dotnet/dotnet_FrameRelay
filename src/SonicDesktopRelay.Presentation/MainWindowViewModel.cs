@@ -78,7 +78,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     private static string WatchingText(WatchState? state) => state switch
     {
         WatchState.Waiting => "Connected — waiting for the first frame",
-        WatchState.Stalled => "Connected, but no picture is arriving",
+        WatchState.Stalled => "Connected — video stalled, showing last received frame",
         WatchState.Failed => "The picture could not be decoded",
         _ => "Watching"
     };

@@ -143,6 +143,11 @@ public sealed class MediaFoundationH264Encoder : IVideoEncoder
                     height,
                     quality.FramesPerSecond,
                     quality.TargetBitsPerSecond);
+
+                // A required configuration change already rebuilds the transform and produces
+                // the clean point needed for recovery. Consume a pending request so the next
+                // input does not force a redundant codec-control attempt or second rebuild.
+                _keyFramePolicy.ConsumeAfterRequiredReconfigure();
             }
 
             switch (_keyFramePolicy.BeforeNextInput())

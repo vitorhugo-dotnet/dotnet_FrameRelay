@@ -13,17 +13,17 @@ This ledger is a versioned checkpoint of the Superpowers inline-execution state.
 `executing-plans` ledger format, but it does **not** mark tasks as `complete` unless the
 Superpowers completion contract has fresh passing verification for the current branch head.
 
-The latest full CI for the checkpoint head is **RED**:
+The checkpoint head was **RED**:
 
 - workflow: CI #234
 - run id: `35387030033`
 - Windows job: `105736217725`
 - failure stage: `Build solution`
-- current blocker:
+- resolved blocker:
   `EncoderKeyFramePolicy` is missing `ConsumeAfterRequiredReconfigure()`, required by
   `Required_reconfigure_consumes_a_pending_keyframe_without_forcing_a_second_reconfigure`
   in `MediaFoundationKeyFramePolicyTests`.
-- compiler error: `CS1061`
+- compiler error: `CS1061`. The policy operation and encoder integration are now implemented.
 
 A previous branch checkpoint, CI #226, passed restore, Release build, release publishing helper
 tests, the .NET test suite, win-x64 runtime restore, and native-media publish-output verification.
@@ -69,7 +69,7 @@ Task 4: implemented, verification pending current-head GREEN
 - RTC video timestamp increments derive from sample cadence instead of `90000 / 30`.
 - Coverage exists for 15/30/60 FPS => 6000/3000/1500 RTP clock ticks.
 
-Task 5: implementation present, **currently RED**
+Task 5: implementation present, **GREEN after blocker fix**
 - Added narrow Windows `ICodecAPI` COM bridge for `CODECAPI_AVEncVideoForceKeyFrame`.
 - Recovery-only keyframe requests use the codec-control fast path when supported.
 - Unsupported codec control retains a diagnosed reconfigure fallback.
@@ -77,8 +77,9 @@ Task 5: implementation present, **currently RED**
 - Current regression test additionally requires a pending keyframe request to be consumed by an
   already-required quality/geometry reconfigure so the next input does not trigger a second,
   redundant reconfigure.
-- Missing implementation: `EncoderKeyFramePolicy.ConsumeAfterRequiredReconfigure()`.
-- This is the immediate blocker before any completion claim.
+- Added `EncoderKeyFramePolicy.ConsumeAfterRequiredReconfigure()`.
+- Required encoder reconfiguration now consumes the pending request, preventing a redundant
+  codec-control attempt or second rebuild.
 
 Task 6: implemented, verification pending current-head GREEN
 - Added metadata-only nominated ICE-pair diagnostics.
@@ -99,13 +100,17 @@ Task 7: implemented, verification pending current-head GREEN
 - Viewer stalled wording now says the connection is alive while video is stalled.
 - High-frequency timing is read/sampled rather than dispatching per-frame UI events.
 
-Task 8: partially complete
+Task 8: verification complete locally; external/manual evidence pending
 - README updated.
 - `docs/screen-publishing.md` updated.
 - `docs/native-media-validation.md` updated.
 - Scope scan confirmed the deferred capture -> encode `Channel` was not added.
 - Scope scan confirmed production remains `ForceRelay=false` / P2P-first.
-- Full current-head verification is not green.
+- Focused Windows media tests: 63 passed.
+- Release solution build: 0 warnings, 0 errors.
+- Release solution tests: 300 passed, 0 failed, 0 skipped.
+- win-x64 runtime restore and portable/single-file native-media publishes passed.
+- Publish outputs contain no legacy FFmpeg codec artifacts.
 - Manual two-machine validation is not recorded as complete.
 - Final whole-branch review is not recorded as complete.
 - PR description still needs its implementation/verification evidence refreshed before Ready.
@@ -138,20 +143,8 @@ backpressure, but introducing an unsafe queue now risks actual frame corruption.
 
 ## Next execution point
 
-Resume Task 5 at the failing RED test:
-
-`MediaFoundationKeyFramePolicyTests.Required_reconfigure_consumes_a_pending_keyframe_without_forcing_a_second_reconfigure`
-
-Required next sequence:
-
-1. implement the smallest `ConsumeAfterRequiredReconfigure()` policy behavior that consumes one
-   pending request without calling codec control;
-2. integrate it into `MediaFoundationH264Encoder` when a real configuration change has already
-   rebuilt the transform for the next frame;
-3. run the focused Windows media tests and read the result;
-4. run the full CI-equivalent verification on the resulting head;
-5. only after GREEN, perform the final whole-branch review and manual two-machine validation;
-6. update PR #18 description with final evidence and remove Draft only after the completion
-   contract is satisfied.
+The local implementation and CI-equivalent verification are green. Remaining work is the
+whole-branch review, manual two-machine validation, and refreshing PR #18's description with the
+evidence before removing Draft. No merge is authorized by this ledger.
 
 No merge is authorized by this ledger.

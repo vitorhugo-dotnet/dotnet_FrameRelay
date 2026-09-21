@@ -27,6 +27,15 @@ internal sealed class EncoderKeyFramePolicy(IMediaFoundationCodecControl? codecC
 
     public void UpdateControl(IMediaFoundationCodecControl? value) => _codecControl = value;
 
+    public bool ConsumeAfterRequiredReconfigure()
+    {
+        if (!_pending)
+            return false;
+
+        _pending = false;
+        return true;
+    }
+
     public EncoderKeyFrameAction BeforeNextInput()
     {
         if (!_pending)

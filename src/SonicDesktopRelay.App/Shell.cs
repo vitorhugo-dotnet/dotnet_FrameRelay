@@ -266,7 +266,7 @@ public sealed class Shell : INotifyPropertyChanged
                $"sendFailures={host.VideoSendFailures} " +
                $"viewersAwaitingKeyFrame={host.ViewersAwaitingKeyFrame} " +
                $"captureArrived={host.CaptureFramesArrived} captureDelivered={host.CaptureFramesDelivered} " +
-               $"captureDropped={host.CaptureFramesDropped} " +
+               $"captureDropped={host.CaptureFramesDropped} encodeDropped={host.EncodeFramesDropped} " +
                $"maxAccessUnitBytes={host.MaximumAccessUnitBytes} lastCapture={lastCapture} " +
                $"lastEncoded={lastEncoded} pipelineFailure={pipelineFailure} | {rejected}";
     }

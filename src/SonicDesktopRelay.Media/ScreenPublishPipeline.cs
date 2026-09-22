@@ -8,18 +8,14 @@ namespace SonicDesktopRelay.Media;
 /// <see cref="SampleEncoded"/>, so adding the fourth viewer costs a subscription rather than
 /// a fourth encoder.
 /// </summary>
-public sealed class ScreenPublishPipeline(
-    IScreenCaptureSource capture,
-    IVideoEncoder encoder,
-    MediaSessionClock? clock = null,
-    TimeProvider? time = null,
-    ILogger<ScreenPublishPipeline>? logger = null,
-    VideoPublishProfile? profile = null) : IAsyncDisposable
+public sealed class ScreenPublishPipeline : IAsyncDisposable
 {
-    private readonly TimeProvider _time = time ?? TimeProvider.System;
-    private readonly ILogger<ScreenPublishPipeline> _logger =
-        logger ?? NullLogger<ScreenPublishPipeline>.Instance;
-    private readonly VideoPublishProfile _profile = profile ?? VideoPublishProfile.Default;
+    private readonly IScreenCaptureSource _capture;
+    private readonly IVideoEncoder _encoder;
+    private readonly MediaSessionClock? _clock;
+    private readonly TimeProvider _time;
+    private readonly ILogger<ScreenPublishPipeline> _logger;
+    private readonly VideoPublishProfile _profile;
 
     // RTCP reports normally arrive periodically. Requiring both multiple reports and elapsed
     // time makes a burst insufficient on its own, while the cooldown prevents staircase drops.
@@ -34,6 +30,7 @@ public sealed class ScreenPublishPipeline(
 
     private readonly Lock _adaptationGate = new();
     private readonly Dictionary<Guid, ReceptionEvidence> _receptionBySource = [];
+    private readonly VideoFrameEncodeQueue _encodeQueue;
 
     private bool _running;
     private long _framesCaptured;
@@ -54,16 +51,35 @@ public sealed class ScreenPublishPipeline(
     private DateTimeOffset? _pendingKeyFrameRequestedAt;
     private DateTimeOffset? _lastQualityChangeAt;
 
+    public ScreenPublishPipeline(
+        IScreenCaptureSource capture,
+        IVideoEncoder encoder,
+        MediaSessionClock? clock = null,
+        TimeProvider? time = null,
+        ILogger<ScreenPublishPipeline>? logger = null,
+        VideoPublishProfile? profile = null)
+    {
+        _capture = capture;
+        _encoder = encoder;
+        _clock = clock;
+        _time = time ?? TimeProvider.System;
+        _logger = logger ?? NullLogger<ScreenPublishPipeline>.Instance;
+        _profile = profile ?? VideoPublishProfile.Default;
+        Quality = VideoQuality.InitialFor(_profile);
+        _encodeQueue = new(EncodeFrame);
+    }
+
     public event Action<EncodedVideoSample>? SampleEncoded;
 
     public event Action<Exception>? Failed;
 
-    public VideoQuality Quality { get; private set; } =
-        VideoQuality.InitialFor(profile ?? VideoPublishProfile.Default);
+    public VideoQuality Quality { get; private set; }
 
-    public string EncoderName => encoder.Name;
+    public string EncoderName => _encoder.Name;
 
     public long FramesCaptured => Interlocked.Read(ref _framesCaptured);
+
+    public long DroppedEncodeFrames => _encodeQueue.DroppedFrames;
 
     public long EncodedAccessUnits => Interlocked.Read(ref _encodedAccessUnits);
 
@@ -92,17 +108,22 @@ public sealed class ScreenPublishPipeline(
     public async Task StartAsync(MonitorInfo monitor, CancellationToken ct)
     {
         if (_running) return;
-        capture.FrameCaptured += OnFrame;
-        await capture.StartAsync(monitor, Quality, ct);
+        _capture.FrameCaptured += OnFrame;
+        await _capture.StartAsync(monitor, Quality, ct);
         _running = true;
     }
 
     public async Task StopAsync()
     {
-        if (!_running) return;
+        var wasRunning = _running;
         _running = false;
-        capture.FrameCaptured -= OnFrame;
-        await capture.StopAsync();
+        if (wasRunning)
+        {
+            _capture.FrameCaptured -= OnFrame;
+            await _capture.StopAsync();
+        }
+
+        await _encodeQueue.DisposeAsync();
     }
 
     public void RequestKeyFrame(KeyFrameRequestReason reason = KeyFrameRequestReason.Manual)
@@ -142,7 +163,7 @@ public sealed class ScreenPublishPipeline(
                 KeyFrameRequestSignals,
                 PliReceived,
                 EncodedAccessUnits);
-            encoder.RequestKeyFrame();
+            _encoder.RequestKeyFrame();
         }
         catch
         {
@@ -288,7 +309,7 @@ public sealed class ScreenPublishPipeline(
         var newResolution = ResolutionFor(newQuality);
 
         if (oldQuality.FramesPerSecond != newQuality.FramesPerSecond)
-            capture.SetFrameRate(newQuality.FramesPerSecond);
+            _capture.SetFrameRate(newQuality.FramesPerSecond);
 
         _logger.LogWarning(
             "{QualityEvent} reason={Reason} receptionSource={ReceptionSource} reportedLoss={ReportedLoss:F4} " +
@@ -353,7 +374,7 @@ public sealed class ScreenPublishPipeline(
 
     private string ResolutionFor(VideoQuality quality)
     {
-        var monitor = capture.Monitor;
+        var monitor = _capture.Monitor;
         if (monitor.Width <= 0 || monitor.Height <= 0)
             return $"max-height-{quality.MaxHeight}";
 
@@ -368,14 +389,24 @@ public sealed class ScreenPublishPipeline(
         Interlocked.Increment(ref _framesCaptured);
         Interlocked.Exchange(ref _lastCapturedUtcTicks, _time.GetUtcNow().UtcTicks);
 
+        var droppedBefore = _encodeQueue.DroppedFrames;
+        _encodeQueue.Enqueue(frame);
+        if (_encodeQueue.DroppedFrames != droppedBefore)
+            RequestKeyFrame(KeyFrameRequestReason.PacketLoss);
+    }
+
+    private void EncodeFrame(VideoFrame frame)
+    {
+        if (!_running) return;
+
         EncodedVideoSample? sample;
         var encodeStarted = _time.GetTimestamp();
         try
         {
-            var stampedFrame = clock is null
+            var stampedFrame = _clock is null
                 ? frame
-                : new VideoFrame(frame.Width, frame.Height, frame.Bgra, clock.Now);
-            sample = encoder.Encode(stampedFrame, Quality);
+                : new VideoFrame(frame.Width, frame.Height, frame.Bgra, _clock.Now);
+            sample = _encoder.Encode(stampedFrame, Quality);
         }
         catch (Exception e)
         {
@@ -391,7 +422,7 @@ public sealed class ScreenPublishPipeline(
             // Stop before reporting: a failing encoder called once per frame at 30 Hz turns
             // one fault into a flood, and the session is over either way.
             _running = false;
-            capture.FrameCaptured -= OnFrame;
+            _capture.FrameCaptured -= OnFrame;
             Failed?.Invoke(e);
             return;
         }
@@ -503,7 +534,7 @@ public sealed class ScreenPublishPipeline(
     public async ValueTask DisposeAsync()
     {
         await StopAsync();
-        await capture.DisposeAsync();
-        encoder.Dispose();
+        await _capture.DisposeAsync();
+        _encoder.Dispose();
     }
 }

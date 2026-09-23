@@ -2,41 +2,199 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:app="clr-namespace:SonicDesktopRelay.App"
              x:Class="SonicDesktopRelay.App.Views.SettingsView"
-             x:DataType="app:Shell">
-    <StackPanel Margin="{StaticResource PagePadding}" Spacing="{StaticResource SpaceMd}">
-        <TextBlock Text="Settings"
-                   FontSize="{StaticResource FontSizeLg}"
-                   Foreground="{StaticResource TextPrimaryBrush}" />
+             x:DataType="app:Shell"
+             Container.Name="settingsPage" Container.Sizing="Width">
+    <UserControl.Styles>
+        <Style Selector="UniformGrid#settingsColumns">
+            <Setter Property="Columns" Value="2" />
+        </Style>
+        <Style Selector="StackPanel#primaryColumn">
+            <Setter Property="Margin" Value="0,0,12,0" />
+        </Style>
+        <Style Selector="StackPanel#secondaryColumn">
+            <Setter Property="Margin" Value="12,0,0,0" />
+        </Style>
+        <ContainerQuery Name="settingsPage" Query="max-width:800">
+            <Style Selector="UniformGrid#settingsColumns">
+                <Setter Property="Columns" Value="1" />
+            </Style>
+            <Style Selector="StackPanel#primaryColumn">
+                <Setter Property="Margin" Value="0" />
+            </Style>
+            <Style Selector="StackPanel#secondaryColumn">
+                <Setter Property="Margin" Value="0,24,0,0" />
+            </Style>
+        </ContainerQuery>
+    </UserControl.Styles>
 
-        <StackPanel Spacing="{StaticResource SpaceXs}">
-            <TextBlock Text="Backend address"
-                       FontSize="{StaticResource FontSizeSm}"
-                       Foreground="{StaticResource TextSecondaryBrush}" />
-            <TextBox Width="420"
-                     Text="{Binding BackendAddress, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-            <TextBlock Text="Enter an absolute http or https address, for example https://relay.example.com"
-                       IsVisible="{Binding !IsBackendAddressValid}"
-                       TextWrapping="Wrap"
-                       FontSize="{StaticResource FontSizeSm}"
-                       Foreground="{StaticResource DangerBrush}" />
+    <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+        <StackPanel Margin="{StaticResource PagePadding}" Spacing="{StaticResource SpaceLg}">
+            <StackPanel Spacing="{StaticResource SpaceXs}">
+                <TextBlock Text="Settings" FontSize="{StaticResource FontSizeXl}"
+                           FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" />
+                <TextBlock Text="Configure this device and its connection to RelayControl."
+                           TextWrapping="Wrap" FontSize="{StaticResource FontSizeMd}"
+                           Foreground="{StaticResource TextSecondaryBrush}" />
+            </StackPanel>
+
+            <UniformGrid Name="settingsColumns">
+                <StackPanel Name="primaryColumn" Spacing="{StaticResource SpaceMd}">
+                    <Border Classes="card">
+                        <StackPanel Spacing="{StaticResource SpaceMd}">
+                            <StackPanel Spacing="{StaticResource SpaceXs}">
+                                <TextBlock Text="This device" FontSize="{StaticResource FontSizeLg}"
+                                           FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" />
+                                <TextBlock Text="Name used when this computer first registers."
+                                           TextWrapping="Wrap" Foreground="{StaticResource TextSecondaryBrush}" />
+                            </StackPanel>
+                            <StackPanel Spacing="{StaticResource SpaceXs}">
+                                <TextBlock Text="Device name" TextWrapping="Wrap"
+                                           FontSize="{StaticResource FontSizeSm}"
+                                           Foreground="{StaticResource TextSecondaryBrush}" />
+                                <TextBox HorizontalAlignment="Stretch"
+                                         Text="{Binding DeviceName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                <TextBlock Text="Used only when this computer registers for the first time. The backend has no rename, so changing it later has no effect."
+                                           TextWrapping="Wrap" FontSize="{StaticResource FontSizeSm}"
+                                           Foreground="{StaticResource TextSecondaryBrush}" />
+                            </StackPanel>
+                            <TextBlock Text="This device registers itself the first time it reaches the backend. There is no sign-in."
+                                       TextWrapping="Wrap" FontSize="{StaticResource FontSizeSm}"
+                                       Foreground="{StaticResource TextSecondaryBrush}" />
+                        </StackPanel>
+                    </Border>
+
+                    <Border Classes="card unavailable" IsEnabled="False" Focusable="False">
+                        <StackPanel Spacing="{StaticResource SpaceSm}">
+                            <TextBlock Text="General" FontSize="{StaticResource FontSizeLg}"
+                                       FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" />
+                            <TextBlock Text="Appearance, language, startup, and tray behavior · Coming soon"
+                                       TextWrapping="Wrap" FontSize="{StaticResource FontSizeSm}"
+                                       Foreground="{StaticResource TextSecondaryBrush}" />
+                            <TextBlock Text="Theme" Foreground="{StaticResource TextSecondaryBrush}" />
+                            <ComboBox PlaceholderText="Select a theme" />
+                            <TextBlock Text="Language" Foreground="{StaticResource TextSecondaryBrush}" />
+                            <ComboBox PlaceholderText="Select a language" />
+                            <CheckBox Content="Start on system startup" />
+                            <CheckBox Content="Minimize to tray" />
+                            <CheckBox Content="Reconnect to the last session automatically" />
+                        </StackPanel>
+                    </Border>
+
+                    <Border Classes="card unavailable" IsEnabled="False" Focusable="False">
+                        <StackPanel Spacing="{StaticResource SpaceSm}">
+                            <TextBlock Text="Streaming defaults" FontSize="{StaticResource FontSizeLg}"
+                                       FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" />
+                            <TextBlock Text="Default settings for new sharing sessions · Coming soon"
+                                       TextWrapping="Wrap" FontSize="{StaticResource FontSizeSm}"
+                                       Foreground="{StaticResource TextSecondaryBrush}" />
+                            <TextBlock Text="Default quality" Foreground="{StaticResource TextSecondaryBrush}" />
+                            <ComboBox PlaceholderText="Select a quality" />
+                            <TextBlock Text="Preferred codec" Foreground="{StaticResource TextSecondaryBrush}" />
+                            <ComboBox PlaceholderText="Select a codec" />
+                            <CheckBox Content="Share system audio by default" />
+                            <CheckBox Content="Optimize for low latency" />
+                            <TextBlock Text="Bandwidth limit" Foreground="{StaticResource TextSecondaryBrush}" />
+                            <ComboBox PlaceholderText="Select a limit" />
+                        </StackPanel>
+                    </Border>
+
+                    <Border Classes="card unavailable" IsEnabled="False" Focusable="False">
+                        <StackPanel Spacing="{StaticResource SpaceSm}">
+                            <TextBlock Text="Audio" FontSize="{StaticResource FontSizeLg}"
+                                       FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" />
+                            <TextBlock Text="Input and output settings · Coming soon"
+                                       TextWrapping="Wrap" FontSize="{StaticResource FontSizeSm}"
+                                       Foreground="{StaticResource TextSecondaryBrush}" />
+                            <TextBlock Text="Input device" Foreground="{StaticResource TextSecondaryBrush}" />
+                            <ComboBox PlaceholderText="Select an input" />
+                            <TextBlock Text="Output device" Foreground="{StaticResource TextSecondaryBrush}" />
+                            <ComboBox PlaceholderText="Select an output" />
+                            <CheckBox Content="Echo cancellation" />
+                            <CheckBox Content="Noise suppression" />
+                            <TextBlock Text="Input volume" Foreground="{StaticResource TextSecondaryBrush}" />
+                            <Slider Minimum="0" Maximum="100" />
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+
+                <StackPanel Name="secondaryColumn" Spacing="{StaticResource SpaceMd}">
+                    <Border Classes="card">
+                        <StackPanel Spacing="{StaticResource SpaceMd}">
+                            <StackPanel Spacing="{StaticResource SpaceXs}">
+                                <TextBlock Text="Connection" FontSize="{StaticResource FontSizeLg}"
+                                           FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" />
+                                <TextBlock Text="The RelayControl backend used by this device."
+                                           TextWrapping="Wrap" Foreground="{StaticResource TextSecondaryBrush}" />
+                            </StackPanel>
+                            <StackPanel Spacing="{StaticResource SpaceXs}">
+                                <TextBlock Text="Backend / RelayControl address" TextWrapping="Wrap"
+                                           FontSize="{StaticResource FontSizeSm}"
+                                           Foreground="{StaticResource TextSecondaryBrush}" />
+                                <TextBox HorizontalAlignment="Stretch"
+                                         Text="{Binding BackendAddress, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                <TextBlock Text="Enter an absolute http or https address, for example https://relay.example.com"
+                                           IsVisible="{Binding !IsBackendAddressValid}"
+                                           TextWrapping="Wrap" FontSize="{StaticResource FontSizeSm}"
+                                           Foreground="{StaticResource DangerBrush}" />
+                                <TextBlock Text="Valid addresses are saved as you type."
+                                           TextWrapping="Wrap" FontSize="{StaticResource FontSizeSm}"
+                                           Foreground="{StaticResource TextSecondaryBrush}" />
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Classes="card unavailable" IsEnabled="False" Focusable="False">
+                        <StackPanel Spacing="{StaticResource SpaceSm}">
+                            <TextBlock Text="Advanced connection" FontSize="{StaticResource FontSizeLg}"
+                                       FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" />
+                            <TextBlock Text="Peer and timeout preferences · Coming soon"
+                                       TextWrapping="Wrap" FontSize="{StaticResource FontSizeSm}"
+                                       Foreground="{StaticResource TextSecondaryBrush}" />
+                            <TextBlock Text="STUN/TURN mode" Foreground="{StaticResource TextSecondaryBrush}" />
+                            <ComboBox PlaceholderText="Select a mode" />
+                            <CheckBox Content="Prefer direct P2P when available" />
+                            <CheckBox Content="Use relay fallback" />
+                            <TextBlock Text="Connection timeout" Foreground="{StaticResource TextSecondaryBrush}" />
+                            <ComboBox PlaceholderText="Select a timeout" />
+                            <Button Content="Test connection" HorizontalAlignment="Stretch" />
+                        </StackPanel>
+                    </Border>
+
+                    <Border Classes="card unavailable" IsEnabled="False" Focusable="False">
+                        <StackPanel Spacing="{StaticResource SpaceSm}">
+                            <TextBlock Text="Diagnostics &amp; logs" FontSize="{StaticResource FontSizeLg}"
+                                       FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" />
+                            <TextBlock Text="Logging preferences and export · Coming soon"
+                                       TextWrapping="Wrap" FontSize="{StaticResource FontSizeSm}"
+                                       Foreground="{StaticResource TextSecondaryBrush}" />
+                            <CheckBox Content="Enable verbose logging" />
+                            <CheckBox Content="Save diagnostic logs locally" />
+                            <TextBlock Text="Log folder" Foreground="{StaticResource TextSecondaryBrush}" />
+                            <TextBox Text="{Binding LogDirectory}" IsReadOnly="True" />
+                            <WrapPanel Orientation="Horizontal">
+                                <Button Content="Open log folder" Margin="0,0,8,8" />
+                                <Button Content="Export diagnostics" Margin="0,0,8,8" />
+                            </WrapPanel>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Classes="card unavailable" IsEnabled="False" Focusable="False">
+                        <StackPanel Spacing="{StaticResource SpaceSm}">
+                            <TextBlock Text="About" FontSize="{StaticResource FontSizeLg}"
+                                       FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" />
+                            <TextBlock Text="FrameRelay · Share. Watch. Together."
+                                       TextWrapping="Wrap" Foreground="{StaticResource TextSecondaryBrush}" />
+                            <TextBlock Text="Update checks and licenses · Coming soon"
+                                       TextWrapping="Wrap" FontSize="{StaticResource FontSizeSm}"
+                                       Foreground="{StaticResource TextSecondaryBrush}" />
+                            <WrapPanel Orientation="Horizontal">
+                                <Button Content="Check for updates" Margin="0,0,8,8" />
+                                <Button Content="View licenses" Margin="0,0,8,8" />
+                            </WrapPanel>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </UniformGrid>
         </StackPanel>
-
-        <StackPanel Spacing="{StaticResource SpaceXs}">
-            <TextBlock Text="Device name"
-                       FontSize="{StaticResource FontSizeSm}"
-                       Foreground="{StaticResource TextSecondaryBrush}" />
-            <TextBox Width="420"
-                     Text="{Binding DeviceName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-            <TextBlock Text="Used only when this computer registers for the first time. The backend has no rename, so changing it later has no effect."
-                       TextWrapping="Wrap"
-                       MaxWidth="420"
-                       FontSize="{StaticResource FontSizeSm}"
-                       Foreground="{StaticResource TextSecondaryBrush}" />
-        </StackPanel>
-
-        <TextBlock Text="This device registers itself the first time it reaches the backend. There is no sign-in."
-                   TextWrapping="Wrap"
-                   FontSize="{StaticResource FontSizeSm}"
-                   Foreground="{StaticResource TextSecondaryBrush}" />
-    </StackPanel>
+    </ScrollViewer>
 </UserControl>

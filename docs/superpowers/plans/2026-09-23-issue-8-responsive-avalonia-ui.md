@@ -107,6 +107,7 @@ git commit -m "feat(ui): add shared FrameRelay visual tokens"
 **Files:**
 - Modify: `src/SonicDesktopRelay.App/Views/MainWindow.axaml`
 - Modify: `src/SonicDesktopRelay.App/Views/MainWindow.axaml.cs`
+- Modify: `src/SonicDesktopRelay.App/Shell.cs` only to expose the current assembly version if the shell needs it for the footer
 - Use: `src/SonicDesktopRelay.App/Shell.cs`
 - Use: `src/SonicDesktopRelay.Presentation/MainWindowViewModel.cs`
 

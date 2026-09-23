@@ -85,11 +85,15 @@ public sealed class MediaFoundationH264DecoderTests
         if (!MediaFoundationH264Decoder.IsSupported) return;
 
         using var decoder = new MediaFoundationH264Decoder();
+        var selectedTransform = decoder.TransformInfo;
+        var rejectionCount = decoder.RejectionLog.Count;
 
         var frame = decoder.Decode(
             new EncodedVideoSample(new byte[] { 1, 2, 3, 4 }, TimeSpan.Zero, false, 16, 16));
 
         Assert.Null(frame);
+        Assert.Equal(selectedTransform, decoder.TransformInfo);
+        Assert.Equal(rejectionCount, decoder.RejectionLog.Count);
     }
 
     [Fact]

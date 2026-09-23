@@ -107,6 +107,25 @@ public sealed class MainWindowViewModelTests
     }
 
     [Fact]
+    public void Diagnostics_viewer_count_is_available_only_while_sharing()
+    {
+        var viewModel = new MainWindowViewModel();
+
+        Assert.Equal("---", viewModel.DiagnosticsViewerCount);
+
+        viewModel.Apply(new SessionSnapshot(SessionPhase.Sharing, "AB12CD",
+            Guid.NewGuid(), 2, SignalingState.Connected, null));
+        Assert.Equal("2", viewModel.DiagnosticsViewerCount);
+
+        viewModel.Apply(new SessionSnapshot(SessionPhase.Watching, null,
+            Guid.NewGuid(), 0, SignalingState.Connected, null, Watching: WatchState.Waiting));
+        Assert.Equal("---", viewModel.DiagnosticsViewerCount);
+
+        viewModel.Apply(SessionSnapshot.Idle);
+        Assert.Equal("---", viewModel.DiagnosticsViewerCount);
+    }
+
+    [Fact]
     public void A_viewer_negotiation_failure_replaces_the_generic_waiting_message()
     {
         var viewModel = new MainWindowViewModel();

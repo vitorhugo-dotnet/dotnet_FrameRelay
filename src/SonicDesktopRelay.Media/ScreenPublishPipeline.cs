@@ -26,6 +26,7 @@ public sealed class ScreenPublishPipeline : IAsyncDisposable
     private static readonly TimeSpan PoorReceptionMinimumDuration = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan QualityChangeCooldown = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan StableRecoveryDuration = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan ReceiverStatsExpiry = TimeSpan.FromSeconds(10);
     private static readonly Guid AnonymousReceptionSource = Guid.Empty;
 
     private readonly Lock _adaptationGate = new();
@@ -206,6 +207,13 @@ public sealed class ScreenPublishPipeline : IAsyncDisposable
         {
             cooldownRemaining = CooldownRemaining(now);
             var evidence = GetReceptionEvidence(sourceId);
+            if (evidence.TelemetrySeen && evidence.TelemetryAt is { } telemetryAt
+                && now - telemetryAt <= ReceiverStatsExpiry)
+            {
+                loss = Math.Max(loss, evidence.TelemetryLoss);
+                if (evidence.DecodedFramesPerSecond < evidence.TargetFramesPerSecond * 0.85)
+                    loss = Math.Max(loss, PoorReceptionLossRatio);
+            }
 
             if (loss >= PoorReceptionLossRatio)
             {
@@ -334,6 +342,29 @@ public sealed class ScreenPublishPipeline : IAsyncDisposable
         RequestKeyFrame(KeyFrameRequestReason.QualityChange);
     }
 
+    public void ReportReceiverStats(Guid sourceId, VideoReceiverStats stats)
+    {
+        var packetTotal = stats.RtpPacketsReceived + stats.RtpPacketsLost;
+        var unitTotal = stats.AccessUnitsReceived;
+        var packetLoss = packetTotal == 0 ? 0 : stats.RtpPacketsLost / (double)packetTotal;
+        var incompleteRatio = unitTotal == 0 ? 0 : stats.IncompleteAccessUnits / (double)unitTotal;
+        var loss = Math.Max(packetLoss, incompleteRatio);
+        var decodedFps = stats.IntervalMilliseconds <= 0 ? 0
+            : stats.DecodedFrames * 1000d / stats.IntervalMilliseconds;
+        var poor = loss >= PoorReceptionLossRatio || decodedFps < stats.TargetFramesPerSecond * 0.85;
+        var evidenceLoss = poor ? Math.Max(loss, PoorReceptionLossRatio) : loss;
+        lock (_adaptationGate)
+        {
+            var evidence = GetReceptionEvidence(sourceId);
+            evidence.TelemetrySeen = true;
+            evidence.TelemetryAt = _time.GetUtcNow();
+            evidence.TelemetryLoss = loss;
+            evidence.DecodedFramesPerSecond = decodedFps;
+            evidence.TargetFramesPerSecond = stats.TargetFramesPerSecond;
+        }
+        ReportReception(sourceId, evidenceLoss);
+    }
+
     public void RemoveReceptionSource(Guid sourceId)
     {
         lock (_adaptationGate)
@@ -355,7 +386,12 @@ public sealed class ScreenPublishPipeline : IAsyncDisposable
         && _receptionBySource.Values.All(evidence =>
             evidence.ConsecutiveStableReports >= ConsecutiveStableReportsRequired
             && evidence.StableSince is { } stableSince
-            && now - stableSince >= StableRecoveryDuration);
+            && now - stableSince >= StableRecoveryDuration
+            && (!evidence.TelemetrySeen
+                || evidence.TelemetryAt is { } telemetryAt
+                    && now - telemetryAt <= ReceiverStatsExpiry
+                    && evidence.TelemetryLoss <= StableReceptionLossRatio
+                    && evidence.DecodedFramesPerSecond >= evidence.TargetFramesPerSecond * 0.95));
 
     private void ResetAllReceptionEvidence()
     {
@@ -507,6 +543,11 @@ public sealed class ScreenPublishPipeline : IAsyncDisposable
 
     private sealed class ReceptionEvidence
     {
+        public bool TelemetrySeen { get; set; }
+        public DateTimeOffset? TelemetryAt { get; set; }
+        public double TelemetryLoss { get; set; }
+        public double DecodedFramesPerSecond { get; set; }
+        public double TargetFramesPerSecond { get; set; }
         public int ConsecutivePoorReports { get; set; }
         public int ConsecutiveStableReports { get; set; }
         public DateTimeOffset? PoorSince { get; set; }

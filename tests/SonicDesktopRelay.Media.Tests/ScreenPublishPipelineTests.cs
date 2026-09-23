@@ -8,6 +8,80 @@ public sealed class ScreenPublishPipelineTests
     private static readonly MonitorInfo Monitor = new("\\\\.\\DISPLAY1", "Primary", 1920, 1080, true);
 
     [Fact]
+    public async Task ReceiverStats_drive_shared_quality_after_sustained_poor_evidence()
+    {
+        var time = new FakeTimeProvider(DateTimeOffset.UnixEpoch);
+        var pipeline = new ScreenPublishPipeline(new FakeCapture(), new FakeEncoder(), time: time);
+        await pipeline.StartAsync(Monitor, CancellationToken.None);
+        var stats = new VideoReceiverStats(1, 2000, 90, 10, 100, 10, 40, 30);
+
+        var viewer = Guid.NewGuid();
+        pipeline.ReportReceiverStats(viewer, stats);
+        time.Advance(TimeSpan.FromSeconds(2.5));
+        pipeline.ReportReceiverStats(viewer, stats);
+        time.Advance(TimeSpan.FromSeconds(2.5));
+        pipeline.ReportReceiverStats(viewer, stats);
+
+        Assert.Equal(3_000_000, pipeline.Quality.TargetBitsPerSecond);
+    }
+
+    [Fact]
+    public async Task Expired_receiver_stats_block_quality_recovery()
+    {
+        var time = new FakeTimeProvider(DateTimeOffset.UnixEpoch);
+        await using var pipeline = new ScreenPublishPipeline(new FakeCapture(), new FakeEncoder(), time: time);
+        await pipeline.StartAsync(Monitor, CancellationToken.None);
+        var viewer = Guid.NewGuid();
+        var poor = new VideoReceiverStats(1, 2000, 90, 10, 100, 10, 40, 30);
+        pipeline.ReportReceiverStats(viewer, poor);
+        time.Advance(TimeSpan.FromSeconds(2.5));
+        pipeline.ReportReceiverStats(viewer, poor);
+        time.Advance(TimeSpan.FromSeconds(2.5));
+        pipeline.ReportReceiverStats(viewer, poor);
+        Assert.Equal(3_000_000, pipeline.Quality.TargetBitsPerSecond);
+
+        time.Advance(TimeSpan.FromSeconds(10.1));
+        for (var i = 0; i < 4; i++)
+        {
+            pipeline.ReportReception(viewer, 0);
+            time.Advance(TimeSpan.FromSeconds(10));
+        }
+
+        Assert.Equal(3_000_000, pipeline.Quality.TargetBitsPerSecond);
+    }
+
+    [Fact]
+    public async Task Recovery_requires_healthy_telemetry_from_every_viewer_for_thirty_seconds_and_respects_profile_ceiling()
+    {
+        var time = new FakeTimeProvider(DateTimeOffset.UnixEpoch);
+        var profile = new VideoPublishProfile(MaxHeight: 720, MaxFramesPerSecond: 30);
+        await using var pipeline = new ScreenPublishPipeline(new FakeCapture(), new FakeEncoder(), time: time, profile: profile);
+        await pipeline.StartAsync(Monitor, CancellationToken.None);
+        var poorViewer = Guid.NewGuid();
+        var otherViewer = Guid.NewGuid();
+        pipeline.ReportReception(otherViewer, 0);
+        pipeline.ReportReception(poorViewer, 0.1);
+        time.Advance(TimeSpan.FromSeconds(2.5));
+        pipeline.ReportReception(otherViewer, 0);
+        pipeline.ReportReception(poorViewer, 0.1);
+        time.Advance(TimeSpan.FromSeconds(2.5));
+        pipeline.ReportReception(otherViewer, 0);
+        pipeline.ReportReception(poorViewer, 0.1);
+        Assert.Equal(1_500_000, pipeline.Quality.TargetBitsPerSecond);
+
+        var healthy = new VideoReceiverStats(1, 2000, 100, 0, 100, 0, 60, 30);
+        for (var i = 0; i < 4; i++)
+        {
+            pipeline.ReportReceiverStats(poorViewer, healthy);
+            pipeline.ReportReceiverStats(otherViewer, healthy);
+            if (i < 3) time.Advance(TimeSpan.FromSeconds(10));
+        }
+
+        Assert.Equal(VideoQuality.InitialFor(profile), pipeline.Quality);
+        Assert.Equal(720, pipeline.Quality.MaxHeight);
+    }
+
+    [Fact]
     public async Task A_shared_media_clock_stamps_video_at_pipeline_ingress()
     {
         var time = new FakeTimeProvider(DateTimeOffset.UnixEpoch);

@@ -13,8 +13,14 @@ public sealed class VideoSubscriber(
     ScreenWatchPipeline pipeline,
     AudioWatchPipeline? audioPipeline,
     IViewerPeerConnectionFactory peers,
-    ISignalingConnection signaling) : IAsyncDisposable
+    ISignalingConnection signaling,
+    TimeProvider? time = null) : IAsyncDisposable
 {
+    private readonly TimeProvider _time = time ?? TimeProvider.System;
+    private readonly CancellationTokenSource _statsCancellation = new();
+    private Task _statsTask = Task.CompletedTask;
+    private int _statsStarted;
+    private int _statsDisposed;
     private const int PendingCandidatesPerParticipant = 64;
     private const int PendingCandidateParticipants = 8;
 
@@ -26,6 +32,27 @@ public sealed class VideoSubscriber(
     private bool _remoteDescriptionReady;
     private bool _keyFrameHooked;
     private bool _disposed;
+
+    public VideoSubscriber(ScreenWatchPipeline pipeline, IViewerPeerConnectionFactory peers,
+        ISignalingConnection signaling, TimeProvider? time = null)
+        : this(pipeline, null, peers, signaling, time) { }
+
+
+    private async Task SendStatsPeriodicallyAsync(CancellationToken ct)
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(2), _time);
+        try
+        {
+            while (await timer.WaitForNextTickAsync(ct))
+            {
+                if (PublisherId is not { } publisher) continue;
+                var stats = pipeline.TakeStatsSnapshot();
+                stats = stats with { IntervalMilliseconds = Math.Clamp(stats.IntervalMilliseconds, 1000, 5000) };
+                await signaling.SendAsync(SignalingMessageTypes.VideoReceiverStats, publisher, stats, ct);
+            }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
+    }
 
     public VideoSubscriber(
         ScreenWatchPipeline pipeline,
@@ -56,6 +83,11 @@ public sealed class VideoSubscriber(
 
     public async Task HandleAsync(SignalingEnvelope envelope, CancellationToken ct)
     {
+        if (Volatile.Read(ref _statsDisposed) != 0) return;
+        if (Interlocked.Exchange(ref _statsStarted, 1) == 0)
+        {
+            _statsTask = SendStatsPeriodicallyAsync(_statsCancellation.Token);
+        }
         if (envelope.From is not { } from) return;
 
         switch (envelope.Type)
@@ -359,6 +391,12 @@ public sealed class VideoSubscriber(
 
     public async ValueTask DisposeAsync()
     {
+        if (Interlocked.Exchange(ref _statsDisposed, 1) == 0)
+        {
+            _statsCancellation.Cancel();
+            await _statsTask;
+            _statsCancellation.Dispose();
+        }
         await _gate.WaitAsync();
         IViewerPeerConnection? peer;
         try

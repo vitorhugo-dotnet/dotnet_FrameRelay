@@ -269,6 +269,28 @@ public sealed class SessionRuntimeTests
     }
 
     [Fact]
+    public async Task Receiver_stats_are_forwarded_only_to_the_sharing_host()
+    {
+        var api = new FakeSessionApi();
+        var connection = new FakeConnection();
+        var publisher = new FakeVideoPublishHost();
+        var runtime = new SessionRuntime(api, () => connection, publisher);
+        await runtime.StartSharingAsync(Monitor, 3, CancellationToken.None);
+
+        connection.Emit(SignalingMessageTypes.VideoReceiverStats);
+
+        Assert.Contains(SignalingMessageTypes.VideoReceiverStats, publisher.Signalled);
+
+        await runtime.StopAsync(CancellationToken.None);
+        var viewerHost = new FakeVideoWatchHost();
+        connection = new FakeConnection();
+        runtime = new SessionRuntime(api, () => connection, watchHost: viewerHost);
+        await runtime.StartWatchingAsync("AB12CD", CancellationToken.None);
+        connection.Emit(SignalingMessageTypes.VideoReceiverStats);
+        Assert.DoesNotContain(SignalingMessageTypes.VideoReceiverStats, viewerHost.Signalled);
+    }
+
+    [Fact]
     public async Task A_media_stack_that_cannot_start_fails_the_session_instead_of_hanging_in_preparing()
     {
         var api = new FakeSessionApi();

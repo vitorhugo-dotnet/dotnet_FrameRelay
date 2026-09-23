@@ -165,7 +165,7 @@
                             <TextBlock Text="{Binding ViewModel.StatusText}" TextWrapping="Wrap"
                                        FontSize="{StaticResource FontSizeMd}"
                                        Foreground="{StaticResource TextSecondaryBrush}" />
-                            <TextBlock Text="{Binding ViewModel.Snapshot.ViewerCount, StringFormat='Viewers: {0}'}"
+                            <TextBlock Text="{Binding ViewModel.ViewerCountText, StringFormat='Viewers: {0}'}"
                                        FontSize="{StaticResource FontSizeSm}"
                                        Foreground="{StaticResource TextSecondaryBrush}" />
                         </StackPanel>

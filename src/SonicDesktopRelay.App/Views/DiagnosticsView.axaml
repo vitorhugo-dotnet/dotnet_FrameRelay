@@ -52,7 +52,7 @@
                     <StackPanel Spacing="{StaticResource SpaceSm}">
                         <TextBlock Text="Viewers" FontSize="{StaticResource FontSizeSm}"
                                    Foreground="{StaticResource TextSecondaryBrush}" />
-                        <TextBlock Text="{Binding ViewModel.DiagnosticsViewerCount}"
+                        <TextBlock Text="{Binding ViewModel.ViewerCountText}"
                                    FontSize="{StaticResource FontSizeLg}" FontWeight="SemiBold"
                                    Foreground="{StaticResource TextPrimaryBrush}" />
                         <TextBlock Text="Count available while sharing" FontSize="{StaticResource FontSizeSm}"

@@ -48,7 +48,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     public string? Code => _snapshot.Code;
 
     /// <summary>Only a sharing snapshot has a meaningful viewer count.</summary>
-    public string DiagnosticsViewerCount =>
+    public string ViewerCountText =>
         _snapshot.Phase == SessionPhase.Sharing ? _snapshot.ViewerCount.ToString() : "---";
 
     public string StatusText => _snapshot.Phase switch
@@ -71,7 +71,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         Raise(nameof(CanWatch));
         Raise(nameof(CanStop));
         Raise(nameof(Code));
-        Raise(nameof(DiagnosticsViewerCount));
+        Raise(nameof(ViewerCountText));
         Raise(nameof(StatusText));
     }
 

@@ -51,6 +51,8 @@ public sealed class Shell : INotifyPropertyChanged
 
     public MainWindowViewModel ViewModel { get; } = new();
 
+    public string AppVersion => typeof(Shell).Assembly.GetName().Version?.ToString(3) ?? "0.0.0";
+
     public Shell()
     {
         _logger = FrameRelayLogging.Current?.LoggerFactory.CreateLogger<Shell>()

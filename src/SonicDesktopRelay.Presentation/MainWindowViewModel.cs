@@ -21,7 +21,7 @@ public enum Page
 public sealed class MainWindowViewModel : INotifyPropertyChanged
 {
     private SessionSnapshot _snapshot = SessionSnapshot.Idle;
-    private Page _currentPage = Page.Home;
+    private Page _currentPage = Page.Share;
 
     public event PropertyChangedEventHandler? PropertyChanged;
 

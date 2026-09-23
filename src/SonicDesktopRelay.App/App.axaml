@@ -13,5 +13,6 @@
 
     <Application.Styles>
         <FluentTheme />
+        <StyleInclude Source="avares://SonicDesktopRelay.App/Styles/Components.axaml" />
     </Application.Styles>
 </Application>

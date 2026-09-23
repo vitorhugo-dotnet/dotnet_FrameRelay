@@ -1,30 +1,37 @@
 <ResourceDictionary xmlns="https://github.com/avaloniaui"
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-    <!--
-        Every visual value the app uses lives here. Pages reference these keys and hard-code
-        no colour, spacing or size of their own, so a theme change is one file, not fifteen.
-    -->
+    <!-- Shared palette and layout values for the shell and pages. -->
     <SolidColorBrush x:Key="SurfaceBrush">#FF1B1D21</SolidColorBrush>
     <SolidColorBrush x:Key="SurfaceRaisedBrush">#FF24272C</SolidColorBrush>
+    <SolidColorBrush x:Key="CardBrush">#FF24272C</SolidColorBrush>
     <SolidColorBrush x:Key="RailBrush">#FF15171A</SolidColorBrush>
     <SolidColorBrush x:Key="BorderBrush">#FF32363C</SolidColorBrush>
+    <SolidColorBrush x:Key="BorderMutedBrush">#FF292C31</SolidColorBrush>
     <SolidColorBrush x:Key="TextPrimaryBrush">#FFF2F4F7</SolidColorBrush>
     <SolidColorBrush x:Key="TextSecondaryBrush">#FF9BA3AF</SolidColorBrush>
+    <SolidColorBrush x:Key="TextMutedBrush">#FF747C87</SolidColorBrush>
     <SolidColorBrush x:Key="AccentBrush">#FF4C8DFF</SolidColorBrush>
+    <SolidColorBrush x:Key="SuccessBrush">#FF40C98A</SolidColorBrush>
+    <SolidColorBrush x:Key="WarningBrush">#FFF4B85A</SolidColorBrush>
     <SolidColorBrush x:Key="DangerBrush">#FFE5484D</SolidColorBrush>
+    <SolidColorBrush x:Key="UnavailableBrush">#FF1D2023</SolidColorBrush>
 
     <x:Double x:Key="SpaceXs">4</x:Double>
     <x:Double x:Key="SpaceSm">8</x:Double>
     <x:Double x:Key="SpaceMd">16</x:Double>
     <x:Double x:Key="SpaceLg">24</x:Double>
+    <x:Double x:Key="SpaceXl">32</x:Double>
 
     <Thickness x:Key="PagePadding">24</Thickness>
     <Thickness x:Key="RailPadding">8</Thickness>
+    <Thickness x:Key="CardPadding">20</Thickness>
 
     <x:Double x:Key="FontSizeSm">12</x:Double>
     <x:Double x:Key="FontSizeMd">14</x:Double>
     <x:Double x:Key="FontSizeLg">20</x:Double>
+    <x:Double x:Key="FontSizeXl">28</x:Double>
     <x:Double x:Key="FontSizeCode">44</x:Double>
 
     <CornerRadius x:Key="ControlCornerRadius">6</CornerRadius>
+    <CornerRadius x:Key="CardCornerRadius">12</CornerRadius>
 </ResourceDictionary>

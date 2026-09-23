@@ -5,6 +5,9 @@ internal sealed record MediaFoundationTransformCandidate(Guid Clsid, bool IsHard
 /// <summary>Tracks transforms that failed at runtime and bounds one operation to one fallback.</summary>
 internal sealed class MediaFoundationTransformRetryPolicy
 {
+    internal const int NeedMoreInputHResult = unchecked((int)0xC00D6D72);
+    internal const int StreamChangeHResult = unchecked((int)0xC00D6D61);
+
     private readonly HashSet<Guid> _failedClsids = [];
 
     public IReadOnlyList<MediaFoundationTransformCandidate> OrderCandidates(
@@ -19,6 +22,17 @@ internal sealed class MediaFoundationTransformRetryPolicy
         if (clsid != Guid.Empty)
             _failedClsids.Add(clsid);
     }
+
+    internal static bool IsHardDecoderOutputFailure(int hresult) =>
+        hresult < 0
+        && hresult != NeedMoreInputHResult
+        && hresult != StreamChangeHResult;
+
+    internal static TResult? ReadAsyncOutputIfReady<TResult>(
+        bool outputReady,
+        Func<TResult?> readOutput)
+        where TResult : struct =>
+        outputReady ? readOutput() : null;
 
     public static TResult ExecuteWithSingleFallback<TResult>(
         Func<TResult> current,

@@ -67,6 +67,23 @@ public sealed class MediaFoundationH264EncoderTests
     }
 
     [Fact]
+    public void RuntimeFallback_does_not_exclude_encoder_when_async_output_times_out()
+    {
+        var readOutputCalls = 0;
+        var fallbackCalls = 0;
+        var result = MediaFoundationTransformRetryPolicy.ExecuteWithSingleFallback(
+            () => MediaFoundationTransformRetryPolicy.ReadAsyncOutputIfReady<EncodedVideoSample>(
+                outputReady: false,
+                () => { readOutputCalls++; return null; }),
+            static exception => exception is InvalidOperationException,
+            () => { fallbackCalls++; return null; });
+
+        Assert.Null(result);
+        Assert.Equal(0, readOutputCalls);
+        Assert.Equal(0, fallbackCalls);
+    }
+
+    [Fact]
     public void The_selected_encoder_is_named()
     {
         if (!MediaFoundationH264Encoder.IsSupported) return;

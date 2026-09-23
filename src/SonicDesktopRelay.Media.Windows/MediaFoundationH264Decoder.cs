@@ -27,8 +27,8 @@ public sealed class MediaFoundationH264Decoder : IVideoDecoder
         MftEnumFlagSync | MftEnumFlagAsync | MftEnumFlagLocal | MftEnumFlagSortAndFilter;
 
     private const int ProgressiveInterlaceMode = 2;
-    private const int NeedMoreInputHResult = unchecked((int)0xC00D6D72);
-    private const int StreamChangeHResult = unchecked((int)0xC00D6D61);
+    private const int NeedMoreInputHResult = MediaFoundationTransformRetryPolicy.NeedMoreInputHResult;
+    private const int StreamChangeHResult = MediaFoundationTransformRetryPolicy.StreamChangeHResult;
     private const int NoMoreTypesHResult = unchecked((int)0xC00D36B9);
 
     [StructLayout(LayoutKind.Sequential)]
@@ -611,7 +611,7 @@ public sealed class MediaFoundationH264Decoder : IVideoDecoder
                     continue;
                 }
 
-                if (result.Failure)
+                if (MediaFoundationTransformRetryPolicy.IsHardDecoderOutputFailure(result.Code))
                 {
                     LastFailure = $"process-output: HRESULT 0x{result.Code:X8}";
                     _logger.LogWarning(
@@ -621,7 +621,7 @@ public sealed class MediaFoundationH264Decoder : IVideoDecoder
                         _visibleHeight,
                         _codedWidth,
                         _codedHeight);
-                    return last;
+                    result.CheckError();
                 }
 
                 var decodedSample =

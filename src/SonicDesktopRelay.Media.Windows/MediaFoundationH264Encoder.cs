@@ -333,12 +333,12 @@ public sealed class MediaFoundationH264Encoder : IVideoEncoder
             if (!WaitForAsyncCredit(_asyncPump, static pump => pump.TryTakeOutput(), 250))
             {
                 _asyncPump.DrainAvailable();
-                if (_asyncPump.InputCredits > 0)
-                {
-                    _asyncInputReady = _asyncPump.TryTakeInput();
-                    return null;
-                }
-                throw new InvalidOperationException("Hardware H.264 encoder produced neither output nor another input request.");
+                _asyncInputReady = _asyncPump.InputCredits > 0 && _asyncPump.TryTakeInput();
+                // Async MFT output may legitimately lag its input. A wait timeout is not a
+                // transform failure; drop this output opportunity and keep the active MFT.
+                return MediaFoundationTransformRetryPolicy.ReadAsyncOutputIfReady<EncodedVideoSample>(
+                    outputReady: false,
+                    () => TryReadOutput(frame.Timestamp, duration, width, height));
             }
             _asyncPump.DrainAvailable();
             if (_asyncPump.InputCredits > 0)

@@ -7,6 +7,19 @@ namespace SonicDesktopRelay.Media.Windows.Tests;
 
 public sealed class MediaFoundationH264DecoderTests
 {
+    [Theory]
+    [InlineData(unchecked((int)0xC00D6D72), false)]
+    [InlineData(unchecked((int)0xC00D6D61), false)]
+    [InlineData(unchecked((int)0x80004005), true)]
+    public void RuntimeFallback_classifies_decoder_process_output_hresult(
+        int hresult,
+        bool shouldFallback)
+    {
+        Assert.Equal(
+            shouldFallback,
+            MediaFoundationTransformRetryPolicy.IsHardDecoderOutputFailure(hresult));
+    }
+
     private static bool Available =>
         MediaFoundationH264Encoder.IsSupported && MediaFoundationH264Decoder.IsSupported;
 

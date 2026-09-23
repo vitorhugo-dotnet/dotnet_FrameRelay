@@ -6,8 +6,14 @@
              x:DataType="app:Shell"
              Container.Name="watchPage" Container.Sizing="Width">
     <UserControl.Styles>
+        <Style Selector="ScrollViewer#pageScroll">
+            <Setter Property="Margin" Value="{StaticResource PagePadding}" />
+        </Style>
         <Style Selector="ScrollViewer#pageScroll.fullScreen">
             <Setter Property="Margin" Value="0" />
+        </Style>
+        <Style Selector="Grid#pageLayout">
+            <Setter Property="MaxWidth" Value="1400" />
         </Style>
         <Style Selector="Grid#pageLayout.fullScreen">
             <Setter Property="MaxWidth" Value="Infinity" />
@@ -38,11 +44,10 @@
     </UserControl.Styles>
 
     <ScrollViewer Name="pageScroll" Classes.fullScreen="{Binding IsVideoFullScreen}"
-                  Margin="{StaticResource PagePadding}"
                   HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
         <Grid Name="pageLayout" Classes.fullScreen="{Binding IsVideoFullScreen}"
               MinHeight="{Binding #pageScroll.Bounds.Height}"
-              MaxWidth="1400" HorizontalAlignment="Stretch"
+              HorizontalAlignment="Stretch"
               RowDefinitions="Auto,*">
             <StackPanel Grid.Row="0" Spacing="{StaticResource SpaceMd}" Margin="0,0,0,16"
                         IsVisible="{Binding !IsVideoFullScreen}">

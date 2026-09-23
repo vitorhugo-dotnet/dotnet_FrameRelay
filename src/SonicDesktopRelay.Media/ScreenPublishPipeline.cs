@@ -207,11 +207,16 @@ public sealed class ScreenPublishPipeline : IAsyncDisposable
         {
             cooldownRemaining = CooldownRemaining(now);
             var evidence = GetReceptionEvidence(sourceId);
-            if (evidence.TelemetrySeen && evidence.TelemetryAt is { } telemetryAt
-                && now - telemetryAt <= ReceiverStatsExpiry)
+            var telemetryFresh = evidence.TelemetrySeen
+                && evidence.TelemetryAt is { } telemetryAt
+                && now - telemetryAt <= ReceiverStatsExpiry;
+            if (evidence.TelemetrySeen && !telemetryFresh)
+                evidence.ResetStable();
+
+            if (telemetryFresh)
             {
                 loss = Math.Max(loss, evidence.TelemetryLoss);
-                if (evidence.DecodedFramesPerSecond < evidence.TargetFramesPerSecond * 0.85)
+                if (evidence.LowFpsSustained)
                     loss = Math.Max(loss, PoorReceptionLossRatio);
             }
 
@@ -236,7 +241,7 @@ public sealed class ScreenPublishPipeline : IAsyncDisposable
                     Quality.MaxHeight,
                     Quality.TargetBitsPerSecond);
 
-                if (poorReports >= ConsecutivePoorReportsRequired
+                if ((poorReports >= ConsecutivePoorReportsRequired || evidence.LowFpsSustained)
                     && now - evidence.PoorSince.Value >= PoorReceptionMinimumDuration
                     && cooldownRemaining == TimeSpan.Zero)
                 {
@@ -261,7 +266,14 @@ public sealed class ScreenPublishPipeline : IAsyncDisposable
             {
                 evidence.ResetPoor();
 
-                if (Quality == VideoQuality.InitialFor(_profile))
+                var telemetryRecoveryEligible = !evidence.TelemetrySeen
+                    || telemetryFresh
+                        && evidence.TelemetryLoss <= StableReceptionLossRatio
+                        && evidence.DecodedFramesPerSecond >= evidence.TargetFramesPerSecond * 0.95;
+                if (!telemetryRecoveryEligible)
+                    evidence.ResetStable();
+
+                if (!telemetryRecoveryEligible || Quality == VideoQuality.InitialFor(_profile))
                 {
                     evidence.ResetStable();
                 }
@@ -344,6 +356,7 @@ public sealed class ScreenPublishPipeline : IAsyncDisposable
 
     public void ReportReceiverStats(Guid sourceId, VideoReceiverStats stats)
     {
+        var now = _time.GetUtcNow();
         var packetTotal = stats.RtpPacketsReceived + stats.RtpPacketsLost;
         var unitTotal = stats.AccessUnitsReceived;
         var packetLoss = packetTotal == 0 ? 0 : stats.RtpPacketsLost / (double)packetTotal;
@@ -351,17 +364,42 @@ public sealed class ScreenPublishPipeline : IAsyncDisposable
         var loss = Math.Max(packetLoss, incompleteRatio);
         var decodedFps = stats.IntervalMilliseconds <= 0 ? 0
             : stats.DecodedFrames * 1000d / stats.IntervalMilliseconds;
-        var poor = loss >= PoorReceptionLossRatio || decodedFps < stats.TargetFramesPerSecond * 0.85;
-        var evidenceLoss = poor ? Math.Max(loss, PoorReceptionLossRatio) : loss;
+        var lowFps = decodedFps < stats.TargetFramesPerSecond * 0.85;
+        var sustainedLowFps = false;
         lock (_adaptationGate)
         {
             var evidence = GetReceptionEvidence(sourceId);
+            if (evidence.TelemetrySeen && evidence.TelemetryAt is { } previousTelemetryAt
+                && now - previousTelemetryAt > ReceiverStatsExpiry)
+            {
+                evidence.ResetStable();
+                evidence.LowFpsSince = null;
+                evidence.LowFpsSustained = false;
+            }
+
+            if (lowFps)
+            {
+                evidence.LowFpsSince ??= now;
+                evidence.LowFpsSustained = now - evidence.LowFpsSince.Value >= PoorReceptionMinimumDuration;
+                sustainedLowFps = evidence.LowFpsSustained;
+                if (evidence.LowFpsSustained)
+                    evidence.PoorSince ??= evidence.LowFpsSince;
+            }
+            else
+            {
+                evidence.LowFpsSince = null;
+                evidence.LowFpsSustained = false;
+            }
+
             evidence.TelemetrySeen = true;
-            evidence.TelemetryAt = _time.GetUtcNow();
+            evidence.TelemetryAt = now;
             evidence.TelemetryLoss = loss;
             evidence.DecodedFramesPerSecond = decodedFps;
             evidence.TargetFramesPerSecond = stats.TargetFramesPerSecond;
         }
+        var evidenceLoss = sustainedLowFps
+            ? Math.Max(loss, PoorReceptionLossRatio)
+            : loss;
         ReportReception(sourceId, evidenceLoss);
     }
 
@@ -548,6 +586,8 @@ public sealed class ScreenPublishPipeline : IAsyncDisposable
         public double TelemetryLoss { get; set; }
         public double DecodedFramesPerSecond { get; set; }
         public double TargetFramesPerSecond { get; set; }
+        public DateTimeOffset? LowFpsSince { get; set; }
+        public bool LowFpsSustained { get; set; }
         public int ConsecutivePoorReports { get; set; }
         public int ConsecutiveStableReports { get; set; }
         public DateTimeOffset? PoorSince { get; set; }

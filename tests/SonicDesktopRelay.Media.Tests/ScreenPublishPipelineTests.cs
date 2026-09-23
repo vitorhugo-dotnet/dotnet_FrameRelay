@@ -48,6 +48,64 @@ public sealed class ScreenPublishPipelineTests
         }
 
         Assert.Equal(3_000_000, pipeline.Quality.TargetBitsPerSecond);
+
+        var healthy = new VideoReceiverStats(1, 2000, 100, 0, 100, 0, 60, 30);
+        pipeline.ReportReceiverStats(viewer, healthy);
+        Assert.Equal(3_000_000, pipeline.Quality.TargetBitsPerSecond);
+
+        for (var i = 0; i < 3; i++)
+        {
+            time.Advance(TimeSpan.FromSeconds(10));
+            pipeline.ReportReceiverStats(viewer, healthy);
+        }
+        Assert.Equal(4_000_000, pipeline.Quality.TargetBitsPerSecond);
+    }
+
+    [Fact]
+    public async Task One_low_fps_interval_followed_by_healthy_reports_does_not_combine_with_later_rtcp_loss()
+    {
+        var time = new FakeTimeProvider(DateTimeOffset.UnixEpoch);
+        await using var pipeline = new ScreenPublishPipeline(new FakeCapture(), new FakeEncoder(), time: time);
+        await pipeline.StartAsync(Monitor, CancellationToken.None);
+        var viewer = Guid.NewGuid();
+        var lowFps = new VideoReceiverStats(1, 2000, 0, 0, 100, 0, 20, 30);
+        pipeline.ReportReceiverStats(viewer, lowFps);
+
+        time.Advance(TimeSpan.FromSeconds(2));
+        pipeline.ReportReception(viewer, 0);
+        time.Advance(TimeSpan.FromSeconds(2));
+        pipeline.ReportReception(viewer, 0);
+        time.Advance(TimeSpan.FromSeconds(2));
+        pipeline.ReportReception(viewer, 0);
+        Assert.Equal(VideoQuality.Default, pipeline.Quality);
+
+        var healthy = new VideoReceiverStats(1, 2000, 100, 0, 100, 0, 60, 30);
+        pipeline.ReportReceiverStats(viewer, healthy);
+        time.Advance(TimeSpan.FromSeconds(2));
+        pipeline.ReportReception(viewer, 0.1);
+        time.Advance(TimeSpan.FromSeconds(2));
+        pipeline.ReportReception(viewer, 0.1);
+        time.Advance(TimeSpan.FromSeconds(2));
+        pipeline.ReportReception(viewer, 0.1);
+
+        Assert.Equal(VideoQuality.Default, pipeline.Quality);
+    }
+
+    [Fact]
+    public async Task Low_fps_spanning_five_seconds_degrades_quality()
+    {
+        var time = new FakeTimeProvider(DateTimeOffset.UnixEpoch);
+        await using var pipeline = new ScreenPublishPipeline(new FakeCapture(), new FakeEncoder(), time: time);
+        await pipeline.StartAsync(Monitor, CancellationToken.None);
+        var viewer = Guid.NewGuid();
+        var lowFps = new VideoReceiverStats(1, 2000, 100, 0, 100, 0, 20, 30);
+        pipeline.ReportReceiverStats(viewer, lowFps);
+        time.Advance(TimeSpan.FromSeconds(2.5));
+        pipeline.ReportReceiverStats(viewer, lowFps);
+        time.Advance(TimeSpan.FromSeconds(2.5));
+        pipeline.ReportReceiverStats(viewer, lowFps);
+
+        Assert.Equal(3_000_000, pipeline.Quality.TargetBitsPerSecond);
     }
 
     [Fact]

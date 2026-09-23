@@ -7,6 +7,14 @@ namespace SonicDesktopRelay.Presentation.Tests;
 public sealed class MainWindowViewModelTests
 {
     [Fact]
+    public void A_new_window_opens_on_the_share_page()
+    {
+        var viewModel = new MainWindowViewModel();
+
+        Assert.Equal(Page.Share, viewModel.CurrentPage);
+    }
+
+    [Fact]
     public void An_idle_app_can_start_either_role()
     {
         var viewModel = new MainWindowViewModel();
@@ -96,6 +104,25 @@ public sealed class MainWindowViewModelTests
             Guid.NewGuid(), 2, SignalingState.Connected, null));
 
         Assert.Equal("Sharing — 2 watching", viewModel.StatusText);
+    }
+
+    [Fact]
+    public void Viewer_count_text_is_available_only_while_sharing()
+    {
+        var viewModel = new MainWindowViewModel();
+
+        Assert.Equal("---", viewModel.ViewerCountText);
+
+        viewModel.Apply(new SessionSnapshot(SessionPhase.Sharing, "AB12CD",
+            Guid.NewGuid(), 2, SignalingState.Connected, null));
+        Assert.Equal("2", viewModel.ViewerCountText);
+
+        viewModel.Apply(new SessionSnapshot(SessionPhase.Watching, null,
+            Guid.NewGuid(), 0, SignalingState.Connected, null, Watching: WatchState.Waiting));
+        Assert.Equal("---", viewModel.ViewerCountText);
+
+        viewModel.Apply(SessionSnapshot.Idle);
+        Assert.Equal("---", viewModel.ViewerCountText);
     }
 
     [Fact]

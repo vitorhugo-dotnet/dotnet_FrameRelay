@@ -34,7 +34,12 @@ additional encoders.
 A candidate is accepted only after it can be configured for the requested NV12 -> H.264
 low-latency contract. Asynchronous hardware transforms are driven through
 `MediaFoundationAsyncMftPump`. Every rejected candidate is retained with its reason for
-Diagnostics.
+Diagnostics. Hardware candidates are vendor-neutral: any compatible Media Foundation hardware
+transform may be selected, not only NVIDIA. If no hardware candidate is usable or one fails with
+a hard runtime error, the pipeline can retry with another candidate and then a Windows system
+software transform on the CPU. CPU fallback is for compatibility, not a performance guarantee;
+its achievable frame rate depends on the machine and workload. The decoder follows the same
+hardware-first/software-fallback policy.
 
 The encoder output is normalized to Annex B access units. Recovery-only keyframe requests use
 Media Foundation `ICodecAPI` with `CODECAPI_AVEncVideoForceKeyFrame` when the selected transform
@@ -68,6 +73,17 @@ The session still uses one global adaptive quality target because capture and en
 The selected profile limits how high the adaptive controller may start or recover. Sustained
 packet loss can reduce bitrate/resolution/FPS for every viewer, but recovery never exceeds the
 user-selected ceiling.
+
+Each viewer reports reception statistics every 2 seconds. The publisher aggregates feedback
+across active viewers and adapts the single shared stream to protect the slowest viewer. A viewer
+with at least 5% packet loss, or decoded FPS below 85% of its effective target for at least
+5 seconds, supplies degradation evidence. A downshift changes one rung at a time and quality
+changes are separated by a 15-second cooldown. Recovery is deliberately slower: all known viewer
+feedback must be fresh (telemetry expires after 10 seconds) and continuously healthy for
+30 seconds—at most 1% packet loss and decoded FPS at least 95% of target—before raising one rung.
+The controller then waits for the next recovery interval before raising further. Rungs reduce
+bitrate first, then resolution and FPS; the selected quality/FPS profile remains the upper bound.
+Older viewers that do not report receiver telemetry continue to use RTCP reception feedback.
 
 The bitrate-first ladder is:
 
@@ -136,6 +152,11 @@ Signaling uses the existing session WebSocket:
 3. viewer answers;
 4. both sides exchange ICE candidates;
 5. RTP/RTCP carries H.264 and Opus.
+
+Viewers send `video.receiver_stats` every 2 seconds to the publisher participant. The backend
+routes this bounded signaling payload only within the authenticated live session; the publisher
+validates the versioned statistics and accepts them only for an active viewer peer. This is
+control-plane feedback only—audio/video media remains peer-to-peer (or relayed by TURN).
 
 A publisher encodes once regardless of viewer count. A viewer owns exactly one decoder and one
 audio sink.

@@ -37,9 +37,11 @@ WebRTC -> Media Foundation H.264 -> NV12 -> BGRA -> Avalonia surface
        -> Opus -> PCM 48 kHz stereo -> WASAPI render endpoint
 ```
 
-The H.264 encoder enumerates hardware Media Foundation transforms first and falls back to a
-system software transform when necessary. The decoder also enumerates native transforms and
-normalizes output to NV12 before the reusable BGRA render buffer.
+The H.264 encoder and decoder enumerate compatible Media Foundation hardware transforms
+without requiring a particular GPU vendor, then fall back to Windows system software transforms
+on the CPU. This fallback provides a compatibility path when suitable hardware is unavailable
+or fails at runtime; it is not a performance guarantee, and CPU encoding/decoding may reduce
+the achievable frame rate on some machines.
 
 Audio and video are stamped from the same `MediaSessionClock`. The RTC layer stays P2P-first
 with the backend-provided ICE servers and uses TURN only when direct connectivity cannot be
@@ -49,9 +51,13 @@ cross that diagnostics boundary.
 
 Before sharing, the publisher can choose a 1080p/720p/540p/360p quality ceiling and 15/30/60 FPS
 ceiling. Those values are real media controls: capture cadence, Media Foundation configuration
-and RTP video timestamps follow the effective FPS. The existing adaptive controller may move
-below the selected ceiling under sustained packet loss, but it cannot recover above the user's
-selection.
+and RTP video timestamps follow the effective FPS. The publisher sends one shared stream, so
+automatic quality control protects the slowest viewer and may lower quality for everyone; it
+never exceeds the publisher's selected ceiling. Receiver feedback is sampled every 2 seconds.
+Sustained loss of at least 5% or decoded throughput below 85% of target for 5 seconds can step
+quality down, with at least 15 seconds between changes. Recovery requires fresh, continuous
+healthy feedback for 30 seconds (at most 1% loss and at least 95% of target decoded FPS), then
+raises quality one step at a time. The ladder reduces bitrate before resolution and FPS.
 
 Recovery keyframes use Media Foundation `ICodecAPI`/`CODECAPI_AVEncVideoForceKeyFrame` when
 the selected encoder supports it, so a PLI/FIR does not normally rebuild the H.264 transform.

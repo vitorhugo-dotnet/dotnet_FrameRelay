@@ -5,23 +5,23 @@
              x:DataType="app:Shell"
              Container.Name="settingsPage" Container.Sizing="Width">
     <UserControl.Styles>
-        <Style Selector="UniformGrid#settingsColumns">
+        <Style Selector="UniformGrid.settingsColumns">
             <Setter Property="Columns" Value="2" />
         </Style>
-        <Style Selector="StackPanel#primaryColumn">
+        <Style Selector="StackPanel.leftColumn">
             <Setter Property="Margin" Value="0,0,12,0" />
         </Style>
-        <Style Selector="StackPanel#secondaryColumn">
+        <Style Selector="StackPanel.rightColumn">
             <Setter Property="Margin" Value="12,0,0,0" />
         </Style>
         <ContainerQuery Name="settingsPage" Query="max-width:800">
-            <Style Selector="UniformGrid#settingsColumns">
+            <Style Selector="UniformGrid.settingsColumns">
                 <Setter Property="Columns" Value="1" />
             </Style>
-            <Style Selector="StackPanel#primaryColumn">
+            <Style Selector="StackPanel.leftColumn">
                 <Setter Property="Margin" Value="0" />
             </Style>
-            <Style Selector="StackPanel#secondaryColumn">
+            <Style Selector="StackPanel.rightColumn">
                 <Setter Property="Margin" Value="0,24,0,0" />
             </Style>
         </ContainerQuery>
@@ -37,8 +37,8 @@
                            Foreground="{StaticResource TextSecondaryBrush}" />
             </StackPanel>
 
-            <UniformGrid Name="settingsColumns">
-                <StackPanel Name="primaryColumn" Spacing="{StaticResource SpaceMd}">
+            <UniformGrid Classes="settingsColumns">
+                <StackPanel Classes="leftColumn" Spacing="{StaticResource SpaceMd}">
                     <Border Classes="card">
                         <StackPanel Spacing="{StaticResource SpaceMd}">
                             <StackPanel Spacing="{StaticResource SpaceXs}">
@@ -62,7 +62,37 @@
                                        Foreground="{StaticResource TextSecondaryBrush}" />
                         </StackPanel>
                     </Border>
+                </StackPanel>
+                <StackPanel Classes="rightColumn" Spacing="{StaticResource SpaceMd}">
+                    <Border Classes="card">
+                        <StackPanel Spacing="{StaticResource SpaceMd}">
+                            <StackPanel Spacing="{StaticResource SpaceXs}">
+                                <TextBlock Text="Connection" FontSize="{StaticResource FontSizeLg}"
+                                           FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" />
+                                <TextBlock Text="The RelayControl backend used by this device."
+                                           TextWrapping="Wrap" Foreground="{StaticResource TextSecondaryBrush}" />
+                            </StackPanel>
+                            <StackPanel Spacing="{StaticResource SpaceXs}">
+                                <TextBlock Text="Backend / RelayControl address" TextWrapping="Wrap"
+                                           FontSize="{StaticResource FontSizeSm}"
+                                           Foreground="{StaticResource TextSecondaryBrush}" />
+                                <TextBox HorizontalAlignment="Stretch"
+                                         Text="{Binding BackendAddress, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                <TextBlock Text="Enter an absolute http or https address, for example https://relay.example.com"
+                                           IsVisible="{Binding !IsBackendAddressValid}"
+                                           TextWrapping="Wrap" FontSize="{StaticResource FontSizeSm}"
+                                           Foreground="{StaticResource DangerBrush}" />
+                                <TextBlock Text="Valid addresses are saved as you type."
+                                           TextWrapping="Wrap" FontSize="{StaticResource FontSizeSm}"
+                                           Foreground="{StaticResource TextSecondaryBrush}" />
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </UniformGrid>
 
+            <UniformGrid Classes="settingsColumns">
+                <StackPanel Classes="leftColumn" Spacing="{StaticResource SpaceMd}">
                     <Border Classes="card unavailable" IsEnabled="False" Focusable="False">
                         <StackPanel Spacing="{StaticResource SpaceSm}">
                             <TextBlock Text="General" FontSize="{StaticResource FontSizeLg}"
@@ -116,33 +146,7 @@
                         </StackPanel>
                     </Border>
                 </StackPanel>
-
-                <StackPanel Name="secondaryColumn" Spacing="{StaticResource SpaceMd}">
-                    <Border Classes="card">
-                        <StackPanel Spacing="{StaticResource SpaceMd}">
-                            <StackPanel Spacing="{StaticResource SpaceXs}">
-                                <TextBlock Text="Connection" FontSize="{StaticResource FontSizeLg}"
-                                           FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" />
-                                <TextBlock Text="The RelayControl backend used by this device."
-                                           TextWrapping="Wrap" Foreground="{StaticResource TextSecondaryBrush}" />
-                            </StackPanel>
-                            <StackPanel Spacing="{StaticResource SpaceXs}">
-                                <TextBlock Text="Backend / RelayControl address" TextWrapping="Wrap"
-                                           FontSize="{StaticResource FontSizeSm}"
-                                           Foreground="{StaticResource TextSecondaryBrush}" />
-                                <TextBox HorizontalAlignment="Stretch"
-                                         Text="{Binding BackendAddress, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-                                <TextBlock Text="Enter an absolute http or https address, for example https://relay.example.com"
-                                           IsVisible="{Binding !IsBackendAddressValid}"
-                                           TextWrapping="Wrap" FontSize="{StaticResource FontSizeSm}"
-                                           Foreground="{StaticResource DangerBrush}" />
-                                <TextBlock Text="Valid addresses are saved as you type."
-                                           TextWrapping="Wrap" FontSize="{StaticResource FontSizeSm}"
-                                           Foreground="{StaticResource TextSecondaryBrush}" />
-                            </StackPanel>
-                        </StackPanel>
-                    </Border>
-
+                <StackPanel Classes="rightColumn" Spacing="{StaticResource SpaceMd}">
                     <Border Classes="card unavailable" IsEnabled="False" Focusable="False">
                         <StackPanel Spacing="{StaticResource SpaceSm}">
                             <TextBlock Text="Advanced connection" FontSize="{StaticResource FontSizeLg}"

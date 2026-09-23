@@ -33,7 +33,7 @@
 
 ## File map
 
-- `src/SonicDesktopRelay.App/App.axaml`: merge shared component styles into application resources.
+- `src/SonicDesktopRelay.App/App.axaml`: include shared component styles after the Fluent theme in application styles; keep visual tokens in application resources.
 - `src/SonicDesktopRelay.App/Styles/Tokens.axaml`: shared dark palette, semantic state colors, spacing, radii, and type sizes.
 - `src/SonicDesktopRelay.App/Styles/Components.axaml` (new): reusable card, status, navigation, and unavailable-state classes.
 - `src/SonicDesktopRelay.App/Views/MainWindow.axaml` and `.axaml.cs`: responsive shell, active navigation, FrameRelay title, global status/footer, and page host.
@@ -55,7 +55,8 @@
 **Interfaces:**
 - Produces shared resource keys for page/rail/card surfaces, border and text roles, accent/success/warning/danger states, spacing, radii, and typography.
 - Produces style classes `.card`, `.statusConnected`, `.statusWarning`, `.statusDisconnected`, and `.unavailable`. `.unavailable` darkens/desaturates the containing card; card roots using it must set `IsEnabled="False"` so descendants cannot receive input or focus.
-- App resources expose `Components.axaml` after `Tokens.axaml` so all referenced resources are available.
+- `App.axaml` keeps `Tokens.axaml` in `Application.Resources` and adds `Components.axaml` as a `StyleInclude` after `FluentTheme` in `Application.Styles`.
+- `Components.axaml` has a `<Styles>` root and uses `DynamicResource` for tokens defined in `Tokens.axaml`, because separately loaded style includes cannot resolve sibling resources through `StaticResource` at load time.
 
 - [ ] **Step 1: Add the failing landing-page regression test**
 
@@ -78,7 +79,7 @@ Expected: FAIL because a new view model currently selects `Page.Home`.
 
 - [ ] **Step 3: Set Share as the default page and implement shared styles**
 
-Change `_currentPage` in `MainWindowViewModel` from `Page.Home` to `Page.Share`. Add the semantic resources to `Tokens.axaml`, define the shared classes in `Components.axaml`, and merge that dictionary after `Tokens.axaml` in `App.axaml`. Keep each shared value centralized; page files must reference these keys/classes rather than reintroducing literal palette/spacing values.
+Change `_currentPage` in `MainWindowViewModel` from `Page.Home` to `Page.Share`. Add the semantic resources to `Tokens.axaml`, define the shared classes under a `<Styles>` root in `Components.axaml`, and add a `StyleInclude` after `FluentTheme` in `App.axaml`. Use `DynamicResource` when a component style references a token from `Tokens.axaml`. Keep each shared value centralized; page files must reference these keys/classes rather than reintroducing literal palette/spacing values.
 
 Example unavailable-card use in later tasks:
 

@@ -178,6 +178,8 @@ public sealed class SipSorceryViewerPeerConnection : IViewerPeerConnection
         }
     }
 
+    public VideoReceptionSnapshot ReceptionSnapshot => _videoAssembler.TakeReceptionSnapshot();
+
     public async Task<string> CreateAnswerAsync(string offerSdp, CancellationToken ct)
     {
         EmitDiagnostic("viewer.remote_description.begin");

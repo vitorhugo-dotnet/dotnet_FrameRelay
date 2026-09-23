@@ -128,6 +128,39 @@ public sealed class H264RtpIntegrityTests
         Assert.Equal(0, assembler.RtpPacketsLost);
     }
 
+    [Fact]
+    public void ReceptionSnapshot_keeps_sequence_wrap_and_reordering_out_of_loss_count()
+    {
+        var assembler = new H264RtpAccessUnitAssembler();
+
+        Push(assembler, 65534, FuStart(0x11));
+        Push(assembler, 0, FuMiddle(0x33));
+        Push(assembler, 65535, FuMiddle(0x22));
+        Push(assembler, 1, FuEnd(0x44), marker: true);
+
+        var snapshot = assembler.TakeReceptionSnapshot();
+
+        Assert.Equal(4, snapshot.RtpPacketsReceived);
+        Assert.Equal(0, snapshot.RtpPacketsLost);
+        Assert.Equal(1, snapshot.AccessUnitsReceived);
+    }
+
+    [Fact]
+    public void ReceptionSnapshot_counts_a_real_missing_packet_once()
+    {
+        var assembler = new H264RtpAccessUnitAssembler();
+
+        Push(assembler, 100, FuStart(0x11));
+        Push(assembler, 102, FuEnd(0x44), marker: true);
+
+        var snapshot = assembler.TakeReceptionSnapshot();
+
+        Assert.Equal(2, snapshot.RtpPacketsReceived);
+        Assert.Equal(1, snapshot.RtpPacketsLost);
+        Assert.Equal(0, snapshot.AccessUnitsReceived);
+        Assert.Equal(1, snapshot.IncompleteAccessUnits);
+    }
+
     private static H264AssembledAccessUnit? Push(
         H264RtpAccessUnitAssembler assembler,
         ushort sequence,

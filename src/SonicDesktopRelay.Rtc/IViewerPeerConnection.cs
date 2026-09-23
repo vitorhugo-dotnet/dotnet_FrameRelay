@@ -2,6 +2,13 @@ using SonicDesktopRelay.Media;
 
 namespace SonicDesktopRelay.Rtc;
 
+/// <summary>Atomic interval source counters captured at the viewer transport boundary.</summary>
+public readonly record struct VideoReceptionSnapshot(
+    long RtpPacketsReceived,
+    long RtpPacketsLost,
+    long AccessUnitsReceived,
+    long IncompleteAccessUnits);
+
 /// <summary>
 /// The viewer's single WebRTC connection to the one publisher. The mirror of
 /// <see cref="IPeerConnection"/>: this side never sends media, it answers and receives.
@@ -31,6 +38,8 @@ public interface IViewerPeerConnection : IAsyncDisposable
     event Action<RtcTransportDiagnostics>? TransportDiagnosticsChanged;
 
     RtcTransportDiagnostics? TransportDiagnostics { get; }
+
+    VideoReceptionSnapshot ReceptionSnapshot => default;
 
     /// <summary>Applies the publisher's offer and produces the answer SDP.</summary>
     Task<string> CreateAnswerAsync(string offerSdp, CancellationToken ct);

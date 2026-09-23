@@ -38,6 +38,7 @@ internal readonly record struct H264AssembledAccessUnit(
 /// </summary>
 internal sealed class H264RtpAccessUnitAssembler
 {
+    private readonly object _gate = new();
     private readonly List<Packet> _packets = [];
     private uint? _timestamp;
     private ushort? _lastArrivalSequence;
@@ -55,7 +56,31 @@ internal sealed class H264RtpAccessUnitAssembler
     public uint? LastDroppedAccessUnitTimestamp { get; private set; }
     public string? LastRtpGap { get; private set; }
 
+    public VideoReceptionSnapshot TakeReceptionSnapshot()
+    {
+        lock (_gate)
+        {
+            return new VideoReceptionSnapshot(
+                RtpPacketsReceived,
+                RtpPacketsLost,
+                _accessUnitsReceived,
+                IncompleteAccessUnitsDropped);
+        }
+    }
+
+    private long _accessUnitsReceived;
+
     public H264AssembledAccessUnit? Push(
+        ushort sequenceNumber,
+        uint timestamp,
+        bool marker,
+        byte[] payload)
+    {
+        lock (_gate)
+            return PushCore(sequenceNumber, timestamp, marker, payload);
+    }
+
+    private H264AssembledAccessUnit? PushCore(
         ushort sequenceNumber,
         uint timestamp,
         bool marker,
@@ -217,6 +242,7 @@ internal sealed class H264RtpAccessUnitAssembler
         }
 
         var nalInfo = InspectNalUnits(accessUnit);
+        _accessUnitsReceived++;
         return new H264AssembledAccessUnit(accessUnit, timestamp, nalInfo.IsIdr, nalInfo.HasVcl);
     }
 

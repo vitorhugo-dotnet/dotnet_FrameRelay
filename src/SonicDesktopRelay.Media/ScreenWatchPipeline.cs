@@ -94,7 +94,7 @@ public sealed class ScreenWatchPipeline(
             var accessUnits = Math.Max(0, VideoAccessUnitsReceived - _statsAccessUnitBaseline);
             var decodedFrames = Math.Max(0, DecodedFrames - _statsDecodedFrameBaseline);
             var durationTicks = _lastSampleDurationTicks;
-            var fps = decodedFrames <= 0 || durationTicks <= 0
+            var fps = durationTicks <= 0
                 ? 0
                 : Math.Clamp(TimeSpan.TicksPerSecond / (double)durationTicks, 0, 60);
 

@@ -1,12 +1,35 @@
 using SonicDesktopRelay.Media;
 using SonicDesktopRelay.Rtc;
 using SonicDesktopRelay.Signaling;
+using Microsoft.Extensions.Time.Testing;
 using Xunit;
 
 namespace SonicDesktopRelay.Rtc.Tests;
 
 public sealed class VideoPublisherPacketLossTests
 {
+    [Fact]
+    public async Task Sustained_zero_decode_receiver_stats_are_accepted_and_downshift_quality()
+    {
+        var time = new FakeTimeProvider(DateTimeOffset.UnixEpoch);
+        var pipeline = new ScreenPublishPipeline(new FakeCapture(), new FakeEncoder(), time: time);
+        var peers = new FakePeerFactory();
+        await using var publisher = new VideoPublisher(pipeline, peers, new FakeSignaling());
+        var viewer = Guid.NewGuid();
+        await publisher.AddViewerAsync(viewer, CancellationToken.None);
+
+        for (var i = 0; i < 3; i++)
+        {
+            using var document = System.Text.Json.JsonDocument.Parse(
+                "{\"version\":1,\"intervalMilliseconds\":2000,\"rtpPacketsReceived\":0,\"rtpPacketsLost\":0,\"accessUnitsReceived\":0,\"incompleteAccessUnits\":0,\"decodedFrames\":0,\"targetFramesPerSecond\":30}");
+            await publisher.HandleAsync(new SignalingEnvelope(SignalingMessageTypes.VideoReceiverStats,
+                null, null, viewer, null, null, document.RootElement.Clone()), CancellationToken.None);
+            if (i < 2) time.Advance(TimeSpan.FromSeconds(2.5));
+        }
+
+        Assert.Equal(3_000_000, pipeline.Quality.TargetBitsPerSecond);
+    }
+
     [Theory]
     [InlineData("{\"version\":2,\"intervalMilliseconds\":2000,\"rtpPacketsReceived\":1,\"rtpPacketsLost\":1,\"accessUnitsReceived\":1,\"incompleteAccessUnits\":0,\"decodedFrames\":1,\"targetFramesPerSecond\":30}")]
     [InlineData("{\"version\":1,\"intervalMilliseconds\":999,\"rtpPacketsReceived\":1,\"rtpPacketsLost\":1,\"accessUnitsReceived\":1,\"incompleteAccessUnits\":0,\"decodedFrames\":1,\"targetFramesPerSecond\":30}")]

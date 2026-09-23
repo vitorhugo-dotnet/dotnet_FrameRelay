@@ -276,13 +276,13 @@ public sealed class ScreenWatchPipelineTests
     }
 
     [Fact]
-    public void StatsSnapshot_reports_zero_and_bounded_effective_fps_from_sample_duration()
+    public void StatsSnapshot_reports_effective_fps_independent_of_decode_success()
     {
         var decoder = new FakeDecoder { ReturnNull = true };
         using var pipeline = new ScreenWatchPipeline(decoder, new FakeTimeProvider(Start));
 
         pipeline.Submit(Sample(TimeSpan.FromSeconds(1)));
-        Assert.Equal(0, pipeline.TakeStatsSnapshot().TargetFramesPerSecond);
+        Assert.Equal(1, pipeline.TakeStatsSnapshot().TargetFramesPerSecond);
 
         decoder.ReturnNull = false;
         pipeline.Submit(Sample(TimeSpan.FromSeconds(1)));
@@ -293,6 +293,19 @@ public sealed class ScreenWatchPipelineTests
 
         pipeline.Submit(Sample(TimeSpan.FromTicks(1)));
         Assert.Equal(60, pipeline.TakeStatsSnapshot().TargetFramesPerSecond);
+    }
+
+    [Fact]
+    public void StatsSnapshot_preserves_effective_target_fps_when_no_frames_decode()
+    {
+        var decoder = new FakeDecoder { ReturnNull = true };
+        using var pipeline = new ScreenWatchPipeline(decoder, new FakeTimeProvider(Start));
+
+        pipeline.Submit(Sample(TimeSpan.FromTicks(333_333)));
+        var stats = pipeline.TakeStatsSnapshot();
+
+        Assert.Equal(0, stats.DecodedFrames);
+        Assert.InRange(stats.TargetFramesPerSecond, 29.9, 30.1);
     }
 
     private static EncodedVideoSample Sample(TimeSpan? duration = null) =>

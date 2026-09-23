@@ -54,8 +54,8 @@ audio publish pipeline and Opus encoder.
 
 The media contract must no longer assume a monitor-only target. A target contains the stable
 monitor identifier and metadata for monitor shares, or HWND, PID, title, and process name for
-window shares. HWND values are process-local identifiers: validate them when starting, and use
-the PID/process handle to guard against a destroyed/reused handle. Capture code creates the
+window shares. Validate HWND values when starting and pair them with the owner process identity
+to guard against a destroyed or reused handle. Capture code creates the
 appropriate `GraphicsCaptureItem` and reports target closure and dimensions without exposing
 Win32 details to the session runtime.
 

@@ -10,6 +10,14 @@ internal sealed class MediaFoundationTransformRetryPolicy
 
     private readonly HashSet<Guid> _failedClsids = [];
 
+    internal static void EnsureCandidateSelected(
+        Func<bool> hasSelection,
+        Action selectCandidate)
+    {
+        if (!hasSelection())
+            selectCandidate();
+    }
+
     public IReadOnlyList<MediaFoundationTransformCandidate> OrderCandidates(
         IEnumerable<MediaFoundationTransformCandidate> candidates) =>
         candidates

@@ -162,6 +162,11 @@ public sealed class MediaFoundationH264Decoder : IVideoDecoder
 
             try
             {
+                stage = "select-transform";
+                MediaFoundationTransformRetryPolicy.EnsureCandidateSelected(
+                    () => _transform is not null,
+                    SelectCandidate);
+
                 var hasTransportGeometry = HasKnownDimensions(sample.Width, sample.Height);
                 if (!_configured ||
                     (hasTransportGeometry &&

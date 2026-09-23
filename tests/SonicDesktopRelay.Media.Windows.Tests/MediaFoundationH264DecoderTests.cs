@@ -7,6 +7,18 @@ namespace SonicDesktopRelay.Media.Windows.Tests;
 
 public sealed class MediaFoundationH264DecoderTests
 {
+    [Fact]
+    public void RuntimeFallback_reselects_candidate_when_previous_fallback_left_none()
+    {
+        var selected = false;
+
+        MediaFoundationTransformRetryPolicy.EnsureCandidateSelected(
+            () => selected,
+            () => selected = true);
+
+        Assert.True(selected);
+    }
+
     [Theory]
     [InlineData(unchecked((int)0xC00D6D72), false)]
     [InlineData(unchecked((int)0xC00D6D61), false)]

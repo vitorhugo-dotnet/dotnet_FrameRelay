@@ -246,6 +246,7 @@ public sealed class SessionRuntime(
 
             case SignalingMessageTypes.WebRtcAnswer when sharing:
             case SignalingMessageTypes.WebRtcIceCandidate when sharing:
+            case SignalingMessageTypes.VideoReceiverStats when sharing:
                 if (publishHost is not null)
                     _ = publishHost.HandleSignalingAsync(envelope, CancellationToken.None);
                 break;
@@ -275,6 +276,7 @@ public sealed class SessionRuntime(
             SignalingMessageTypes.ParticipantDisconnected when sharing => true,
             SignalingMessageTypes.WebRtcAnswer when sharing => publishHost is not null,
             SignalingMessageTypes.WebRtcIceCandidate when sharing => publishHost is not null,
+            SignalingMessageTypes.VideoReceiverStats when sharing => publishHost is not null,
             SignalingMessageTypes.SessionEnded => true,
             _ => false
         };

@@ -249,8 +249,67 @@ public sealed class ScreenWatchPipelineTests
         Assert.Equal(0, pipeline.KeyFrameRequests);
     }
 
-    private static EncodedVideoSample Sample() =>
-        new(new byte[8], TimeSpan.Zero, true, 1920, 1080);
+    [Fact]
+    public void StatsSnapshot_reports_monotonic_interval_deltas_without_resetting_lifetime_counters()
+    {
+        var time = new FakeTimeProvider(Start);
+        using var pipeline = new ScreenWatchPipeline(new FakeDecoder(), time);
+
+        pipeline.Submit(Sample());
+        time.Advance(TimeSpan.FromMilliseconds(750));
+        pipeline.Submit(Sample());
+        time.Advance(TimeSpan.FromMilliseconds(1250));
+        var first = pipeline.TakeStatsSnapshot();
+
+        time.Advance(TimeSpan.FromMilliseconds(1250));
+        pipeline.Submit(Sample());
+        var second = pipeline.TakeStatsSnapshot();
+
+        Assert.Equal(2000, first.IntervalMilliseconds);
+        Assert.Equal(2, first.AccessUnitsReceived);
+        Assert.Equal(2, first.DecodedFrames);
+        Assert.Equal(1, second.AccessUnitsReceived);
+        Assert.Equal(1, second.DecodedFrames);
+        Assert.Equal(1250, second.IntervalMilliseconds);
+        Assert.Equal(3, pipeline.VideoAccessUnitsReceived);
+        Assert.Equal(3, pipeline.DecodedFrames);
+    }
+
+    [Fact]
+    public void StatsSnapshot_reports_effective_fps_independent_of_decode_success()
+    {
+        var decoder = new FakeDecoder { ReturnNull = true };
+        using var pipeline = new ScreenWatchPipeline(decoder, new FakeTimeProvider(Start));
+
+        pipeline.Submit(Sample(TimeSpan.FromSeconds(1)));
+        Assert.Equal(1, pipeline.TakeStatsSnapshot().TargetFramesPerSecond);
+
+        decoder.ReturnNull = false;
+        pipeline.Submit(Sample(TimeSpan.FromSeconds(1)));
+        Assert.Equal(1, pipeline.TakeStatsSnapshot().TargetFramesPerSecond);
+
+        pipeline.Submit(Sample(TimeSpan.FromTicks(333_333)));
+        Assert.InRange(pipeline.TakeStatsSnapshot().TargetFramesPerSecond, 29.9, 30.1);
+
+        pipeline.Submit(Sample(TimeSpan.FromTicks(1)));
+        Assert.Equal(60, pipeline.TakeStatsSnapshot().TargetFramesPerSecond);
+    }
+
+    [Fact]
+    public void StatsSnapshot_preserves_effective_target_fps_when_no_frames_decode()
+    {
+        var decoder = new FakeDecoder { ReturnNull = true };
+        using var pipeline = new ScreenWatchPipeline(decoder, new FakeTimeProvider(Start));
+
+        pipeline.Submit(Sample(TimeSpan.FromTicks(333_333)));
+        var stats = pipeline.TakeStatsSnapshot();
+
+        Assert.Equal(0, stats.DecodedFrames);
+        Assert.InRange(stats.TargetFramesPerSecond, 29.9, 30.1);
+    }
+
+    private static EncodedVideoSample Sample(TimeSpan? duration = null) =>
+        new(new byte[8], TimeSpan.Zero, true, 1920, 1080, duration ?? TimeSpan.Zero);
 
     private sealed class FakeDecoder : IVideoDecoder
     {

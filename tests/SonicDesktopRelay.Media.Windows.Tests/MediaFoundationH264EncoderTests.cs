@@ -6,6 +6,84 @@ namespace SonicDesktopRelay.Media.Windows.Tests;
 public sealed class MediaFoundationH264EncoderTests
 {
     [Fact]
+    public void RuntimeFallback_orders_hardware_before_software_and_preserves_order()
+    {
+        var software = new MediaFoundationTransformCandidate(Guid.NewGuid(), false);
+        var firstHardware = new MediaFoundationTransformCandidate(Guid.NewGuid(), true);
+        var secondHardware = new MediaFoundationTransformCandidate(Guid.NewGuid(), true);
+
+        Assert.Equal(
+            new[] { firstHardware, secondHardware, software },
+            new MediaFoundationTransformRetryPolicy().OrderCandidates(
+                new[] { software, firstHardware, secondHardware }));
+    }
+
+    [Fact]
+    public void RuntimeFallback_excludes_only_the_failed_transform()
+    {
+        var failed = new MediaFoundationTransformCandidate(Guid.NewGuid(), true);
+        var next = new MediaFoundationTransformCandidate(Guid.NewGuid(), true);
+        var software = new MediaFoundationTransformCandidate(Guid.NewGuid(), false);
+        var policy = new MediaFoundationTransformRetryPolicy();
+        policy.ExcludeFailed(failed.Clsid);
+
+        Assert.Equal(
+            new[] { next, software },
+            policy.OrderCandidates(new[] { failed, software, next }));
+    }
+
+    [Fact]
+    public void RuntimeFallback_retries_hard_failure_once_and_does_not_retry_success()
+    {
+        var currentCalls = 0;
+        var fallbackCalls = 0;
+        var result = MediaFoundationTransformRetryPolicy.ExecuteWithSingleFallback(
+            () => { currentCalls++; throw new InvalidOperationException("transform failed"); },
+            static exception => exception is InvalidOperationException,
+            () => { fallbackCalls++; return 42; });
+
+        Assert.Equal(42, result);
+        Assert.Equal(1, currentCalls);
+        Assert.Equal(1, fallbackCalls);
+
+        Assert.Equal(7, MediaFoundationTransformRetryPolicy.ExecuteWithSingleFallback(
+            () => 7,
+            static _ => true,
+            () => throw new Xunit.Sdk.XunitException("Fallback must not run after success.")));
+    }
+
+    [Fact]
+    public void RuntimeFallback_does_not_retry_non_hard_decoder_outcomes()
+    {
+        var fallbackCalls = 0;
+
+        var result = MediaFoundationTransformRetryPolicy.ExecuteWithSingleFallback(
+            () => (int?)null,
+            static exception => exception is InvalidOperationException,
+            () => { fallbackCalls++; return 1; });
+
+        Assert.Null(result);
+        Assert.Equal(0, fallbackCalls);
+    }
+
+    [Fact]
+    public void RuntimeFallback_does_not_exclude_encoder_when_async_output_times_out()
+    {
+        var readOutputCalls = 0;
+        var fallbackCalls = 0;
+        var result = MediaFoundationTransformRetryPolicy.ExecuteWithSingleFallback(
+            () => MediaFoundationTransformRetryPolicy.ReadAsyncOutputIfReady<EncodedVideoSample>(
+                outputReady: false,
+                () => { readOutputCalls++; return null; }),
+            static exception => exception is InvalidOperationException,
+            () => { fallbackCalls++; return null; });
+
+        Assert.Null(result);
+        Assert.Equal(0, readOutputCalls);
+        Assert.Equal(0, fallbackCalls);
+    }
+
+    [Fact]
     public void The_selected_encoder_is_named()
     {
         if (!MediaFoundationH264Encoder.IsSupported) return;

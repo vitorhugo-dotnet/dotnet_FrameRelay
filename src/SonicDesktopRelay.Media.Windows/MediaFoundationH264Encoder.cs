@@ -37,6 +37,7 @@ public sealed class MediaFoundationH264Encoder : IVideoEncoder
     private readonly Lock _gate = new();
     private readonly List<string> _rejections = [];
     private readonly EncoderKeyFramePolicy _keyFramePolicy = new(null);
+    private readonly MediaFoundationTransformRetryPolicy _retryPolicy = new();
 
     private IMFTransform? _transform;
     private MediaFoundationCodecControl? _codecControl;
@@ -167,47 +168,17 @@ public sealed class MediaFoundationH264Encoder : IVideoEncoder
 
             var duration = TimeSpan.FromTicks(TimeSpan.TicksPerSecond / quality.FramesPerSecond);
             var nv12 = _converter.Convert(frame, width, height);
-            using var input = CreateInputSample(
-                nv12,
-                frame.Timestamp,
-                duration);
-
-            if (_asyncPump is not null)
-            {
-                if (!_asyncInputReady
-                    && !WaitForAsyncCredit(_asyncPump, static pump => pump.TryTakeInput(), 500))
+            return MediaFoundationTransformRetryPolicy.ExecuteWithSingleFallback(
+                () => ProcessCurrentTransform(nv12, frame, duration, width, height),
+                IsHardTransformFailure,
+                () =>
                 {
-                    throw new InvalidOperationException(
-                        "Hardware H.264 encoder did not request another input sample.");
-                }
-
-                _asyncInputReady = false;
-                _transform!.ProcessInput(0, input, 0);
-
-                // Hardware MFTs signal output asynchronously. Keep any NeedInput event queued
-                // for the next frame while waiting for HaveOutput from this one.
-                if (!WaitForAsyncCredit(_asyncPump, static pump => pump.TryTakeOutput(), 250))
-                {
-                    _asyncPump.DrainAvailable();
-                    if (_asyncPump.InputCredits > 0)
-                    {
-                        _asyncInputReady = _asyncPump.TryTakeInput();
-                        return null;
-                    }
-
-                    throw new InvalidOperationException(
-                        "Hardware H.264 encoder produced neither output nor another input request.");
-                }
-
-                _asyncPump.DrainAvailable();
-                if (_asyncPump.InputCredits > 0)
-                    _asyncInputReady = _asyncPump.TryTakeInput();
-
-                return TryReadOutput(frame.Timestamp, duration, width, height);
-            }
-
-            _transform!.ProcessInput(0, input, 0);
-            return TryReadOutput(frame.Timestamp, duration, width, height);
+                    var failed = TransformInfo;
+                    _retryPolicy.ExcludeFailed(failed?.Clsid ?? Guid.Empty);
+                    _rejections.Add($"{failed?.Name ?? "active encoder"} ({failed?.Clsid}): runtime transform failure; selecting another candidate.");
+                    SelectAndConfigure(width, height, quality.FramesPerSecond, quality.TargetBitsPerSecond);
+                    return ProcessCurrentTransform(nv12, frame, duration, width, height);
+                });
         }
     }
 
@@ -259,6 +230,9 @@ public sealed class MediaFoundationH264Encoder : IVideoEncoder
         foreach (var activation in candidates)
         {
             var friendlyName = ReadFriendlyName(activation);
+            var clsid = ReadClsid(activation);
+            if (_retryPolicy.OrderCandidates([new MediaFoundationTransformCandidate(clsid, isHardware)]).Count == 0)
+                continue;
             IMFTransform? transform = null;
             MediaFoundationCodecControl? codecControl = null;
             try
@@ -304,7 +278,6 @@ public sealed class MediaFoundationH264Encoder : IVideoEncoder
                     _asyncInputReady = true;
                 }
 
-                var clsid = ReadClsid(activation);
                 codecControl = new MediaFoundationCodecControl(transform.NativePointer);
                 _transform = transform;
                 _asyncPump = asyncPump;
@@ -340,6 +313,47 @@ public sealed class MediaFoundationH264Encoder : IVideoEncoder
 
         return false;
     }
+
+    private EncodedVideoSample? ProcessCurrentTransform(
+        Nv12Frame nv12,
+        VideoFrame frame,
+        TimeSpan duration,
+        int width,
+        int height)
+    {
+        using var input = CreateInputSample(nv12, frame.Timestamp, duration);
+        if (_asyncPump is not null)
+        {
+            if (!_asyncInputReady
+                && !WaitForAsyncCredit(_asyncPump, static pump => pump.TryTakeInput(), 500))
+                throw new InvalidOperationException("Hardware H.264 encoder did not request another input sample.");
+
+            _asyncInputReady = false;
+            _transform!.ProcessInput(0, input, 0);
+            if (!WaitForAsyncCredit(_asyncPump, static pump => pump.TryTakeOutput(), 250))
+            {
+                _asyncPump.DrainAvailable();
+                _asyncInputReady = _asyncPump.InputCredits > 0 && _asyncPump.TryTakeInput();
+                // Async MFT output may legitimately lag its input. A wait timeout is not a
+                // transform failure; drop this output opportunity and keep the active MFT.
+                return MediaFoundationTransformRetryPolicy.ReadAsyncOutputIfReady<EncodedVideoSample>(
+                    outputReady: false,
+                    () => TryReadOutput(frame.Timestamp, duration, width, height));
+            }
+            _asyncPump.DrainAvailable();
+            if (_asyncPump.InputCredits > 0)
+                _asyncInputReady = _asyncPump.TryTakeInput();
+        }
+        else
+        {
+            _transform!.ProcessInput(0, input, 0);
+        }
+
+        return TryReadOutput(frame.Timestamp, duration, width, height);
+    }
+
+    private static bool IsHardTransformFailure(Exception exception) =>
+        exception is SharpGenException or COMException or InvalidOperationException;
 
     private static void ConfigureTransform(
         IMFTransform transform,

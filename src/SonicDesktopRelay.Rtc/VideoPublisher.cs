@@ -20,6 +20,7 @@ public sealed class VideoPublisher(
     private readonly ConcurrentDictionary<Guid, IPeerConnection> _peers = new();
     private readonly ConcurrentDictionary<Guid, VideoSampleSendQueue> _videoQueues = new();
     private readonly ConcurrentDictionary<Guid, RtcTransportDiagnostics> _transportDiagnostics = new();
+    private readonly object _receiverStatsGate = new();
     private readonly TimeProvider _time = time ?? TimeProvider.System;
     private long _lastVideoSendDurationTicks;
     private bool _subscribed;
@@ -71,12 +72,6 @@ public sealed class VideoPublisher(
         peer.KeyFrameRequested += pipeline.RequestKeyFrame;
         peer.PacketLossReported += loss =>
         {
-            // Recovery and congestion are different signals. Any actual loss can justify one
-            // coalesced clean point; every RTCP sample, including zero loss, feeds the separate
-            // hysteretic quality policy so degraded sessions can recover later.
-            if (loss > 0)
-                pipeline.RequestKeyFrame(KeyFrameRequestReason.PacketLoss);
-
             pipeline.ReportReception(participantId, loss);
         };
         peer.TransportDiagnosticsChanged += diagnostics =>
@@ -102,12 +97,16 @@ public sealed class VideoPublisher(
 
     public async Task RemoveViewerAsync(Guid participantId)
     {
-        pipeline.RemoveReceptionSource(participantId);
+        IPeerConnection? peer;
+        lock (_receiverStatsGate)
+        {
+            _peers.TryRemove(participantId, out peer);
+            pipeline.RemoveReceptionSource(participantId);
+        }
         _transportDiagnostics.TryRemove(participantId, out _);
         if (_videoQueues.TryRemove(participantId, out var queue))
             await queue.DisposeAsync();
-        if (!_peers.TryRemove(participantId, out var peer)) return;
-        await peer.DisposeAsync();
+        if (peer is not null) await peer.DisposeAsync();
     }
 
     public async Task HandleAsync(SignalingEnvelope envelope, CancellationToken ct)
@@ -138,8 +137,52 @@ public sealed class VideoPublisher(
                 }
 
                 break;
+
+            case SignalingMessageTypes.VideoReceiverStats:
+                if (!TryReadReceiverStats(payload, out var stats)) break;
+                lock (_receiverStatsGate)
+                {
+                    if (_peers.ContainsKey(from))
+                        pipeline.ReportReceiverStats(from, stats);
+                }
+                break;
         }
     }
+
+    private static bool TryReadReceiverStats(JsonElement payload, out VideoReceiverStats stats)
+    {
+        stats = null!;
+        if (payload.ValueKind != JsonValueKind.Object
+            || !TryInt(payload, "version", out var version) || version != 1
+            || !TryLong(payload, "intervalMilliseconds", out var interval) || interval is < 1000 or > 5000
+            || !TryLong(payload, "rtpPacketsReceived", out var received) || received is < 0 or > 10_000_000
+            || !TryLong(payload, "rtpPacketsLost", out var lost) || lost is < 0 or > 10_000_000
+            || received + lost > 10_000_000
+            || !TryLong(payload, "accessUnitsReceived", out var units) || units is < 0 or > 10_000_000
+            || !TryLong(payload, "incompleteAccessUnits", out var incomplete)
+            || incomplete < 0 || incomplete > 10_000_000 || incomplete > units
+            || !TryLong(payload, "decodedFrames", out var decoded) || decoded is < 0 or > 10_000_000
+            || !payload.TryGetProperty("targetFramesPerSecond", out var fpsElement)
+            || fpsElement.ValueKind != JsonValueKind.Number || !fpsElement.TryGetDouble(out var fps)
+            || !double.IsFinite(fps) || fps is < 1 or > 60)
+            return false;
+
+        stats = new VideoReceiverStats(version, interval, received, lost, units, incomplete, decoded, fps);
+        return true;
+    }
+
+    private static bool TryLong(JsonElement payload, string name, out long value) =>
+        payload.TryGetProperty(name, out var element)
+        && element.ValueKind == JsonValueKind.Number
+        && element.TryGetInt64(out value) || SetDefault(out value);
+
+    private static bool TryInt(JsonElement payload, string name, out int value) =>
+        payload.TryGetProperty(name, out var element)
+        && element.ValueKind == JsonValueKind.Number
+        && element.TryGetInt32(out value) || SetDefault(out value);
+
+    private static bool SetDefault(out long value) { value = 0; return false; }
+    private static bool SetDefault(out int value) { value = 0; return false; }
 
     // Subscribed on the first viewer rather than at construction: with nobody watching there
     // is nothing to send, and unsubscribed media pipelines are the cheap idle state.

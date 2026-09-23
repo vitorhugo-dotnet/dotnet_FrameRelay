@@ -27,6 +27,31 @@ public sealed class VideoSubscriberTests
     }
 
     [Fact]
+    public async Task ReceiverStats_are_sent_to_learned_publisher_on_two_second_intervals()
+    {
+        var time = new FakeTimeProvider(Start);
+        var harness = new Harness(time);
+        await harness.Subscriber.HandleAsync(Frame("unrelated", Stranger, "{}"), CancellationToken.None);
+        time.Advance(TimeSpan.FromSeconds(2));
+        Assert.Empty(harness.Signaling.Sent);
+
+        await harness.ReadyAsync();
+        harness.Signaling.Sent.Clear();
+        time.Advance(TimeSpan.FromSeconds(2));
+        Assert.True(SpinWait.SpinUntil(() => harness.Signaling.Sent.Count == 1, TimeSpan.FromSeconds(1)));
+
+        var sent = Assert.Single(harness.Signaling.Sent);
+        Assert.Equal(SignalingMessageTypes.VideoReceiverStats, sent.Type);
+        Assert.Equal(Publisher, sent.To);
+        var stats = Assert.IsType<VideoReceiverStats>(sent.Payload);
+        Assert.InRange(stats.IntervalMilliseconds, 1000, 5000);
+
+        await harness.Subscriber.DisposeAsync();
+        time.Advance(TimeSpan.FromSeconds(2));
+        Assert.Single(harness.Signaling.Sent);
+    }
+
+    [Fact]
     public async Task The_publisher_identity_comes_from_the_authenticated_from_field()
     {
         var harness = new Harness();
@@ -318,12 +343,12 @@ public sealed class VideoSubscriberTests
 
     private sealed class Harness
     {
-        public Harness()
+        public Harness(FakeTimeProvider? time = null)
         {
             Pipeline = new WatchPipelineDriver();
             Peers = new FakeViewerPeerFactory();
             Signaling = new FakeSignaling();
-            Subscriber = new VideoSubscriber(Pipeline.Pipeline, Peers, Signaling);
+            Subscriber = new VideoSubscriber(Pipeline.Pipeline, null, Peers, Signaling, time);
         }
 
         public WatchPipelineDriver Pipeline { get; }

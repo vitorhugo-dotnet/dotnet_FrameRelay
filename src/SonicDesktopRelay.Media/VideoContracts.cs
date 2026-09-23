@@ -142,6 +142,7 @@ public enum KeyFrameRequestReason
     InitialConnection,
     RtcpPli,
     RtcpFir,
+    /// <summary>A stale or dropped encoded sample in the local send queue needs a clean point.</summary>
     PacketLoss,
     QualityChange
 }

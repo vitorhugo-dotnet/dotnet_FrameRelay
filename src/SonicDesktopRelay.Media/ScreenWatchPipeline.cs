@@ -31,6 +31,11 @@ public sealed class ScreenWatchPipeline(
     private static readonly TimeSpan StallAfter = TimeSpan.FromSeconds(4);
     private readonly ILogger<ScreenWatchPipeline> _logger =
         logger ?? NullLogger<ScreenWatchPipeline>.Instance;
+    private readonly object _statsGate = new();
+    private long _statsTimestamp = time.GetTimestamp();
+    private long _statsAccessUnitBaseline;
+    private long _statsDecodedFrameBaseline;
+    private long _lastSampleDurationTicks;
 
     private DateTimeOffset? _lastFrameAt;
     private long _lastAccessUnitUtcTicks;
@@ -76,6 +81,39 @@ public sealed class ScreenWatchPipeline(
 
     public DateTimeOffset? LastDecodedFrameAt => _lastFrameAt;
 
+    /// <summary>Returns decoder and access-unit deltas since the previous monotonic snapshot.</summary>
+    public VideoReceiverStats TakeStatsSnapshot()
+    {
+        lock (_statsGate)
+        {
+            var now = time.GetTimestamp();
+            var elapsed = time.GetElapsedTime(_statsTimestamp, now);
+            var intervalMilliseconds = elapsed <= TimeSpan.Zero
+                ? 0
+                : (long)Math.Min(long.MaxValue, elapsed.TotalMilliseconds);
+            var accessUnits = Math.Max(0, VideoAccessUnitsReceived - _statsAccessUnitBaseline);
+            var decodedFrames = Math.Max(0, DecodedFrames - _statsDecodedFrameBaseline);
+            var durationTicks = _lastSampleDurationTicks;
+            var fps = durationTicks <= 0
+                ? 0
+                : Math.Clamp(TimeSpan.TicksPerSecond / (double)durationTicks, 0, 60);
+
+            _statsTimestamp = now;
+            _statsAccessUnitBaseline = VideoAccessUnitsReceived;
+            _statsDecodedFrameBaseline = DecodedFrames;
+
+            return new VideoReceiverStats(
+                Version: 1,
+                IntervalMilliseconds: intervalMilliseconds,
+                RtpPacketsReceived: 0,
+                RtpPacketsLost: 0,
+                AccessUnitsReceived: accessUnits,
+                IncompleteAccessUnits: 0,
+                DecodedFrames: decodedFrames,
+                TargetFramesPerSecond: fps);
+        }
+    }
+
     /// <summary>
     /// Reason attached to a terminal media failure. A Failed state without a reason is a
     /// diagnostics bug because it makes the UI claim decoding failed while hiding the evidence.
@@ -84,7 +122,11 @@ public sealed class ScreenWatchPipeline(
 
     public void Submit(EncodedVideoSample sample)
     {
-        Interlocked.Increment(ref _videoAccessUnitsReceived);
+        lock (_statsGate)
+        {
+            Interlocked.Increment(ref _videoAccessUnitsReceived);
+            _lastSampleDurationTicks = sample.Duration.Ticks;
+        }
         Interlocked.Exchange(ref _lastAccessUnitUtcTicks, time.GetUtcNow().UtcTicks);
         UpdateMaximum(ref _maximumAccessUnitBytes, sample.Data.Length);
         if (sample.IsKeyFrame)
@@ -130,7 +172,8 @@ public sealed class ScreenWatchPipeline(
         }
 
         _lastFrameAt = time.GetUtcNow();
-        Interlocked.Increment(ref _decodedFrames);
+        lock (_statsGate)
+            Interlocked.Increment(ref _decodedFrames);
         _stallKeyFrameAsked = false;
         SetState(WatchState.Receiving);
         FrameDecoded?.Invoke(frame);

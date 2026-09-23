@@ -27,8 +27,8 @@ public sealed class MediaFoundationH264Decoder : IVideoDecoder
         MftEnumFlagSync | MftEnumFlagAsync | MftEnumFlagLocal | MftEnumFlagSortAndFilter;
 
     private const int ProgressiveInterlaceMode = 2;
-    private const int NeedMoreInputHResult = unchecked((int)0xC00D6D72);
-    private const int StreamChangeHResult = unchecked((int)0xC00D6D61);
+    private const int NeedMoreInputHResult = MediaFoundationTransformRetryPolicy.NeedMoreInputHResult;
+    private const int StreamChangeHResult = MediaFoundationTransformRetryPolicy.StreamChangeHResult;
     private const int NoMoreTypesHResult = unchecked((int)0xC00D36B9);
 
     [StructLayout(LayoutKind.Sequential)]
@@ -50,6 +50,7 @@ public sealed class MediaFoundationH264Decoder : IVideoDecoder
     private readonly IDisposable _runtimeLease;
     private readonly Lock _gate = new();
     private readonly List<string> _rejections = [];
+    private readonly MediaFoundationTransformRetryPolicy _retryPolicy = new();
     private readonly ILogger<MediaFoundationH264Decoder> _logger;
 
     private IMFTransform? _transform;
@@ -178,13 +179,21 @@ public sealed class MediaFoundationH264Decoder : IVideoDecoder
                 }
 
                 stage = "create-input-sample";
-                using var input = CreateInputSample(sample);
-
                 stage = "process-input";
-                _transform!.ProcessInput(0, input, 0);
-
-                stage = "process-output";
-                return DrainOutput(sample.Timestamp);
+                return MediaFoundationTransformRetryPolicy.ExecuteWithSingleFallback(
+                    () => DecodeWithCurrentTransform(sample),
+                    IsHardTransformFailure,
+                    () =>
+                    {
+                        var failed = TransformInfo;
+                        _retryPolicy.ExcludeFailed(failed?.Clsid ?? Guid.Empty);
+                        _rejections.Add($"{failed?.Name ?? "active decoder"} ({failed?.Clsid}): runtime transform failure; selecting another candidate.");
+                        ReleaseTransform();
+                        SelectCandidate();
+                        _configured = false;
+                        Reconfigure(sample.Width, sample.Height);
+                        return DecodeWithCurrentTransform(sample);
+                    });
             }
             catch (Exception e) when (
                 e is SharpGenException
@@ -257,6 +266,9 @@ public sealed class MediaFoundationH264Decoder : IVideoDecoder
         foreach (var activation in candidates)
         {
             var friendlyName = ReadFriendlyName(activation);
+            var clsid = ReadClsid(activation);
+            if (_retryPolicy.OrderCandidates([new MediaFoundationTransformCandidate(clsid, isHardware)]).Count == 0)
+                continue;
             IMFTransform? transform = null;
             try
             {
@@ -283,7 +295,6 @@ public sealed class MediaFoundationH264Decoder : IVideoDecoder
                     // otherwise usable software fallback.
                 }
 
-                var clsid = ReadClsid(activation);
                 _transform = transform;
                 transform = null;
                 Name = string.IsNullOrWhiteSpace(friendlyName)
@@ -309,6 +320,16 @@ public sealed class MediaFoundationH264Decoder : IVideoDecoder
 
         return false;
     }
+
+    private VideoFrame? DecodeWithCurrentTransform(EncodedVideoSample sample)
+    {
+        using var input = CreateInputSample(sample);
+        _transform!.ProcessInput(0, input, 0);
+        return DrainOutput(sample.Timestamp);
+    }
+
+    private static bool IsHardTransformFailure(Exception exception) =>
+        exception is SharpGenException or COMException or InvalidOperationException;
 
     private void Reconfigure(int width, int height)
     {
@@ -590,7 +611,7 @@ public sealed class MediaFoundationH264Decoder : IVideoDecoder
                     continue;
                 }
 
-                if (result.Failure)
+                if (MediaFoundationTransformRetryPolicy.IsHardDecoderOutputFailure(result.Code))
                 {
                     LastFailure = $"process-output: HRESULT 0x{result.Code:X8}";
                     _logger.LogWarning(
@@ -600,7 +621,7 @@ public sealed class MediaFoundationH264Decoder : IVideoDecoder
                         _visibleHeight,
                         _codedWidth,
                         _codedHeight);
-                    return last;
+                    result.CheckError();
                 }
 
                 var decodedSample =

@@ -19,6 +19,7 @@ public static class SignalingMessageTypes
     public const string WebRtcOffer = "webrtc.offer";
     public const string WebRtcAnswer = "webrtc.answer";
     public const string WebRtcIceCandidate = "webrtc.ice_candidate";
+    public const string VideoReceiverStats = "video.receiver_stats";
     public const string WebRtcRenegotiate = "webrtc.renegotiate";
     public const string Ping = "ping";
     public const string Pong = "pong";

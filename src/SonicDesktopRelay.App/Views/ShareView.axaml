@@ -3,94 +3,194 @@
              xmlns:app="clr-namespace:SonicDesktopRelay.App"
              xmlns:media="clr-namespace:SonicDesktopRelay.Media;assembly=SonicDesktopRelay.Media"
              x:Class="SonicDesktopRelay.App.Views.ShareView"
-             x:DataType="app:Shell">
-    <StackPanel Margin="{StaticResource PagePadding}" Spacing="{StaticResource SpaceMd}">
-        <TextBlock Text="Share"
-                   FontSize="{StaticResource FontSizeLg}"
-                   Foreground="{StaticResource TextPrimaryBrush}" />
+             x:DataType="app:Shell"
+             SizeChanged="OnShareSizeChanged">
 
-        <StackPanel Spacing="{StaticResource SpaceXs}">
-            <TextBlock Text="Monitor"
-                       FontSize="{StaticResource FontSizeSm}"
-                       Foreground="{StaticResource TextSecondaryBrush}" />
-            <ComboBox Name="MonitorPicker"
-                      Width="360"
-                      ItemsSource="{Binding Monitors}"
-                      SelectedItem="{Binding SelectedMonitor}"
-                      IsEnabled="{Binding ViewModel.CanShare}">
-                <ComboBox.ItemTemplate>
-                    <DataTemplate x:DataType="media:MonitorInfo">
-                        <TextBlock Text="{Binding Name}" />
-                    </DataTemplate>
-                </ComboBox.ItemTemplate>
-            </ComboBox>
-        </StackPanel>
-
-        <StackPanel Orientation="Horizontal" Spacing="{StaticResource SpaceMd}">
+    <ScrollViewer HorizontalScrollBarVisibility="Disabled"
+                  VerticalScrollBarVisibility="Auto">
+        <StackPanel Margin="{StaticResource PagePadding}"
+                    Spacing="{StaticResource SpaceLg}">
             <StackPanel Spacing="{StaticResource SpaceXs}">
-                <TextBlock Text="Quality"
-                           FontSize="{StaticResource FontSizeSm}"
+                <TextBlock Text="Share your screen"
+                           FontSize="{StaticResource FontSizeXl}"
+                           FontWeight="SemiBold"
+                           Foreground="{StaticResource TextPrimaryBrush}" />
+                <TextBlock Text="Select a display, choose your video settings, and start sharing."
+                           TextWrapping="Wrap"
+                           FontSize="{StaticResource FontSizeMd}"
                            Foreground="{StaticResource TextSecondaryBrush}" />
-                <ComboBox Width="170"
-                          ItemsSource="{Binding ShareQualities}"
-                          SelectedItem="{Binding SelectedShareQuality}"
-                          IsEnabled="{Binding ViewModel.CanShare}">
-                    <ComboBox.ItemTemplate>
-                        <DataTemplate x:DataType="app:ShareQualityOption">
-                            <TextBlock Text="{Binding Label}" />
-                        </DataTemplate>
-                    </ComboBox.ItemTemplate>
-                </ComboBox>
             </StackPanel>
 
-            <StackPanel Spacing="{StaticResource SpaceXs}">
-                <TextBlock Text="Frame rate"
-                           FontSize="{StaticResource FontSizeSm}"
-                           Foreground="{StaticResource TextSecondaryBrush}" />
-                <ComboBox Width="170"
-                          ItemsSource="{Binding ShareFrameRates}"
-                          SelectedItem="{Binding SelectedShareFrameRate}"
-                          IsEnabled="{Binding ViewModel.CanShare}">
-                    <ComboBox.ItemTemplate>
-                        <DataTemplate x:DataType="app:ShareFrameRateOption">
-                            <TextBlock Text="{Binding Label}" />
-                        </DataTemplate>
-                    </ComboBox.ItemTemplate>
-                </ComboBox>
-            </StackPanel>
+            <Grid Name="shareColumns" ColumnDefinitions="*,320"
+                  ColumnSpacing="{StaticResource SpaceMd}"
+                  RowSpacing="{StaticResource SpaceMd}">
+                <StackPanel Grid.Column="0" Spacing="{StaticResource SpaceMd}">
+                    <Border Classes="card unavailable" IsEnabled="False" Focusable="False">
+                        <StackPanel Spacing="{StaticResource SpaceSm}">
+                            <TextBlock Text="Display preview"
+                                       FontSize="{StaticResource FontSizeLg}"
+                                       FontWeight="SemiBold"
+                                       Foreground="{StaticResource TextPrimaryBrush}" />
+                            <Border Background="{StaticResource RailBrush}"
+                                    CornerRadius="{StaticResource ControlCornerRadius}"
+                                    MinHeight="180">
+                                <StackPanel HorizontalAlignment="Center"
+                                            VerticalAlignment="Center"
+                                            Spacing="{StaticResource SpaceXs}">
+                                    <TextBlock Text="---" HorizontalAlignment="Center"
+                                               FontSize="{StaticResource FontSizeXl}"
+                                               Foreground="{StaticResource TextMutedBrush}" />
+                                    <TextBlock Text="Preview unavailable"
+                                               Foreground="{StaticResource TextSecondaryBrush}" />
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Classes="card">
+                        <StackPanel Spacing="{StaticResource SpaceMd}">
+                            <TextBlock Text="Display and video"
+                                       FontSize="{StaticResource FontSizeLg}"
+                                       FontWeight="SemiBold"
+                                       Foreground="{StaticResource TextPrimaryBrush}" />
+                            <StackPanel Spacing="{StaticResource SpaceXs}">
+                                <TextBlock Text="Display" FontSize="{StaticResource FontSizeSm}"
+                                           Foreground="{StaticResource TextSecondaryBrush}" />
+                                <ComboBox Name="MonitorPicker" HorizontalAlignment="Stretch"
+                                          ItemsSource="{Binding Monitors}"
+                                          SelectedItem="{Binding SelectedMonitor}"
+                                          IsEnabled="{Binding ViewModel.CanShare}">
+                                    <ComboBox.ItemTemplate>
+                                        <DataTemplate x:DataType="media:MonitorInfo">
+                                            <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis" />
+                                        </DataTemplate>
+                                    </ComboBox.ItemTemplate>
+                                </ComboBox>
+                            </StackPanel>
+                            <StackPanel Spacing="{StaticResource SpaceXs}">
+                                <TextBlock Text="Video quality" FontSize="{StaticResource FontSizeSm}"
+                                           Foreground="{StaticResource TextSecondaryBrush}" />
+                                <ComboBox HorizontalAlignment="Stretch"
+                                          ItemsSource="{Binding ShareQualities}"
+                                          SelectedItem="{Binding SelectedShareQuality}"
+                                          IsEnabled="{Binding ViewModel.CanShare}">
+                                    <ComboBox.ItemTemplate>
+                                        <DataTemplate x:DataType="app:ShareQualityOption">
+                                            <TextBlock Text="{Binding Label}" />
+                                        </DataTemplate>
+                                    </ComboBox.ItemTemplate>
+                                </ComboBox>
+                            </StackPanel>
+                            <StackPanel Spacing="{StaticResource SpaceXs}">
+                                <TextBlock Text="Frame rate" FontSize="{StaticResource FontSizeSm}"
+                                           Foreground="{StaticResource TextSecondaryBrush}" />
+                                <ComboBox HorizontalAlignment="Stretch"
+                                          ItemsSource="{Binding ShareFrameRates}"
+                                          SelectedItem="{Binding SelectedShareFrameRate}"
+                                          IsEnabled="{Binding ViewModel.CanShare}">
+                                    <ComboBox.ItemTemplate>
+                                        <DataTemplate x:DataType="app:ShareFrameRateOption">
+                                            <TextBlock Text="{Binding Label}" />
+                                        </DataTemplate>
+                                    </ComboBox.ItemTemplate>
+                                </ComboBox>
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Classes="card unavailable" IsEnabled="False" Focusable="False">
+                        <StackPanel Spacing="{StaticResource SpaceXs}">
+                            <TextBlock Text="Share system audio" FontSize="{StaticResource FontSizeMd}"
+                                       FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" />
+                            <TextBlock Text="Audio control unavailable" FontSize="{StaticResource FontSizeSm}"
+                                       Foreground="{StaticResource TextSecondaryBrush}" />
+                        </StackPanel>
+                    </Border>
+
+                    <Border Classes="card">
+                        <StackPanel Spacing="{StaticResource SpaceSm}">
+                            <Button Content="Start sharing" HorizontalAlignment="Stretch"
+                                    Background="{StaticResource AccentBrush}"
+                                    IsEnabled="{Binding ViewModel.CanShare}" Click="OnShare" />
+                            <Button Content="Stop sharing" HorizontalAlignment="Stretch"
+                                    IsEnabled="{Binding ViewModel.CanStop}" Click="OnStop" />
+                            <TextBlock Text="{Binding ShellError}"
+                                       IsVisible="{Binding ShellError, Converter={x:Static ObjectConverters.IsNotNull}}"
+                                       TextWrapping="Wrap" FontSize="{StaticResource FontSizeSm}"
+                                       Foreground="{StaticResource DangerBrush}" />
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+
+                <StackPanel Name="sessionColumn" Grid.Column="1"
+                            Spacing="{StaticResource SpaceMd}">
+                    <Border Classes="card">
+                        <StackPanel Spacing="{StaticResource SpaceMd}">
+                            <StackPanel Spacing="{StaticResource SpaceXs}">
+                                <TextBlock Text="Your session" FontSize="{StaticResource FontSizeLg}"
+                                           FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" />
+                                <TextBlock Text="Share this code with viewers so they can join."
+                                           TextWrapping="Wrap" FontSize="{StaticResource FontSizeSm}"
+                                           Foreground="{StaticResource TextSecondaryBrush}" />
+                            </StackPanel>
+                            <Border Background="{StaticResource RailBrush}"
+                                    CornerRadius="{StaticResource ControlCornerRadius}"
+                                    Padding="{StaticResource SpaceMd}">
+                                <StackPanel Spacing="{StaticResource SpaceSm}">
+                                    <SelectableTextBlock Name="CodeText"
+                                                         Text="{Binding ViewModel.Code, TargetNullValue=------}"
+                                                         FontSize="{StaticResource FontSizeXl}"
+                                                         FontFamily="Consolas, monospace"
+                                                         Foreground="{StaticResource TextPrimaryBrush}" />
+                                    <Button Content="Copy code" HorizontalAlignment="Left"
+                                            IsEnabled="{Binding ViewModel.Code, Converter={x:Static ObjectConverters.IsNotNull}}"
+                                            Click="OnCopy" />
+                                </StackPanel>
+                            </Border>
+                            <TextBlock Text="{Binding ViewModel.StatusText}" TextWrapping="Wrap"
+                                       FontSize="{StaticResource FontSizeMd}"
+                                       Foreground="{StaticResource TextSecondaryBrush}" />
+                            <TextBlock Text="{Binding ViewModel.Snapshot.ViewerCount, StringFormat='Viewers: {0}'}"
+                                       FontSize="{StaticResource FontSizeSm}"
+                                       Foreground="{StaticResource TextSecondaryBrush}" />
+                        </StackPanel>
+                    </Border>
+
+                    <Border Classes="card unavailable" IsEnabled="False" Focusable="False">
+                        <StackPanel Spacing="{StaticResource SpaceSm}">
+                            <TextBlock Text="Connected viewers" FontSize="{StaticResource FontSizeLg}"
+                                       FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" />
+                            <TextBlock Text="Viewer details unavailable" FontSize="{StaticResource FontSizeSm}"
+                                       Foreground="{StaticResource TextSecondaryBrush}" />
+                        </StackPanel>
+                    </Border>
+
+                    <Border Classes="card">
+                        <StackPanel Spacing="{StaticResource SpaceMd}">
+                            <TextBlock Text="Connection summary" FontSize="{StaticResource FontSizeLg}"
+                                       FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" />
+                            <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto,Auto,Auto,Auto"
+                                  RowSpacing="{StaticResource SpaceSm}">
+                                <TextBlock Grid.Row="0" Text="Session" Foreground="{StaticResource TextSecondaryBrush}" />
+                                <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding ViewModel.Snapshot.Phase}"
+                                           Foreground="{StaticResource TextPrimaryBrush}" />
+                                <TextBlock Grid.Row="1" Text="Signaling" Foreground="{StaticResource TextSecondaryBrush}" />
+                                <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding ViewModel.Snapshot.Signaling}"
+                                           Foreground="{StaticResource TextPrimaryBrush}" />
+                                <TextBlock Grid.Row="2" Text="Latency" Foreground="{StaticResource TextSecondaryBrush}" />
+                                <TextBlock Grid.Row="2" Grid.Column="1" Text="---"
+                                           Foreground="{StaticResource TextMutedBrush}" />
+                                <TextBlock Grid.Row="3" Text="Bitrate" Foreground="{StaticResource TextSecondaryBrush}" />
+                                <TextBlock Grid.Row="3" Grid.Column="1" Text="---"
+                                           Foreground="{StaticResource TextMutedBrush}" />
+                                <TextBlock Grid.Row="4" Text="Codec" Foreground="{StaticResource TextSecondaryBrush}" />
+                                <TextBlock Grid.Row="4" Grid.Column="1" Text="---"
+                                           Foreground="{StaticResource TextMutedBrush}" />
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </Grid>
         </StackPanel>
-
-        <Border Background="{StaticResource SurfaceRaisedBrush}"
-                BorderBrush="{StaticResource BorderBrush}"
-                BorderThickness="1"
-                CornerRadius="{StaticResource ControlCornerRadius}"
-                Padding="{StaticResource PagePadding}">
-            <StackPanel Spacing="{StaticResource SpaceSm}">
-                <TextBlock Text="Session code"
-                           FontSize="{StaticResource FontSizeSm}"
-                           Foreground="{StaticResource TextSecondaryBrush}" />
-                <SelectableTextBlock Name="CodeText"
-                                     Text="{Binding ViewModel.Code, TargetNullValue=------}"
-                                     FontSize="{StaticResource FontSizeCode}"
-                                     FontFamily="Consolas, monospace"
-                                     Foreground="{StaticResource TextPrimaryBrush}" />
-                <Button Content="Copy code"
-                        IsEnabled="{Binding ViewModel.Code, Converter={x:Static ObjectConverters.IsNotNull}}"
-                        Click="OnCopy" />
-            </StackPanel>
-        </Border>
-
-        <TextBlock Text="{Binding ViewModel.StatusText}"
-                   FontSize="{StaticResource FontSizeMd}"
-                   Foreground="{StaticResource TextSecondaryBrush}" />
-
-        <StackPanel Orientation="Horizontal" Spacing="{StaticResource SpaceSm}">
-            <Button Content="Start sharing"
-                    IsEnabled="{Binding ViewModel.CanShare}"
-                    Click="OnShare" />
-            <Button Content="Stop sharing"
-                    IsEnabled="{Binding ViewModel.CanStop}"
-                    Click="OnStop" />
-        </StackPanel>
-    </StackPanel>
+    </ScrollViewer>
 </UserControl>

@@ -24,6 +24,7 @@
 
     <Thickness x:Key="PagePadding">24</Thickness>
     <Thickness x:Key="RailPadding">8</Thickness>
+    <Thickness x:Key="ControlPadding">16</Thickness>
     <Thickness x:Key="CardPadding">20</Thickness>
 
     <x:Double x:Key="FontSizeSm">12</x:Double>

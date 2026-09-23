@@ -4,7 +4,23 @@
              xmlns:media="clr-namespace:SonicDesktopRelay.Media;assembly=SonicDesktopRelay.Media"
              x:Class="SonicDesktopRelay.App.Views.ShareView"
              x:DataType="app:Shell"
-             SizeChanged="OnShareSizeChanged">
+             Container.Name="sharePage" Container.Sizing="Width">
+    <UserControl.Styles>
+        <Style Selector="StackPanel#controlColumn">
+            <Setter Property="Width" Value="520" />
+        </Style>
+        <Style Selector="StackPanel#sessionColumn">
+            <Setter Property="Width" Value="320" />
+        </Style>
+        <ContainerQuery Name="sharePage" Query="max-width:940">
+            <Style Selector="StackPanel#controlColumn">
+                <Setter Property="Width" Value="440" />
+            </Style>
+            <Style Selector="StackPanel#sessionColumn">
+                <Setter Property="Width" Value="440" />
+            </Style>
+        </ContainerQuery>
+    </UserControl.Styles>
 
     <ScrollViewer HorizontalScrollBarVisibility="Disabled"
                   VerticalScrollBarVisibility="Auto">
@@ -21,10 +37,9 @@
                            Foreground="{StaticResource TextSecondaryBrush}" />
             </StackPanel>
 
-            <Grid Name="shareColumns" ColumnDefinitions="*,320"
-                  ColumnSpacing="{StaticResource SpaceMd}"
-                  RowSpacing="{StaticResource SpaceMd}">
-                <StackPanel Grid.Column="0" Spacing="{StaticResource SpaceMd}">
+            <WrapPanel Orientation="Horizontal">
+                <StackPanel Name="controlColumn" Margin="0,0,16,16"
+                            Spacing="{StaticResource SpaceMd}">
                     <Border Classes="card unavailable" IsEnabled="False" Focusable="False">
                         <StackPanel Spacing="{StaticResource SpaceSm}">
                             <TextBlock Text="Display preview"
@@ -122,7 +137,7 @@
                     </Border>
                 </StackPanel>
 
-                <StackPanel Name="sessionColumn" Grid.Column="1"
+                <StackPanel Name="sessionColumn" Margin="0,0,16,16"
                             Spacing="{StaticResource SpaceMd}">
                     <Border Classes="card">
                         <StackPanel Spacing="{StaticResource SpaceMd}">
@@ -190,7 +205,7 @@
                         </StackPanel>
                     </Border>
                 </StackPanel>
-            </Grid>
+            </WrapPanel>
         </StackPanel>
     </ScrollViewer>
 </UserControl>

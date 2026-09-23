@@ -8,24 +8,9 @@ namespace SonicDesktopRelay.App.Views;
 [SupportedOSPlatform("windows10.0.19041.0")]
 public partial class ShareView : UserControl
 {
-    private const double SingleColumnWidth = 940;
-    private bool? _isSingleColumn;
-
     public ShareView()
     {
         InitializeComponent();
-    }
-
-    private void OnShareSizeChanged(object? sender, SizeChangedEventArgs e)
-    {
-        var singleColumn = e.NewSize.Width <= SingleColumnWidth;
-        if (_isSingleColumn == singleColumn) return;
-
-        _isSingleColumn = singleColumn;
-        shareColumns.ColumnDefinitions = new ColumnDefinitions(singleColumn ? "*" : "*,320");
-        shareColumns.RowDefinitions = new RowDefinitions(singleColumn ? "Auto,Auto" : "Auto");
-        Grid.SetColumn(sessionColumn, singleColumn ? 0 : 1);
-        Grid.SetRow(sessionColumn, singleColumn ? 1 : 0);
     }
 
     private async void OnShare(object? sender, RoutedEventArgs e)

@@ -102,6 +102,16 @@ public sealed class RtcVideoPublishHost(
     /// </summary>
     public event Action? VideoDiagnosticsChanged;
 
+    public event Action<string>? CaptureTargetClosed;
+
+    public Task StartAsync(CaptureTarget target, VideoPublishProfile profile, CancellationToken ct) => target switch
+    {
+        CaptureTarget.Monitor monitor => StartAsync(monitor.Info, profile, ct),
+        CaptureTarget.Window => Task.FromException(new PlatformNotSupportedException(
+            "Application-window publishing is not available yet.")),
+        _ => Task.FromException(new ArgumentOutOfRangeException(nameof(target)))
+    };
+
     public async Task StartAsync(MonitorInfo monitor, VideoPublishProfile profile, CancellationToken ct)
     {
         await _gate.WaitAsync(ct);
@@ -126,6 +136,7 @@ public sealed class RtcVideoPublishHost(
 
             var capture = new GraphicsCaptureScreenSource();
             _capture = capture;
+            ((IScreenCaptureSource)capture).TargetClosed += OnCaptureTargetClosed;
             var pipeline = new ScreenPublishPipeline(
                 capture,
                 encoder,
@@ -231,6 +242,9 @@ public sealed class RtcVideoPublishHost(
     private void OnAudioPipelineFailed(Exception error)
         => _audioPipelineFailure ??= error.Message;
 
+    private void OnCaptureTargetClosed(string reason)
+        => CaptureTargetClosed?.Invoke(reason);
+
     private void OnTransportDiagnosticsChanged(Guid participantId, RtcTransportDiagnostics diagnostics)
     {
         _logger.LogInformation(
@@ -269,6 +283,9 @@ public sealed class RtcVideoPublishHost(
         }
 
         _audioSource = null;
+
+        if (_capture is IScreenCaptureSource captureSource)
+            captureSource.TargetClosed -= OnCaptureTargetClosed;
         _capture = null;
 
         if (_pipeline is not null)

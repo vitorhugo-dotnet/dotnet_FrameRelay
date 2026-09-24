@@ -106,11 +106,14 @@ public sealed class ScreenPublishPipeline : IAsyncDisposable
 
     public string? LastFailure { get; private set; }
 
-    public async Task StartAsync(MonitorInfo monitor, CancellationToken ct)
+    public Task StartAsync(MonitorInfo monitor, CancellationToken ct) =>
+        StartAsync(new CaptureTarget.Monitor(monitor), ct);
+
+    public async Task StartAsync(CaptureTarget target, CancellationToken ct)
     {
         if (_running) return;
         _capture.FrameCaptured += OnFrame;
-        await _capture.StartAsync(monitor, Quality, ct);
+        await _capture.StartAsync(target, Quality, ct);
         _running = true;
     }
 
@@ -448,11 +451,11 @@ public sealed class ScreenPublishPipeline : IAsyncDisposable
 
     private string ResolutionFor(VideoQuality quality)
     {
-        var monitor = _capture.Monitor;
-        if (monitor.Width <= 0 || monitor.Height <= 0)
+        var dimensions = _capture.CurrentDimensions;
+        if (dimensions.Width <= 0 || dimensions.Height <= 0)
             return $"max-height-{quality.MaxHeight}";
 
-        var (width, height) = quality.ScaleFor(monitor.Width, monitor.Height);
+        var (width, height) = quality.ScaleFor(dimensions.Width, dimensions.Height);
         return $"{width}x{height}";
     }
 

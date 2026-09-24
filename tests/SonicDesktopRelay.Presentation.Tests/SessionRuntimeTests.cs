@@ -10,6 +10,9 @@ public sealed class SessionRuntimeTests
 
     private static readonly MonitorInfo Monitor = new("\\\\.\\DISPLAY1", "Primary", 1920, 1080, true);
 
+    private static readonly WindowInfo Window = new(
+        (nint)0x1234, 57, DateTime.UnixEpoch, "Editor", "editor.exe", 1280, 720);
+
     [Fact]
     public void A_fresh_runtime_is_idle()
     {
@@ -178,6 +181,35 @@ public sealed class SessionRuntimeTests
 
         Assert.Equal(monitor, host.StartedOn);
         Assert.Equal(SessionPhase.Sharing, runtime.Snapshot.Phase);
+    }
+
+    [Fact]
+    public async Task Sharing_passes_the_selected_window_target_to_the_publish_host()
+    {
+        var host = new FakeVideoPublishHost();
+        var runtime = new SessionRuntime(new FakeSessionApi(), () => new FakeConnection(), host);
+        var target = new CaptureTarget.Window(Window);
+
+        await runtime.StartSharingAsync(target, VideoPublishProfile.Default, 3, CancellationToken.None);
+
+        Assert.Equal(target, host.StartedTarget);
+        Assert.Equal(SessionPhase.Sharing, runtime.Snapshot.Phase);
+    }
+
+    [Fact]
+    public async Task A_window_closed_during_start_ends_the_session_instead_of_publishing()
+    {
+        var api = new FakeSessionApi();
+        var host = new FakeVideoPublishHost { CloseDuringStart = true };
+        var runtime = new SessionRuntime(api, () => new FakeConnection(), host);
+
+        await runtime.StartSharingAsync(
+            new CaptureTarget.Window(Window), VideoPublishProfile.Default, 3, CancellationToken.None);
+
+        Assert.Equal(SessionPhase.Failed, runtime.Snapshot.Phase);
+        Assert.Equal("capture_target_closed", runtime.Snapshot.Error);
+        Assert.Equal(1, api.EndCalls);
+        Assert.True(host.Stopped);
     }
 
     [Fact]
@@ -508,6 +540,8 @@ public sealed class SessionRuntimeTests
 
         public MonitorInfo? StartedOn { get; private set; }
 
+        public CaptureTarget? StartedTarget { get; private set; }
+
         public VideoPublishProfile? StartedProfile { get; private set; }
 
         public bool Stopped { get; private set; }
@@ -516,13 +550,30 @@ public sealed class SessionRuntimeTests
 
         public string? StartFailure { get; init; }
 
+        public bool CloseDuringStart { get; init; }
+
+        public event Action<string>? CaptureTargetClosed;
+
         public Task StartAsync(MonitorInfo monitor, VideoPublishProfile profile, CancellationToken ct)
         {
             if (StartFailure is not null) throw new InvalidOperationException(StartFailure);
             StartedOn = monitor;
+            StartedTarget = new CaptureTarget.Monitor(monitor);
             StartedProfile = profile;
             return Task.CompletedTask;
         }
+
+        public Task StartAsync(CaptureTarget target, VideoPublishProfile profile, CancellationToken ct)
+        {
+            if (StartFailure is not null) throw new InvalidOperationException(StartFailure);
+            StartedTarget = target;
+            if (target is CaptureTarget.Monitor monitor) StartedOn = monitor.Info;
+            StartedProfile = profile;
+            if (CloseDuringStart) CaptureTargetClosed?.Invoke("The selected window closed.");
+            return Task.CompletedTask;
+        }
+
+        public void RaiseCaptureTargetClosed(string message) => CaptureTargetClosed?.Invoke(message);
 
         public Task StopAsync()
         {

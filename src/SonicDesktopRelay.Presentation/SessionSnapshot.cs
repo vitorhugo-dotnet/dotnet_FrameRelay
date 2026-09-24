@@ -70,9 +70,11 @@ public interface ISessionApi
 /// </summary>
 public interface IVideoPublishHost : IAsyncDisposable
 {
+    event Action<string>? CaptureTargetClosed;
+
     string? EncoderName { get; }
 
-    Task StartAsync(MonitorInfo monitor, VideoPublishProfile profile, CancellationToken ct);
+    Task StartAsync(CaptureTarget target, VideoPublishProfile profile, CancellationToken ct);
 
     Task StopAsync();
 

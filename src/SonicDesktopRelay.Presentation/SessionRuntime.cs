@@ -20,11 +20,15 @@ public sealed class SessionRuntime(
 
     private readonly SignalingDiagnosticBuffer _signalingDiagnostics = signalingDiagnostics ?? new();
     private readonly object _pendingViewerSignalingGate = new();
+    private readonly object _captureTargetGate = new();
     private readonly Queue<SignalingEnvelope> _pendingViewerSignaling = new();
     private ISignalingConnection? _connection;
     private bool _isOwner;
     private bool _watchHooked;
     private bool _watchReady;
+    private bool _publishStartInProgress;
+    private bool _captureTargetClosedDuringStart;
+    private bool _captureTargetCloseHandled;
 
     public SessionSnapshot Snapshot { get; private set; } = SessionSnapshot.Idle;
 
@@ -39,14 +43,22 @@ public sealed class SessionRuntime(
     }
 
     public Task StartSharingAsync(MonitorInfo monitor, int maxViewers, CancellationToken ct) =>
-        StartSharingAsync(monitor, VideoPublishProfile.Default, maxViewers, ct);
+        StartSharingAsync(new CaptureTarget.Monitor(monitor), VideoPublishProfile.Default, maxViewers, ct);
+
+    public Task StartSharingAsync(
+        MonitorInfo monitor,
+        VideoPublishProfile profile,
+        int maxViewers,
+        CancellationToken ct) =>
+        StartSharingAsync(new CaptureTarget.Monitor(monitor), profile, maxViewers, ct);
 
     public async Task StartSharingAsync(
-        MonitorInfo monitor,
+        CaptureTarget target,
         VideoPublishProfile profile,
         int maxViewers,
         CancellationToken ct)
     {
+        ArgumentNullException.ThrowIfNull(target);
         ArgumentNullException.ThrowIfNull(profile);
         RequireIdle();
         Publish(Snapshot with { Phase = SessionPhase.Preparing, Error = null });
@@ -58,9 +70,17 @@ public sealed class SessionRuntime(
 
             if (publishHost is not null)
             {
+                lock (_captureTargetGate)
+                {
+                    _publishStartInProgress = true;
+                    _captureTargetClosedDuringStart = false;
+                    _captureTargetCloseHandled = false;
+                }
+                publishHost.CaptureTargetClosed += OnCaptureTargetClosed;
+
                 try
                 {
-                    await publishHost.StartAsync(monitor, profile, ct);
+                    await publishHost.StartAsync(target, profile, ct);
                 }
                 catch (Exception e) when (e is InvalidOperationException or PlatformNotSupportedException)
                 {
@@ -73,10 +93,28 @@ public sealed class SessionRuntime(
                 }
             }
 
+            var sourceDimensions = CaptureDimensions(target);
             var quality = VideoQuality.InitialFor(profile);
-            Publish(new SessionSnapshot(SessionPhase.Sharing, created.Code, created.SessionId, 0,
+            var sharingSnapshot = new SessionSnapshot(SessionPhase.Sharing, created.Code, created.SessionId, 0,
                 _connection!.State, null, publishHost?.EncoderName, quality.FramesPerSecond,
-                quality.ScaleFor(monitor.Width, monitor.Height).Height));
+                quality.ScaleFor(sourceDimensions.Width, sourceDimensions.Height).Height);
+
+            var targetClosedDuringStart = false;
+            lock (_captureTargetGate)
+            {
+                _publishStartInProgress = false;
+                targetClosedDuringStart = _captureTargetClosedDuringStart;
+                if (!targetClosedDuringStart) Publish(sharingSnapshot);
+            }
+
+            if (targetClosedDuringStart)
+            {
+                if (publishHost is not null) await publishHost.StopAsync();
+                await EndOwnedSessionAsync(created.SessionId, ct);
+                await DetachAsync();
+                Publish(new SessionSnapshot(
+                    SessionPhase.Failed, null, null, 0, SignalingState.Disconnected, "capture_target_closed"));
+            }
         }
         catch (SessionApiFailure failure)
         {
@@ -151,6 +189,44 @@ public sealed class SessionRuntime(
         Publish(SessionSnapshot.Idle);
     }
 
+    private void OnCaptureTargetClosed(string reason)
+    {
+        lock (_captureTargetGate)
+        {
+            if (_publishStartInProgress)
+            {
+                _captureTargetClosedDuringStart = true;
+                return;
+            }
+
+            if (Snapshot.Phase != SessionPhase.Sharing || _captureTargetCloseHandled) return;
+            _captureTargetCloseHandled = true;
+        }
+
+        _ = StopAfterCaptureTargetClosedAsync(reason);
+    }
+
+    private async Task StopAfterCaptureTargetClosedAsync(string reason)
+    {
+        try
+        {
+            await StopAsync(CancellationToken.None);
+            Publish(new SessionSnapshot(
+                SessionPhase.Failed, null, null, 0, SignalingState.Disconnected, "capture_target_closed"));
+        }
+        catch (Exception e) when (e is InvalidOperationException or TaskCanceledException)
+        {
+            // Target closure is terminal; a concurrent user stop may already have ended the session.
+        }
+    }
+
+    private static (int Width, int Height) CaptureDimensions(CaptureTarget target) => target switch
+    {
+        CaptureTarget.Monitor monitor => (monitor.Info.Width, monitor.Info.Height),
+        CaptureTarget.Window window => (window.Info.Width, window.Info.Height),
+        _ => throw new ArgumentOutOfRangeException(nameof(target))
+    };
+
     private async Task EndOwnedSessionAsync(Guid sessionId, CancellationToken ct)
     {
         try
@@ -178,6 +254,7 @@ public sealed class SessionRuntime(
 
     private async Task DetachAsync()
     {
+        if (publishHost is not null) publishHost.CaptureTargetClosed -= OnCaptureTargetClosed;
         if (_connection is null) return;
         _connection.FrameReceived -= OnFrame;
         _connection.StateChanged -= OnSignalingState;

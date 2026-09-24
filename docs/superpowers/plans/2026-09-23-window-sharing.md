@@ -59,8 +59,10 @@
 **Files:**
 - Modify: `src/SonicDesktopRelay.Media/VideoContracts.cs`
 - Modify: `src/SonicDesktopRelay.Media/IScreenCaptureSource.cs`
+- Modify: `src/SonicDesktopRelay.Media/ScreenPublishPipeline.cs`
 - Modify: `src/SonicDesktopRelay.Presentation/SessionSnapshot.cs`
 - Modify: `src/SonicDesktopRelay.Presentation/SessionRuntime.cs`
+- Modify: `src/SonicDesktopRelay.App/RtcVideoPublishHost.cs` for the typed host bridge and source-close forwarding
 - Modify: `tests/SonicDesktopRelay.Media.Tests/VideoContractsTests.cs`
 - Modify: `tests/SonicDesktopRelay.Presentation.Tests/SessionRuntimeTests.cs`
 - Modify: `tests/SonicDesktopRelay.Presentation.Tests/SignalingDiagnosticsTests.cs`
@@ -135,6 +137,7 @@ Commit: `feat(media): add typed monitor and window capture targets`
 - Consume `WindowInfo` and `IWindowEnumerator` from Task 1.
 - Produce `WindowEnumerator : IWindowEnumerator` with constructor `WindowEnumerator(IWindowApi windowApi, uint excludedProcessId)` and an internal injectable `IWindowApi` for `EnumWindows`, `IsWindow`, `IsWindowVisible`, `GetWindowText`, `GetWindowThreadProcessId`, `GetWindowRect`, tool/shell filtering and process identity lookup.
 - Produce `CaptureInterop.CreateItemForWindow(nint hwnd)` using `IGraphicsCaptureItemInterop.CreateForWindow` at vtable slot 3; retain existing monitor slot 4 behavior.
+- Produce injectable `IGraphicsCaptureItemFactory.CreateForMonitor(MonitorInfo monitor)` and `CreateForWindow(WindowInfo window)` adapters over those interop methods.
 
 - [ ] **Step 1: Add fake-window API tests**
 
@@ -181,7 +184,7 @@ Commit: `feat(windows): enumerate shareable application windows`
 - Create: `tests/SonicDesktopRelay.Media.Windows.Tests/GraphicsCaptureWindowSourceTests.cs`
 
 **Interfaces:**
-- Consume `CaptureTarget`, `WindowInfo`, and both item factories from Tasks 1–2.
+- Consume `CaptureTarget`, `WindowInfo`, and `IGraphicsCaptureItemFactory` from Tasks 1–2.
 - Produce a shared internal lifecycle accepting a `GraphicsCaptureItem`, `VideoQuality`, and target description; expose frames, dimensions, counters, `SetFrameRate`, `StopAsync`, and target-closed notifications.
 - Keep monitor/window adapters responsible only for validating/resolving their target and creating the item.
 

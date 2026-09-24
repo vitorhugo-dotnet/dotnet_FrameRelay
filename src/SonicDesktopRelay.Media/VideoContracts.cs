@@ -2,6 +2,24 @@ namespace SonicDesktopRelay.Media;
 
 public readonly record struct MonitorInfo(string Id, string Name, int Width, int Height, bool IsPrimary);
 
+/// <summary>A share target selected by the publisher.</summary>
+public abstract record CaptureTarget
+{
+    public sealed record Monitor(MonitorInfo Info) : CaptureTarget;
+
+    public sealed record Window(WindowInfo Info) : CaptureTarget;
+}
+
+/// <summary>Identity and initial bounds for one eligible top-level application window.</summary>
+public sealed record WindowInfo(
+    nint Handle,
+    uint ProcessId,
+    DateTime ProcessStartTimeUtc,
+    string Title,
+    string ProcessName,
+    int Width,
+    int Height);
+
 /// <summary>
 /// The publisher's user-selected ceiling. Adaptive quality may move below these values, never above them.
 /// </summary>

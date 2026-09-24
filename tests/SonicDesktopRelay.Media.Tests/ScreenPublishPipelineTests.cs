@@ -6,6 +6,20 @@ namespace SonicDesktopRelay.Media.Tests;
 public sealed class ScreenPublishPipelineTests
 {
     private static readonly MonitorInfo Monitor = new("\\\\.\\DISPLAY1", "Primary", 1920, 1080, true);
+    private static readonly WindowInfo Window = new(
+        (nint)0x1234, 57, DateTime.UnixEpoch, "Editor", "editor.exe", 1280, 720);
+
+    [Fact]
+    public async Task Pipeline_starts_capture_from_a_window_target()
+    {
+        var capture = new FakeCapture();
+        await using var pipeline = new ScreenPublishPipeline(capture, new FakeEncoder());
+        var target = new CaptureTarget.Window(Window);
+
+        await pipeline.StartAsync(target, CancellationToken.None);
+
+        Assert.Equal(target, capture.StartedTarget);
+    }
 
     [Fact]
     public async Task ReceiverStats_drive_shared_quality_after_sustained_poor_evidence()
@@ -483,6 +497,8 @@ public sealed class ScreenPublishPipelineTests
     {
         public MonitorInfo Monitor { get; private set; }
 
+        public CaptureTarget? StartedTarget { get; private set; }
+
         public int StartCalls { get; private set; }
 
         public List<int> FrameRateUpdates { get; } = [];
@@ -492,6 +508,15 @@ public sealed class ScreenPublishPipelineTests
         public Task StartAsync(MonitorInfo monitor, VideoQuality quality, CancellationToken ct)
         {
             Monitor = monitor;
+            StartedTarget = new CaptureTarget.Monitor(monitor);
+            StartCalls++;
+            return Task.CompletedTask;
+        }
+
+        public Task StartAsync(CaptureTarget target, VideoQuality quality, CancellationToken ct)
+        {
+            StartedTarget = target;
+            if (target is CaptureTarget.Monitor monitor) Monitor = monitor.Info;
             StartCalls++;
             return Task.CompletedTask;
         }

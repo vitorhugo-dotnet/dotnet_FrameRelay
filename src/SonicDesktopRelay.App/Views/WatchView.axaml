@@ -119,7 +119,7 @@
                         <StackPanel Spacing="{StaticResource SpaceMd}">
                             <TextBlock Text="Session details" FontSize="{StaticResource FontSizeLg}"
                                        FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" />
-                            <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto,Auto,Auto"
+                            <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto,Auto,Auto,Auto"
                                   RowSpacing="{StaticResource SpaceSm}">
                                 <TextBlock Grid.Row="0" Text="Session" Foreground="{StaticResource TextSecondaryBrush}" />
                                 <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding ViewModel.Snapshot.Phase}"
@@ -127,27 +127,33 @@
                                 <TextBlock Grid.Row="1" Text="Signaling" Foreground="{StaticResource TextSecondaryBrush}" />
                                 <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding ViewModel.Snapshot.Signaling}"
                                            Foreground="{StaticResource TextPrimaryBrush}" />
-                                <TextBlock Grid.Row="2" Text="Host" Foreground="{StaticResource TextSecondaryBrush}" />
-                                <TextBlock Grid.Row="2" Grid.Column="1" Text="---"
-                                           Foreground="{StaticResource TextMutedBrush}" />
+                                <TextBlock Grid.Row="2" Text="Transport" Foreground="{StaticResource TextSecondaryBrush}" />
+                                <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding ViewModel.TransportText}"
+                                           TextWrapping="Wrap" Foreground="{StaticResource TextPrimaryBrush}" />
                                 <TextBlock Grid.Row="3" Text="Resolution" Foreground="{StaticResource TextSecondaryBrush}" />
-                                <TextBlock Grid.Row="3" Grid.Column="1" Text="---"
-                                           Foreground="{StaticResource TextMutedBrush}" />
+                                <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding ViewModel.ResolutionText}"
+                                           Foreground="{StaticResource TextPrimaryBrush}" />
+                                <TextBlock Grid.Row="4" Text="Codec" Foreground="{StaticResource TextSecondaryBrush}" />
+                                <TextBlock Grid.Row="4" Grid.Column="1" Text="{Binding ViewModel.CodecText}"
+                                           Foreground="{StaticResource TextPrimaryBrush}" />
                             </Grid>
                         </StackPanel>
                     </Border>
-                    <Border Classes="card unavailable" IsEnabled="False" Focusable="False">
+                    <Border Classes="card">
                         <StackPanel Spacing="{StaticResource SpaceMd}">
                             <TextBlock Text="Connection stats" FontSize="{StaticResource FontSizeLg}"
                                        FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" />
                             <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto,Auto"
                                   RowSpacing="{StaticResource SpaceSm}">
                                 <TextBlock Grid.Row="0" Text="Latency" Foreground="{StaticResource TextSecondaryBrush}" />
-                                <TextBlock Grid.Row="0" Grid.Column="1" Text="---" />
+                                <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding ViewModel.LatencyText}"
+                                           Foreground="{StaticResource TextPrimaryBrush}" />
                                 <TextBlock Grid.Row="1" Text="Bitrate" Foreground="{StaticResource TextSecondaryBrush}" />
-                                <TextBlock Grid.Row="1" Grid.Column="1" Text="---" />
+                                <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding ViewModel.VideoBitrateText}"
+                                           Foreground="{StaticResource TextPrimaryBrush}" />
                                 <TextBlock Grid.Row="2" Text="Frame rate" Foreground="{StaticResource TextSecondaryBrush}" />
-                                <TextBlock Grid.Row="2" Grid.Column="1" Text="---" />
+                                <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding ViewModel.VideoFrameRateText}"
+                                           Foreground="{StaticResource TextPrimaryBrush}" />
                             </Grid>
                         </StackPanel>
                     </Border>

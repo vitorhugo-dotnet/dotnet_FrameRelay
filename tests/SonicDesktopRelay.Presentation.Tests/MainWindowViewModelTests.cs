@@ -126,6 +126,32 @@ public sealed class MainWindowViewModelTests
     }
 
     [Fact]
+    public void Zero_viewers_is_an_available_sharing_count()
+    {
+        var viewModel = new MainWindowViewModel();
+        var changed = new List<string?>();
+        viewModel.PropertyChanged += (_, args) => changed.Add(args.PropertyName);
+
+        Assert.False(viewModel.HasViewerCount);
+        viewModel.Apply(new SessionSnapshot(SessionPhase.Sharing, "AB12CD",
+            Guid.NewGuid(), 0, SignalingState.Connected, null));
+
+        Assert.True(viewModel.HasViewerCount);
+        Assert.Equal("0", viewModel.ViewerCountText);
+        Assert.Contains(nameof(viewModel.HasViewerCount), changed);
+        Assert.Equal("---", viewModel.ResolutionText);
+        Assert.Equal("---", viewModel.VideoBitrateText);
+        Assert.Equal("---", viewModel.VideoFrameRateText);
+        Assert.Equal("---", viewModel.LatencyText);
+        Assert.Equal("---", viewModel.CodecText);
+        Assert.Equal("---", viewModel.TransportText);
+
+        viewModel.Apply(SessionSnapshot.Idle);
+        Assert.False(viewModel.HasViewerCount);
+        Assert.Equal("---", viewModel.ViewerCountText);
+    }
+
+    [Fact]
     public void Live_metrics_are_formatted_from_the_current_snapshot()
     {
         var viewModel = new MainWindowViewModel();

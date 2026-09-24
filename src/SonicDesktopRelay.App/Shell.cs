@@ -227,6 +227,7 @@ public sealed class Shell : INotifyPropertyChanged
             Raise(nameof(CanShareSelectedTarget));
             Raise(nameof(CanStartShare));
             Raise(nameof(WindowAudioStatus));
+            Raise(nameof(ShareAudioStatus));
         }
     }
 
@@ -258,6 +259,26 @@ public sealed class Shell : INotifyPropertyChanged
         : ProcessLoopbackAudioSource.IsSupported
             ? "Audio: this window and its child processes"
             : "Audio unavailable: Windows build 20348 or later is required.";
+
+    /// <summary>Compact capture mode and health shown beside the sharing session.</summary>
+    public string ShareAudioStatus
+    {
+        get
+        {
+            var mode = IsWindowSourceSelected
+                ? "Window audio and child processes"
+                : "System audio from the default output";
+            var degraded = _composition?.PublishHost.AudioDegradedReason;
+            if (ViewModel.Snapshot.Phase == SessionPhase.Sharing
+                && !string.IsNullOrWhiteSpace(degraded)) return $"{mode} — degraded: {degraded}";
+            if (IsWindowSourceSelected && !ProcessLoopbackAudioSource.IsSupported)
+                return "Window audio unavailable: Windows build 20348 or later is required.";
+            if (ViewModel.Snapshot.Phase != SessionPhase.Sharing) return mode;
+            return _composition?.PublishHost.AudioEncoderName is not null
+                ? $"{mode} — active"
+                : $"{mode} — starting";
+        }
+    }
 
     public MonitorInfo? SelectedMonitor
     {
@@ -564,6 +585,7 @@ public sealed class Shell : INotifyPropertyChanged
             ViewModel.Apply(snapshot);
             Raise(nameof(CanStartShare));
             Raise(nameof(MediaStatusText));
+            Raise(nameof(ShareAudioStatus));
             if (Equals(snapshot with { Metrics = null }, previous with { Metrics = null })) return;
             _logger.LogInformation(
                 "Session snapshot. phase={Phase} signaling={Signaling} session={SessionId} viewers={ViewerCount} watching={Watching}",
@@ -615,6 +637,7 @@ public sealed class Shell : INotifyPropertyChanged
             };
             if (metrics is not null) runtime.UpdateMetrics(metrics);
             Raise(nameof(MediaStatusText));
+            Raise(nameof(ShareAudioStatus));
         });
     }
 

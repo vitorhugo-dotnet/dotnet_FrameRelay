@@ -24,6 +24,20 @@ public sealed class ShellShareSelectionTests
     }
 
     [Fact]
+    public void Share_audio_summary_follows_the_selected_capture_mode()
+    {
+        var shell = CreateShell();
+        var changed = new List<string?>();
+        shell.PropertyChanged += (_, args) => changed.Add(args.PropertyName);
+
+        Assert.Contains("System audio", shell.ShareAudioStatus);
+
+        shell.IsWindowSourceSelected = true;
+        Assert.Contains("window", shell.ShareAudioStatus, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(nameof(shell.ShareAudioStatus), changed);
+    }
+
+    [Fact]
     public void Refresh_retains_window_only_while_handle_pid_and_creation_time_match()
     {
         var shell = CreateShell();

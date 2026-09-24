@@ -49,8 +49,10 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     public string? Code => _snapshot.Code;
 
     /// <summary>Only a sharing snapshot has a meaningful viewer count.</summary>
+    public bool HasViewerCount => _snapshot.Phase == SessionPhase.Sharing;
+
     public string ViewerCountText =>
-        _snapshot.Phase == SessionPhase.Sharing ? _snapshot.ViewerCount.ToString() : "---";
+        HasViewerCount ? _snapshot.ViewerCount.ToString() : "---";
 
     public string ResolutionText => _snapshot.Metrics is { Width: > 0, Height: > 0 } metrics
         ? $"{metrics.Width} × {metrics.Height}" : "---";
@@ -95,6 +97,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         Raise(nameof(CanWatch));
         Raise(nameof(CanStop));
         Raise(nameof(Code));
+        Raise(nameof(HasViewerCount));
         Raise(nameof(ViewerCountText));
         Raise(nameof(ResolutionText));
         Raise(nameof(VideoBitrateText));

@@ -52,6 +52,9 @@ internal sealed class SharePreviewController : IAsyncDisposable
         try
         {
             previous.Dispose();
+            // A later request may have acquired this gate and started its source first.
+            // Only the current request may touch the source owned by the controller.
+            if (!IsCurrent(generation)) return;
             await StopSourceAsync().ConfigureAwait(false);
             if (!IsCurrent(generation)) return;
             if (target is null)

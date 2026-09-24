@@ -140,6 +140,40 @@ public sealed class SharePreviewControllerTests
         Assert.Equal("Live preview", preview.PreviewStatus);
     }
 
+    [Fact]
+    public async Task Stale_waiter_cannot_stop_a_newer_source_after_acquiring_gate()
+    {
+        var firstStart = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var sources = new List<FakeCapture>();
+        SharePreviewController? preview = null;
+        Task? newestChange = null;
+        preview = new SharePreviewController(_ =>
+        {
+            var source = new FakeCapture();
+            if (sources.Count == 0)
+            {
+                source.StartGate = firstStart.Task;
+                source.OnCanceled = () => newestChange = preview!.SetTargetAsync(
+                    new CaptureTarget.Monitor(new MonitorInfo("D2", "Second", 1280, 720, false)));
+            }
+            sources.Add(source);
+            return source;
+        }, action => action());
+        await using (preview)
+        {
+            var firstChange = preview.SetTargetAsync(Monitor);
+            var staleChange = preview.SetTargetAsync(Window);
+            Assert.NotNull(newestChange);
+            firstStart.SetResult();
+
+            await Task.WhenAll(firstChange, staleChange, newestChange!);
+
+            Assert.Equal(2, sources.Count);
+            Assert.Equal(0, sources[1].DisposeCount);
+            Assert.Equal("Live preview", preview.PreviewStatus);
+        }
+    }
+
     private sealed class FakeCapture : IScreenCaptureSource
     {
         public MonitorInfo Monitor => new("fake", "fake", 100, 100, true);
@@ -148,6 +182,8 @@ public sealed class SharePreviewControllerTests
         public CaptureTarget? StartedTarget { get; private set; }
         public VideoQuality? StartedQuality { get; private set; }
         public Exception? StartFailure { get; init; }
+        public Task? StartGate { get; set; }
+        public Action? OnCanceled { get; set; }
         public int StopCount { get; private set; }
         public int DisposeCount { get; private set; }
         public Task StartAsync(MonitorInfo monitor, VideoQuality quality, CancellationToken ct) =>
@@ -156,7 +192,9 @@ public sealed class SharePreviewControllerTests
         {
             StartedTarget = target;
             StartedQuality = quality;
-            return StartFailure is null ? Task.CompletedTask : Task.FromException(StartFailure);
+            if (OnCanceled is not null) ct.Register(OnCanceled);
+            return StartFailure is not null ? Task.FromException(StartFailure)
+                : StartGate ?? Task.CompletedTask;
         }
         public void SetFrameRate(int framesPerSecond) { }
         public Task StopAsync() { StopCount++; return Task.CompletedTask; }

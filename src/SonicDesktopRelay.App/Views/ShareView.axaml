@@ -50,9 +50,15 @@
                             <Border Background="{StaticResource RailBrush}"
                                     CornerRadius="{StaticResource ControlCornerRadius}"
                                     Height="240" ClipToBounds="True">
-                                <controls:VideoSurface Name="PreviewSurface"
-                                                       HorizontalAlignment="Stretch"
-                                                       VerticalAlignment="Stretch" />
+                                <Grid>
+                                    <controls:VideoSurface Name="PreviewSurface"
+                                                           HorizontalAlignment="Stretch"
+                                                           VerticalAlignment="Stretch" />
+                                    <TextBlock Name="PreviewEmptyMarker" Text="---"
+                                               HorizontalAlignment="Center" VerticalAlignment="Center"
+                                               FontSize="{StaticResource FontSizeXl}"
+                                               Foreground="{StaticResource TextMutedBrush}" />
+                                </Grid>
                             </Border>
                             <TextBlock Text="{Binding PreviewStatus}" TextWrapping="Wrap"
                                        Foreground="{StaticResource TextSecondaryBrush}" />

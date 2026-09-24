@@ -36,17 +36,25 @@ public partial class ShareView : UserControl
         shell.PreviewFrameCaptured -= OnPreviewFrame;
         shell.PropertyChanged -= OnShellPropertyChanged;
         PreviewSurface.Clear();
+        PreviewEmptyMarker.IsVisible = true;
         await shell.SetShareViewAttachedAsync(false);
     }
 
-    private void OnPreviewFrame(VideoFrame frame) => PreviewSurface.Present(frame);
+    private void OnPreviewFrame(VideoFrame frame)
+    {
+        PreviewSurface.Present(frame);
+        PreviewEmptyMarker.IsVisible = false;
+    }
 
     private void OnShellPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
         if (e.PropertyName == nameof(Shell.SelectedCaptureTarget)
             || e.PropertyName == nameof(Shell.PreviewStatus)
             && sender is Shell { PreviewStatus: not "Live preview" })
+        {
             PreviewSurface.Clear();
+            PreviewEmptyMarker.IsVisible = true;
+        }
     }
 
     private async void OnShare(object? sender, RoutedEventArgs e)

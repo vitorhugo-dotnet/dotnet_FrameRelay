@@ -20,27 +20,14 @@ namespace SonicDesktopRelay.Media.Windows;
 [SupportedOSPlatform("windows10.0.19041.0")]
 public sealed class GraphicsCaptureScreenSource : IScreenCaptureSource, IScreenCaptureDiagnostics
 {
-    private const int PoolDepth = 2;
+    private readonly GraphicsCaptureItemSource _source;
 
-    private readonly object _gate = new();
-
-    private ID3D11Device? _device;
-    private ID3D11DeviceContext? _context;
-    private IDirect3DDevice? _runtimeDevice;
-    private GraphicsCaptureItem? _item;
-    private Direct3D11CaptureFramePool? _pool;
-    private GraphicsCaptureSession? _session;
-    private ID3D11Texture2D? _staging;
-    private byte[]? _buffer;
-    private SizeInt32 _poolSize;
-    private TimeSpan _firstFrameTime = TimeSpan.MinValue;
-    private TimeSpan _lastDelivered = TimeSpan.MinValue;
-    private TimeSpan _minimumInterval = TimeSpan.Zero;
-    private bool _running;
-    private bool _disposed;
-    private long _framesArrived;
-    private long _framesDelivered;
-    private long _framesDropped;
+    public GraphicsCaptureScreenSource()
+    {
+        _source = new GraphicsCaptureItemSource();
+        _source.FrameCaptured += frame => FrameCaptured?.Invoke(frame);
+        _source.TargetClosed += reason => TargetClosed?.Invoke(reason);
+    }
 
     /// <summary>
     /// False on Windows builds without the capture API and inside sessions that cannot use it
@@ -63,282 +50,31 @@ public sealed class GraphicsCaptureScreenSource : IScreenCaptureSource, IScreenC
         }
     }
 
-    public MonitorInfo Monitor { get; private set; }
+    public MonitorInfo Monitor => _source.Monitor;
 
     public event Action<VideoFrame>? FrameCaptured;
 
-    public long FramesArrived => Interlocked.Read(ref _framesArrived);
+    public event Action<string>? TargetClosed;
 
-    public long FramesDelivered => Interlocked.Read(ref _framesDelivered);
+    public long FramesArrived => _source.FramesArrived;
 
-    public long FramesDropped => Interlocked.Read(ref _framesDropped);
+    public long FramesDelivered => _source.FramesDelivered;
+
+    public long FramesDropped => _source.FramesDropped;
+
+    public (int Width, int Height) CurrentDimensions => _source.CurrentDimensions;
+
+    public void SetFrameRate(int framesPerSecond) => _source.SetFrameRate(framesPerSecond);
 
     public Task StartAsync(MonitorInfo monitor, VideoQuality quality, CancellationToken ct)
     {
-        ObjectDisposedException.ThrowIf(_disposed, this);
-
-        lock (_gate)
-        {
-            if (_running) return Task.CompletedTask;
-
-            if (!IsSupported)
-                throw new PlatformNotSupportedException(
-                    "Windows.Graphics.Capture is not available in this session.");
-
-            if (!CaptureInterop.TryFindMonitorHandle(monitor.Id, out var hMonitor))
-                throw new InvalidOperationException($"Monitor '{monitor.Id}' is not connected.");
-
-            ct.ThrowIfCancellationRequested();
-
-            CreateDevice();
-            _item = CaptureInterop.CreateItemForMonitor(hMonitor);
-            _poolSize = _item.Size;
-            _pool = Direct3D11CaptureFramePool.CreateFreeThreaded(
-                _runtimeDevice, DirectXPixelFormat.B8G8R8A8UIntNormalized, PoolDepth, _poolSize);
-            _session = _pool.CreateCaptureSession(_item);
-
-            // A screen share without the pointer is markedly harder to follow.
-            _session.IsCursorCaptureEnabled = true;
-
-            _item.Closed += OnItemClosed;
-            _pool.FrameArrived += OnFrameArrived;
-
-            Monitor = monitor;
-            _firstFrameTime = TimeSpan.MinValue;
-            _lastDelivered = TimeSpan.MinValue;
-            _minimumInterval = quality.FramesPerSecond > 0
-                ? TimeSpan.FromSeconds(1.0 / quality.FramesPerSecond)
-                : TimeSpan.Zero;
-            _running = true;
-
-            _session.StartCapture();
-        }
-
-        return Task.CompletedTask;
+        return _source.StartAsync(new CaptureTarget.Monitor(monitor), quality, ct);
     }
 
-    public void SetFrameRate(int framesPerSecond)
-    {
-        ObjectDisposedException.ThrowIf(_disposed, this);
-        if (framesPerSecond <= 0)
-            throw new ArgumentOutOfRangeException(nameof(framesPerSecond));
-
-        lock (_gate)
-        {
-            _minimumInterval = TimeSpan.FromSeconds(1.0 / framesPerSecond);
-        }
-    }
-
-    public Task StopAsync()
-    {
-        GraphicsCaptureItem? item;
-        Direct3D11CaptureFramePool? pool;
-        GraphicsCaptureSession? session;
-        ID3D11Texture2D? staging;
-        ID3D11DeviceContext? context;
-        ID3D11Device? device;
-        IDirect3DDevice? runtimeDevice;
-
-        lock (_gate)
-        {
-            if (!_running) return Task.CompletedTask;
-
-            // Cleared inside the lock so that any callback already in flight finishes, and any
-            // callback that arrives next sees a stopped source and returns before touching
-            // anything. The native objects are then torn down outside the lock: closing them
-            // can wait on the capture callback, which would deadlock against a held lock.
-            _running = false;
-            item = _item;
-            pool = _pool;
-            session = _session;
-            staging = _staging;
-            context = _context;
-            device = _device;
-            runtimeDevice = _runtimeDevice;
-            _item = null;
-            _pool = null;
-            _session = null;
-            _staging = null;
-            _context = null;
-            _device = null;
-            _runtimeDevice = null;
-            _buffer = null;
-        }
-
-        if (item is not null) item.Closed -= OnItemClosed;
-        if (pool is not null) pool.FrameArrived -= OnFrameArrived;
-        session?.Dispose();
-        pool?.Dispose();
-        staging?.Dispose();
-        context?.Dispose();
-        device?.Dispose();
-        (runtimeDevice as IDisposable)?.Dispose();
-        return Task.CompletedTask;
-    }
+    public Task StopAsync() => _source.StopAsync();
 
     public async ValueTask DisposeAsync()
     {
-        if (_disposed) return;
-        _disposed = true;
-        await StopAsync();
-    }
-
-    private void CreateDevice()
-    {
-        // BgraSupport is required: the capture pool hands out B8G8R8A8 surfaces.
-        var result = D3D11.D3D11CreateDevice(
-            nint.Zero, DriverType.Hardware, DeviceCreationFlags.BgraSupport, null!,
-            out var device, out var context);
-
-        if (result.Failure)
-        {
-            // A machine with no usable GPU (or a stripped-down VM) still has to be able to
-            // share a screen; WARP is slow but correct.
-            D3D11.D3D11CreateDevice(
-                nint.Zero, DriverType.Warp, DeviceCreationFlags.BgraSupport, null!,
-                out device, out context).CheckError();
-        }
-
-        _device = device;
-        _context = context;
-        using var dxgiDevice = device.QueryInterface<IDXGIDevice>();
-        _runtimeDevice = CaptureInterop.CreateDirect3DDevice(dxgiDevice.NativePointer);
-    }
-
-    private void OnItemClosed(GraphicsCaptureItem sender, object args) => _ = StopAsync();
-
-    private void OnFrameArrived(Direct3D11CaptureFramePool sender, object args)
-    {
-        VideoFrame? frame = null;
-
-        lock (_gate)
-        {
-            if (!_running || _context is null || _device is null) return;
-            Interlocked.Increment(ref _framesArrived);
-
-            try
-            {
-                frame = TryBuildFrame(sender);
-            }
-            catch (Exception e) when (e is SharpGen.Runtime.SharpGenException
-                                          or System.Runtime.InteropServices.COMException
-                                          or ObjectDisposedException)
-            {
-                // A device loss or a surface that vanished under us is a dropped frame, not a
-                // dead session: the next FrameArrived recreates whatever went away.
-                Interlocked.Increment(ref _framesDropped);
-                return;
-            }
-        }
-
-        if (frame is not null)
-        {
-            Interlocked.Increment(ref _framesDelivered);
-            FrameCaptured?.Invoke(frame);
-        }
-        else
-        {
-            Interlocked.Increment(ref _framesDropped);
-        }
-    }
-
-    private VideoFrame? TryBuildFrame(Direct3D11CaptureFramePool pool)
-    {
-        using var captured = pool.TryGetNextFrame();
-        if (captured is null) return null;
-
-        // A resolution change mid-session must not end the session: resize the pool and drop
-        // this frame, which was produced against the old size.
-        var contentSize = captured.ContentSize;
-        if (contentSize.Width != _poolSize.Width || contentSize.Height != _poolSize.Height)
-        {
-            _poolSize = contentSize;
-            pool.Recreate(_runtimeDevice, DirectXPixelFormat.B8G8R8A8UIntNormalized, PoolDepth, _poolSize);
-            Monitor = Monitor with { Width = contentSize.Width, Height = contentSize.Height };
-            return null;
-        }
-
-        var timestamp = captured.SystemRelativeTime;
-        if (_firstFrameTime == TimeSpan.MinValue) _firstFrameTime = timestamp;
-
-        if (_lastDelivered != TimeSpan.MinValue
-            && timestamp - _lastDelivered < _minimumInterval)
-        {
-            // WGC delivers on the compositor's cadence, which can be well above the session's
-            // frame rate. Dropping here is far cheaper than encoding and discarding later.
-            return null;
-        }
-
-        using var texture = CaptureInterop.GetTexture(captured.Surface);
-        var description = texture.Description;
-        var width = (int)description.Width;
-        var height = (int)description.Height;
-        if (width <= 0 || height <= 0) return null;
-
-        EnsureStaging(width, height);
-        _context!.CopyResource(_staging!, texture);
-
-        var stride = width * 4;
-        var buffer = _buffer ??= new byte[stride * height];
-        if (buffer.Length < stride * height) buffer = _buffer = new byte[stride * height];
-
-        var map = _context.Map(_staging!, 0, MapMode.Read, Vortice.Direct3D11.MapFlags.None);
-        try
-        {
-            CopyRows(map, buffer, stride, height);
-        }
-        finally
-        {
-            _context.Unmap(_staging!, 0);
-        }
-
-        _lastDelivered = timestamp;
-        return new VideoFrame(width, height, buffer.AsMemory(0, stride * height), timestamp - _firstFrameTime);
-    }
-
-    private static unsafe void CopyRows(MappedSubresource map, byte[] destination, int stride, int height)
-    {
-        var source = (byte*)map.DataPointer;
-        fixed (byte* target = destination)
-        {
-            // The mapped row pitch is not width * 4 — D3D pads rows. Copying the block whole
-            // produces a sheared image, so every row is copied at its own offset.
-            if (map.RowPitch == (uint)stride)
-            {
-                Buffer.MemoryCopy(source, target, destination.Length, (long)stride * height);
-                return;
-            }
-
-            for (var y = 0; y < height; y++)
-                Buffer.MemoryCopy(source + (long)y * map.RowPitch, target + (long)y * stride, stride, stride);
-        }
-    }
-
-    private void EnsureStaging(int width, int height)
-    {
-        var existing = _staging?.Description;
-        if (existing is { } description
-            && description.Width == (uint)width
-            && description.Height == (uint)height)
-        {
-            return;
-        }
-
-        _staging?.Dispose();
-        var staging = new Texture2DDescription
-        {
-            Width = (uint)width,
-            Height = (uint)height,
-            MipLevels = 1,
-            ArraySize = 1,
-            Format = Format.B8G8R8A8_UNorm,
-            SampleDescription = new SampleDescription(1, 0),
-            Usage = ResourceUsage.Staging,
-            BindFlags = BindFlags.None,
-            CPUAccessFlags = CpuAccessFlags.Read,
-            MiscFlags = ResourceOptionFlags.None
-        };
-        _staging = _device!.CreateTexture2D(in staging);
-        _buffer = null;
+        await _source.DisposeAsync();
     }
 }

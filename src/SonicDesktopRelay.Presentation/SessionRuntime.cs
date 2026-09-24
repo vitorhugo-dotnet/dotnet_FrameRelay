@@ -320,18 +320,21 @@ public sealed class SessionRuntime(
                 break;
 
             case SignalingMessageTypes.SessionJoined when sharing:
-                Publish(Snapshot with { ViewerCount = Snapshot.ViewerCount + 1 });
-                AddViewer(envelope);
+                if (TryUpdateSnapshot(SessionPhase.Sharing,
+                        snapshot => snapshot with { ViewerCount = snapshot.ViewerCount + 1 }))
+                    AddViewer(envelope);
                 break;
 
             case SignalingMessageTypes.ParticipantReconnected when sharing:
-                Publish(Snapshot with { ViewerCount = Snapshot.ViewerCount + 1 });
-                AddViewer(envelope);
+                if (TryUpdateSnapshot(SessionPhase.Sharing,
+                        snapshot => snapshot with { ViewerCount = snapshot.ViewerCount + 1 }))
+                    AddViewer(envelope);
                 break;
 
             case SignalingMessageTypes.SessionLeft when sharing:
-                Publish(Snapshot with { ViewerCount = Math.Max(0, Snapshot.ViewerCount - 1) });
-                if (publishHost is not null && TryReadParticipant(envelope) is { } left)
+                if (TryUpdateSnapshot(SessionPhase.Sharing,
+                        snapshot => snapshot with { ViewerCount = Math.Max(0, snapshot.ViewerCount - 1) })
+                    && publishHost is not null && TryReadParticipant(envelope) is { } left)
                     _ = publishHost.RemoveViewerAsync(left);
                 break;
 
@@ -339,7 +342,8 @@ public sealed class SessionRuntime(
                 // "Transiently unreachable", not "gone": the server holds the participant for
                 // its grace period, and tearing the peer down here would force a full
                 // renegotiation for a viewer that is about to come back.
-                Publish(Snapshot with { ViewerCount = Math.Max(0, Snapshot.ViewerCount - 1) });
+                TryUpdateSnapshot(SessionPhase.Sharing,
+                    snapshot => snapshot with { ViewerCount = Math.Max(0, snapshot.ViewerCount - 1) });
                 break;
 
             case SignalingMessageTypes.WebRtcAnswer when sharing:
@@ -453,7 +457,11 @@ public sealed class SessionRuntime(
         return envelope.From;
     }
 
-    private void OnSignalingState(SignalingState state) => Publish(Snapshot with { Signaling = state });
+    private void OnSignalingState(SignalingState state) =>
+        TryUpdateSnapshot(
+            snapshot => snapshot.Phase is SessionPhase.Preparing or SessionPhase.Joining
+                or SessionPhase.Sharing or SessionPhase.Watching,
+            snapshot => snapshot with { Signaling = state });
 
     /// <summary>
     /// A media stall changes what the viewer is seeing, never what the session is. Writing it
@@ -462,14 +470,30 @@ public sealed class SessionRuntime(
     /// </summary>
     private void OnWatchState(WatchState state)
     {
-        if (Snapshot.Phase != SessionPhase.Watching) return;
-        Publish(Snapshot with { Watching = state });
+        TryUpdateSnapshot(SessionPhase.Watching, snapshot => snapshot with { Watching = state });
     }
 
     private void OnWatchNegotiationFailed(string failure)
     {
-        if (Snapshot.Phase is not (SessionPhase.Joining or SessionPhase.Watching)) return;
-        Publish(Snapshot with { Error = failure });
+        TryUpdateSnapshot(
+            snapshot => snapshot.Phase is SessionPhase.Joining or SessionPhase.Watching,
+            snapshot => snapshot with { Error = failure });
+    }
+
+    private bool TryUpdateSnapshot(SessionPhase phase, Func<SessionSnapshot, SessionSnapshot> update) =>
+        TryUpdateSnapshot(snapshot => snapshot.Phase == phase, update);
+
+    private bool TryUpdateSnapshot(
+        Func<SessionSnapshot, bool> accepts,
+        Func<SessionSnapshot, SessionSnapshot> update)
+    {
+        lock (_snapshotGate)
+        {
+            var current = Snapshot;
+            if (!accepts(current)) return false;
+            Publish(update(current));
+            return true;
+        }
     }
 
     private async Task FailAsync(string code)

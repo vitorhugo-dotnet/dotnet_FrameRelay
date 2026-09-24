@@ -39,6 +39,27 @@ public sealed class SessionRuntimeTests
     }
 
     [Fact]
+    public async Task Late_watch_and_signaling_callbacks_cannot_restore_stopped_session_state()
+    {
+        var host = new FakeVideoWatchHost();
+        var connection = new FakeConnection();
+        var runtime = new SessionRuntime(new FakeSessionApi(), () => connection, watchHost: host);
+        var metrics = new SessionMediaMetrics(1920, 1080, 4_000_000, 30, null, "H.264", "Direct/UDP");
+        await runtime.StartWatchingAsync("AB12CD", CancellationToken.None);
+        runtime.UpdateMetrics(metrics);
+        var delayedSignaling = connection.CaptureStateChanged();
+        delayedSignaling?.Invoke(SignalingState.Reconnecting);
+        Assert.Equal(SignalingState.Reconnecting, runtime.Snapshot.Signaling);
+
+        await runtime.StopAsync(CancellationToken.None);
+        host.Raise(WatchState.Receiving);
+        host.RaiseNegotiationFailure("late negotiation failure");
+        delayedSignaling?.Invoke(SignalingState.Connected);
+
+        Assert.Equal(SessionSnapshot.Idle, runtime.Snapshot);
+    }
+
+    [Fact]
     public async Task Metrics_clear_across_a_role_change()
     {
         var runtime = new SessionRuntime(new FakeSessionApi(), () => new FakeConnection());
@@ -719,6 +740,8 @@ public sealed class SessionRuntimeTests
         public event Action<SignalingEnvelope>? FrameReceived;
 
         public event Action<SignalingState>? StateChanged;
+
+        public Action<SignalingState>? CaptureStateChanged() => StateChanged;
 
         public Task StartAsync(Guid sessionId, CancellationToken ct)
         {

@@ -24,14 +24,15 @@ public sealed class RtcVideoPublishHost(
     private readonly ILogger<RtcVideoPublishHost> _logger =
         loggerFactory?.CreateLogger<RtcVideoPublishHost>() ?? NullLogger<RtcVideoPublishHost>.Instance;
     private readonly SemaphoreSlim _gate = new(1, 1);
+    private readonly PublisherCaptureSelection _captureSelection = new();
     private static readonly IReadOnlyDictionary<Guid, RtcTransportDiagnostics> EmptyTransportDiagnostics =
         new Dictionary<Guid, RtcTransportDiagnostics>();
 
     private ScreenPublishPipeline? _pipeline;
     private MediaFoundationH264Encoder? _encoder;
-    private GraphicsCaptureScreenSource? _capture;
+    private IScreenCaptureSource? _capture;
     private AudioPublishPipeline? _audioPipeline;
-    private WasapiLoopbackAudioSource? _audioSource;
+    private IAudioCaptureSource? _audioSource;
     private VideoPublisher? _publisher;
     private string? _audioPipelineFailure;
 
@@ -70,11 +71,11 @@ public sealed class RtcVideoPublishHost(
 
     public int ViewersAwaitingKeyFrame => _publisher?.ViewersAwaitingKeyFrame ?? 0;
 
-    public long CaptureFramesArrived => _capture?.FramesArrived ?? 0;
+    public long CaptureFramesArrived => (_capture as IScreenCaptureDiagnostics)?.FramesArrived ?? 0;
 
-    public long CaptureFramesDelivered => _capture?.FramesDelivered ?? 0;
+    public long CaptureFramesDelivered => (_capture as IScreenCaptureDiagnostics)?.FramesDelivered ?? 0;
 
-    public long CaptureFramesDropped => _capture?.FramesDropped ?? 0;
+    public long CaptureFramesDropped => (_capture as IScreenCaptureDiagnostics)?.FramesDropped ?? 0;
 
     public long EncodeFramesDropped => _pipeline?.DroppedEncodeFrames ?? 0;
 
@@ -86,9 +87,12 @@ public sealed class RtcVideoPublishHost(
 
     public string? AudioEncoderName => _audioPipeline?.EncoderName;
 
-    public string? AudioCaptureEndpoint => _audioSource?.ActiveEndpointName;
+    public string? AudioCaptureEndpoint => (_audioSource as WasapiLoopbackAudioSource)?.ActiveEndpointName
+                                          ?? (_audioSource as ProcessLoopbackAudioSource)?.TargetProcessName;
 
-    public string? AudioDegradedReason => _audioPipelineFailure ?? _audioSource?.DegradedReason;
+    public string? AudioDegradedReason => _audioPipelineFailure
+        ?? (_audioSource as WasapiLoopbackAudioSource)?.DegradedReason
+        ?? (_audioSource as ProcessLoopbackAudioSource)?.DegradedReason;
 
     /// <summary>Why the required video media stack could not start, when it could not.</summary>
     public string? StartFailure { get; private set; }
@@ -104,15 +108,13 @@ public sealed class RtcVideoPublishHost(
 
     public event Action<string>? CaptureTargetClosed;
 
-    public Task StartAsync(CaptureTarget target, VideoPublishProfile profile, CancellationToken ct) => target switch
-    {
-        CaptureTarget.Monitor monitor => StartAsync(monitor.Info, profile, ct),
-        CaptureTarget.Window => Task.FromException(new PlatformNotSupportedException(
-            "Application-window publishing is not available yet.")),
-        _ => Task.FromException(new ArgumentOutOfRangeException(nameof(target)))
-    };
+    public Task StartAsync(CaptureTarget target, VideoPublishProfile profile, CancellationToken ct) =>
+        StartCoreAsync(target, profile, ct);
 
     public async Task StartAsync(MonitorInfo monitor, VideoPublishProfile profile, CancellationToken ct)
+        => await StartCoreAsync(new CaptureTarget.Monitor(monitor), profile, ct);
+
+    private async Task StartCoreAsync(CaptureTarget target, VideoPublishProfile profile, CancellationToken ct)
     {
         await _gate.WaitAsync(ct);
         try
@@ -134,7 +136,7 @@ public sealed class RtcVideoPublishHost(
             EncoderName = encoder.Name;
             EncoderRejections = encoder.RejectionLog;
 
-            var capture = new GraphicsCaptureScreenSource();
+            var capture = _captureSelection.CreateVideo(target);
             _capture = capture;
             ((IScreenCaptureSource)capture).TargetClosed += OnCaptureTargetClosed;
             var pipeline = new ScreenPublishPipeline(
@@ -148,31 +150,40 @@ public sealed class RtcVideoPublishHost(
             // DisposeStackAsync can still release the capture source and Media Foundation MFT.
             _pipeline = pipeline;
 
-            await pipeline.StartAsync(monitor, ct);
+            await pipeline.StartAsync(target, ct);
 
             AudioPublishPipeline? audioPipeline = null;
-            var audioSource = new WasapiLoopbackAudioSource();
+            IAudioCaptureSource? audioSource = _captureSelection.CreateAudio(target);
             _audioSource = audioSource;
-
-            var candidateAudioPipeline = new AudioPublishPipeline(
-                audioSource,
-                new OpusAudioCodec(channels: 2),
-                clock);
-            candidateAudioPipeline.Failed += OnAudioPipelineFailed;
-
-            try
+            if (audioSource is null)
+                _audioPipelineFailure = "Per-process audio capture requires Windows build 20348 or later.";
+            else
             {
-                await candidateAudioPipeline.StartAsync(ct);
-                audioPipeline = candidateAudioPipeline;
-                _audioPipeline = candidateAudioPipeline;
-            }
-            catch (Exception e) when (e is not OperationCanceledException)
-            {
-                // System audio is optional to the survival of the screen share. A missing/removed
-                // endpoint or Opus failure is surfaced in Diagnostics while video keeps publishing.
-                _audioPipelineFailure = audioSource.DegradedReason ?? e.Message;
-                candidateAudioPipeline.Failed -= OnAudioPipelineFailed;
-                await candidateAudioPipeline.DisposeAsync();
+                var candidateAudioPipeline = new AudioPublishPipeline(audioSource, new OpusAudioCodec(channels: 2), clock);
+                candidateAudioPipeline.Failed += OnAudioPipelineFailed;
+                try
+                {
+                    await candidateAudioPipeline.StartAsync(ct);
+                    if (audioSource is not ProcessLoopbackAudioSource processAudio || processAudio.IsAvailable)
+                    {
+                        audioPipeline = candidateAudioPipeline;
+                        _audioPipeline = candidateAudioPipeline;
+                    }
+                    else
+                    {
+                        _audioPipelineFailure = processAudio.DegradedReason;
+                        candidateAudioPipeline.Failed -= OnAudioPipelineFailed;
+                        await candidateAudioPipeline.DisposeAsync();
+                        _audioSource = null;
+                    }
+                }
+                catch (Exception e) when (e is not OperationCanceledException)
+                {
+                    _audioPipelineFailure = (audioSource as ProcessLoopbackAudioSource)?.DegradedReason
+                                            ?? (audioSource as WasapiLoopbackAudioSource)?.DegradedReason ?? e.Message;
+                    candidateAudioPipeline.Failed -= OnAudioPipelineFailed;
+                    await candidateAudioPipeline.DisposeAsync();
+                }
             }
 
             _publisher = new VideoPublisher(
@@ -187,9 +198,9 @@ public sealed class RtcVideoPublishHost(
                 encoder.Name,
                 encoder.TransformInfo?.Name ?? encoder.Name,
                 encoder.TransformInfo?.IsHardware == true ? "hardware" : "software",
-                monitor.Id,
-                monitor.Width,
-                monitor.Height);
+                target switch { CaptureTarget.Monitor m => m.Info.Id, CaptureTarget.Window w => $"HWND:{w.Info.Handle:X} {w.Info.Title}", _ => "unknown" },
+                capture.CurrentDimensions.Width,
+                capture.CurrentDimensions.Height);
         }
         catch (Exception e) when (e is InvalidOperationException or PlatformNotSupportedException
                                       or HttpRequestException or ApiException)
@@ -284,7 +295,7 @@ public sealed class RtcVideoPublishHost(
 
         _audioSource = null;
 
-        if (_capture is IScreenCaptureSource captureSource)
+        if (_capture is { } captureSource)
             captureSource.TargetClosed -= OnCaptureTargetClosed;
         _capture = null;
 
@@ -297,4 +308,47 @@ public sealed class RtcVideoPublishHost(
             _encoder = null;
         }
     }
+}
+
+internal sealed class PublisherCaptureSelection
+{
+    private readonly Func<IScreenCaptureSource> _monitorVideo;
+    private readonly Func<IScreenCaptureSource> _windowVideo;
+    private readonly Func<IAudioCaptureSource> _systemAudio;
+    private readonly Func<WindowInfo, IAudioCaptureSource> _processAudio;
+    private readonly Func<bool> _processLoopbackSupported;
+
+    public PublisherCaptureSelection()
+        : this(() => new GraphicsCaptureScreenSource(), () => new GraphicsCaptureWindowSource(),
+            () => new WasapiLoopbackAudioSource(), window => new ProcessLoopbackAudioSource(window),
+            () => ProcessLoopbackAudioSource.IsSupported) { }
+
+    internal PublisherCaptureSelection(
+        Func<IScreenCaptureSource> monitorVideo,
+        Func<IScreenCaptureSource> windowVideo,
+        Func<IAudioCaptureSource> systemAudio,
+        Func<WindowInfo, IAudioCaptureSource> processAudio,
+        Func<bool> processLoopbackSupported)
+    {
+        _monitorVideo = monitorVideo;
+        _windowVideo = windowVideo;
+        _systemAudio = systemAudio;
+        _processAudio = processAudio;
+        _processLoopbackSupported = processLoopbackSupported;
+    }
+
+    public IScreenCaptureSource CreateVideo(CaptureTarget target) => target switch
+    {
+        CaptureTarget.Monitor => _monitorVideo(),
+        CaptureTarget.Window => _windowVideo(),
+        _ => throw new ArgumentOutOfRangeException(nameof(target))
+    };
+
+    public IAudioCaptureSource? CreateAudio(CaptureTarget target) => target switch
+    {
+        CaptureTarget.Monitor => _systemAudio(),
+        CaptureTarget.Window window when _processLoopbackSupported() => _processAudio(window.Info),
+        CaptureTarget.Window => null,
+        _ => throw new ArgumentOutOfRangeException(nameof(target))
+    };
 }

@@ -11,6 +11,7 @@ internal static class Program
     {
         using var logging = FrameRelayLogging.InitializeDefault();
         var logger = logging.LoggerFactory.CreateLogger("FrameRelay.Program");
+        FrameRelayProtocolRegistration.EnsureRegistered(logger);
 
         AppDomain.CurrentDomain.UnhandledException += (_, eventArgs) =>
         {
@@ -43,7 +44,15 @@ internal static class Program
 
         try
         {
-            BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
+            var startup = LaunchActivationCoordinator.StartAsync(args, logger, CancellationToken.None)
+                .GetAwaiter().GetResult();
+            if (startup.Coordinator is null) return;
+            using (startup.Coordinator)
+            {
+                startup.Coordinator.Activated += LaunchActivationRouter.Dispatch;
+                LaunchActivationRouter.SetInitial(startup.Initial);
+                BuildAvaloniaApp().StartWithClassicDesktopLifetime(startup.Arguments);
+            }
         }
         catch (Exception exception)
         {

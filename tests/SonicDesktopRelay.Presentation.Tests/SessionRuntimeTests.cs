@@ -62,6 +62,19 @@ public sealed class SessionRuntimeTests
     }
 
     [Fact]
+    public async Task Watching_joins_by_resolved_session_id_through_existing_runtime()
+    {
+        var api = new FakeSessionApi();
+        var runtime = new SessionRuntime(api, () => new FakeConnection());
+
+        await runtime.StartWatchingSessionAsync(SessionId, CancellationToken.None);
+
+        Assert.Equal(SessionPhase.Watching, runtime.Snapshot.Phase);
+        Assert.Equal(SessionId, api.JoinedById);
+        Assert.Equal(SessionId, runtime.Snapshot.SessionId);
+    }
+
+    [Fact]
     public async Task A_join_failure_lands_in_failed_with_the_error_code()
     {
         var api = new FakeSessionApi { JoinFailureCode = "invalid_code" };
@@ -658,6 +671,8 @@ public sealed class SessionRuntimeTests
 
         public string? JoinedWithCode { get; private set; }
 
+        public Guid? JoinedById { get; private set; }
+
         public string? JoinFailureCode { get; init; }
 
         public Task<CreatedSession> CreateScreenShareAsync(int maxViewers, CancellationToken ct)
@@ -673,6 +688,14 @@ public sealed class SessionRuntimeTests
             if (JoinFailureCode is not null)
                 throw new SessionApiFailure(JoinFailureCode, "Join refused.");
             return Task.FromResult(SessionId);
+        }
+
+        public Task<Guid> JoinByIdAsync(Guid sessionId, CancellationToken ct)
+        {
+            JoinedById = sessionId;
+            if (JoinFailureCode is not null)
+                throw new SessionApiFailure(JoinFailureCode, "Join refused.");
+            return Task.FromResult(sessionId);
         }
 
         public Task EndAsync(Guid sessionId, CancellationToken ct)

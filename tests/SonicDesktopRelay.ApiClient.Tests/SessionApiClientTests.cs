@@ -39,6 +39,18 @@ public sealed class SessionApiClientTests
     }
 
     [Fact]
+    public async Task Join_by_id_uses_existing_authenticated_session_join_route()
+    {
+        var handler = new StubHttpMessageHandler().Respond(HttpStatusCode.OK, CreatedBody);
+        var client = new SessionApiClient(HttpClientFor(handler));
+        var sessionId = Guid.Parse("6f9619ff-8b86-d011-b42d-00cf4fc964ff");
+
+        await client.JoinByIdAsync(sessionId, CancellationToken.None);
+
+        Assert.Equal($"/api/sessions/{sessionId}/join", handler.Requests[0].RequestUri!.AbsolutePath);
+    }
+
+    [Fact]
     public async Task Join_surfaces_device_type_not_allowed_as_the_error_code()
     {
         var handler = new StubHttpMessageHandler().Respond(HttpStatusCode.Forbidden,

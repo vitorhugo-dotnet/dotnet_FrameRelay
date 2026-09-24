@@ -276,6 +276,38 @@ public sealed class ScreenWatchPipelineTests
     }
 
     [Fact]
+    public void StatsSnapshot_reports_no_bitrate_without_received_bytes_or_elapsed_time()
+    {
+        var time = new FakeTimeProvider(Start);
+        using var pipeline = new ScreenWatchPipeline(new FakeDecoder(), time);
+
+        Assert.Null(pipeline.TakeStatsSnapshot().VideoBitrateBitsPerSecond);
+        pipeline.Submit(Sample());
+        Assert.Null(pipeline.TakeStatsSnapshot().VideoBitrateBitsPerSecond);
+        time.Advance(TimeSpan.FromSeconds(1));
+        Assert.Null(pipeline.TakeStatsSnapshot().VideoBitrateBitsPerSecond);
+    }
+
+    [Fact]
+    public void StatsSnapshot_uses_encoded_bytes_in_each_monotonic_interval()
+    {
+        var time = new FakeTimeProvider(Start);
+        using var pipeline = new ScreenWatchPipeline(new FakeDecoder(), time);
+
+        pipeline.Submit(new EncodedVideoSample(new byte[1000], TimeSpan.Zero, true, 1920, 1080));
+        time.Advance(TimeSpan.FromSeconds(2));
+        var first = pipeline.TakeStatsSnapshot();
+        pipeline.Submit(new EncodedVideoSample(new byte[500], TimeSpan.Zero, false, 1920, 1080));
+        time.Advance(TimeSpan.FromSeconds(1));
+        var second = pipeline.TakeStatsSnapshot();
+
+        Assert.Equal(4000, first.VideoBitrateBitsPerSecond);
+        Assert.Equal(1, first.DecodedFrames);
+        Assert.Equal(4000, second.VideoBitrateBitsPerSecond);
+        Assert.Equal(1, second.DecodedFrames);
+    }
+
+    [Fact]
     public void StatsSnapshot_reports_effective_fps_independent_of_decode_success()
     {
         var decoder = new FakeDecoder { ReturnNull = true };

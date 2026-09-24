@@ -558,19 +558,16 @@ public sealed class Shell : INotifyPropertyChanged
     // and the observable collection are the UI thread's alone.
     private void OnSnapshot(SessionSnapshot snapshot)
     {
-        _logger.LogInformation(
-            "Session snapshot. phase={Phase} signaling={Signaling} session={SessionId} viewers={ViewerCount} watching={Watching}",
-            snapshot.Phase,
-            snapshot.Signaling,
-            snapshot.SessionId,
-            snapshot.ViewerCount,
-            snapshot.Watching);
-
         Dispatcher.UIThread.Post(() =>
         {
+            var previous = ViewModel.Snapshot;
             ViewModel.Apply(snapshot);
             Raise(nameof(CanStartShare));
             Raise(nameof(MediaStatusText));
+            if (Equals(snapshot with { Metrics = null }, previous with { Metrics = null })) return;
+            _logger.LogInformation(
+                "Session snapshot. phase={Phase} signaling={Signaling} session={SessionId} viewers={ViewerCount} watching={Watching}",
+                snapshot.Phase, snapshot.Signaling, snapshot.SessionId, snapshot.ViewerCount, snapshot.Watching);
             Diagnostics.Insert(0,
                 $"{DateTimeOffset.Now:HH:mm:ss}  {snapshot.Phase}  signaling={snapshot.Signaling}  " +
                 $"session={snapshot.SessionId?.ToString() ?? "-"}  viewers={snapshot.ViewerCount}");
@@ -602,8 +599,24 @@ public sealed class Shell : INotifyPropertyChanged
         });
     }
 
-    private void OnVideoDiagnosticsChanged() =>
-        Dispatcher.UIThread.Post(() => Raise(nameof(MediaStatusText)));
+    private void OnVideoDiagnosticsChanged()
+    {
+        var composition = _composition;
+        if (composition is null) return;
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (!ReferenceEquals(_composition, composition)) return;
+            var runtime = composition.Runtime;
+            var metrics = runtime.Snapshot.Phase switch
+            {
+                SessionPhase.Sharing => composition.PublishHost.CurrentMetrics,
+                SessionPhase.Watching => composition.WatchHost.CurrentMetrics,
+                _ => null
+            };
+            if (metrics is not null) runtime.UpdateMetrics(metrics);
+            Raise(nameof(MediaStatusText));
+        });
+    }
 
     private void OnWebRtcDiagnostic(ViewerNegotiationDiagnosticEntry entry)
     {

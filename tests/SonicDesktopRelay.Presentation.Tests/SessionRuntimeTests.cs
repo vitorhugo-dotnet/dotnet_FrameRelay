@@ -23,6 +23,36 @@ public sealed class SessionRuntimeTests
     }
 
     [Fact]
+    public async Task A_late_metric_sample_cannot_restore_stopped_session_data()
+    {
+        var runtime = new SessionRuntime(new FakeSessionApi(), () => new FakeConnection());
+        var metrics = new SessionMediaMetrics(1920, 1080, 4_000_000, 30, null, "H.264", "Direct/UDP");
+        await runtime.StartWatchingAsync("AB12CD", CancellationToken.None);
+        runtime.UpdateMetrics(metrics);
+        Assert.Equal(metrics, runtime.Snapshot.Metrics);
+
+        await runtime.StopAsync(CancellationToken.None);
+        runtime.UpdateMetrics(metrics);
+
+        Assert.Equal(SessionPhase.Idle, runtime.Snapshot.Phase);
+        Assert.Null(runtime.Snapshot.Metrics);
+    }
+
+    [Fact]
+    public async Task Metrics_clear_across_a_role_change()
+    {
+        var runtime = new SessionRuntime(new FakeSessionApi(), () => new FakeConnection());
+        var metrics = new SessionMediaMetrics(1920, 1080, 4_000_000, 30, null, "H.264", "Direct/UDP");
+        await runtime.StartSharingAsync(Monitor, 3, CancellationToken.None);
+        runtime.UpdateMetrics(metrics);
+
+        await runtime.StopAsync(CancellationToken.None);
+        await runtime.StartWatchingAsync("AB12CD", CancellationToken.None);
+
+        Assert.Null(runtime.Snapshot.Metrics);
+    }
+
+    [Fact]
     public async Task Sharing_creates_the_session_and_exposes_its_code()
     {
         var api = new FakeSessionApi();

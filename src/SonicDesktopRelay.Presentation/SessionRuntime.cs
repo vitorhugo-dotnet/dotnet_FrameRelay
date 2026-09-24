@@ -21,6 +21,7 @@ public sealed class SessionRuntime(
     private readonly SignalingDiagnosticBuffer _signalingDiagnostics = signalingDiagnostics ?? new();
     private readonly object _pendingViewerSignalingGate = new();
     private readonly object _captureTargetGate = new();
+    private readonly object _snapshotGate = new();
     private readonly SemaphoreSlim _stopGate = new(1, 1);
     private readonly Queue<SignalingEnvelope> _pendingViewerSignaling = new();
     private ISignalingConnection? _connection;
@@ -36,6 +37,17 @@ public sealed class SessionRuntime(
     public IReadOnlyList<SignalingDiagnosticEntry> SignalingDiagnostics => _signalingDiagnostics.Entries;
 
     public event Action<SessionSnapshot>? Changed;
+
+    /// <summary>Applies a sample only while the current session can own live media.</summary>
+    public void UpdateMetrics(SessionMediaMetrics? metrics)
+    {
+        lock (_snapshotGate)
+        {
+            if (Snapshot.Phase is not (SessionPhase.Sharing or SessionPhase.Watching)) return;
+            if (Equals(Snapshot.Metrics, metrics)) return;
+            Publish(Snapshot with { Metrics = metrics });
+        }
+    }
 
     public event Action<SignalingDiagnosticEntry>? SignalingDiagnosticAdded
     {
@@ -475,7 +487,12 @@ public sealed class SessionRuntime(
 
     private void Publish(SessionSnapshot snapshot)
     {
-        Snapshot = snapshot;
-        Changed?.Invoke(snapshot);
+        lock (_snapshotGate)
+        {
+            Snapshot = snapshot.Phase is SessionPhase.Sharing or SessionPhase.Watching
+                ? snapshot
+                : snapshot with { Metrics = null };
+            Changed?.Invoke(Snapshot);
+        }
     }
 }

@@ -44,6 +44,25 @@ public sealed class RtcVideoWatchHost(
 
     public RtcTransportDiagnostics? TransportDiagnostics => _subscriber?.TransportDiagnostics;
 
+    /// <summary>Latest completed WebRTC feedback interval, projected for the UI without consuming it.</summary>
+    public SessionMediaMetrics? CurrentMetrics
+    {
+        get
+        {
+            if (_pipeline is not { } pipeline) return null;
+            var video = VideoDiagnostics;
+            var stats = pipeline.LatestStatsSnapshot;
+            return new SessionMediaMetrics(
+                Width: video?.Width is > 0 ? video.Width : null,
+                Height: video?.Height is > 0 ? video.Height : null,
+                VideoBitrateBitsPerSecond: stats?.VideoBitrateBitsPerSecond,
+                VideoFramesPerSecond: stats is { IntervalMilliseconds: > 0 }
+                    ? stats.DecodedFrames * 1000d / stats.IntervalMilliseconds : null,
+                Codec: DecoderName,
+                Transport: TransportDiagnostics?.ToString());
+        }
+    }
+
     public string? VideoDecoderFailure => _pipeline?.LastFailure ?? _decoder?.LastFailure;
 
     public long VideoAccessUnitsReceived => _pipeline?.VideoAccessUnitsReceived ?? 0;

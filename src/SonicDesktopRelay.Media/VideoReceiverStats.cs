@@ -9,4 +9,5 @@ public sealed record VideoReceiverStats(
     long AccessUnitsReceived,
     long IncompleteAccessUnits,
     long DecodedFrames,
-    double TargetFramesPerSecond);
+    double TargetFramesPerSecond,
+    double? VideoBitrateBitsPerSecond = null);

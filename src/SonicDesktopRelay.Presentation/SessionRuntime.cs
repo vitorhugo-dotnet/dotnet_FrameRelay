@@ -21,6 +21,7 @@ public sealed class SessionRuntime(
     private readonly SignalingDiagnosticBuffer _signalingDiagnostics = signalingDiagnostics ?? new();
     private readonly object _pendingViewerSignalingGate = new();
     private readonly object _captureTargetGate = new();
+    private readonly SemaphoreSlim _stopGate = new(1, 1);
     private readonly Queue<SignalingEnvelope> _pendingViewerSignaling = new();
     private ISignalingConnection? _connection;
     private bool _isOwner;
@@ -169,24 +170,32 @@ public sealed class SessionRuntime(
 
     public async Task StopAsync(CancellationToken ct)
     {
-        if (Snapshot.Phase == SessionPhase.Idle) return;
-        Publish(Snapshot with { Phase = SessionPhase.Ending });
-
-        // Capture stops before the session ends: the last thing a viewer should see is the
-        // screen going away, not frames arriving for a session the server has already closed.
-        if (publishHost is not null) await publishHost.StopAsync();
-        if (watchHost is not null)
+        await _stopGate.WaitAsync(ct);
+        try
         {
-            ClearPendingViewerSignaling();
-            await watchHost.StopAsync();
+            if (Snapshot.Phase == SessionPhase.Idle) return;
+            Publish(Snapshot with { Phase = SessionPhase.Ending });
+
+            // Capture stops before the session ends: the last thing a viewer should see is the
+            // screen going away, not frames arriving for a session the server has already closed.
+            if (publishHost is not null) await publishHost.StopAsync();
+            if (watchHost is not null)
+            {
+                ClearPendingViewerSignaling();
+                await watchHost.StopAsync();
+            }
+
+            // Only the publishing device may end a session for everyone; a viewer leaving simply
+            // drops its own connection, and calling end as a viewer would be a 403 at best.
+            if (_isOwner && Snapshot.SessionId is { } sessionId) await EndOwnedSessionAsync(sessionId, ct);
+
+            await DetachAsync();
+            Publish(SessionSnapshot.Idle);
         }
-
-        // Only the publishing device may end a session for everyone; a viewer leaving simply
-        // drops its own connection, and calling end as a viewer would be a 403 at best.
-        if (_isOwner && Snapshot.SessionId is { } sessionId) await EndOwnedSessionAsync(sessionId, ct);
-
-        await DetachAsync();
-        Publish(SessionSnapshot.Idle);
+        finally
+        {
+            _stopGate.Release();
+        }
     }
 
     private void OnCaptureTargetClosed(string reason)

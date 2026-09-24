@@ -36,13 +36,41 @@ public sealed class GraphicsCaptureWindowSourceTests
         await source.DisposeAsync();
     }
 
+    [Fact]
+    public async Task Same_process_handle_reuse_is_detected_by_the_registered_window_destroy_event()
+    {
+        var api = new FakeWindowApi();
+        var capture = new FakeCaptureSource();
+        var source = new GraphicsCaptureWindowSource(api, capture);
+        var closed = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        source.TargetClosed += reason => closed.TrySetResult(reason);
+        var target = new CaptureTarget.Window(new WindowInfo((nint)44, 12, Started, "Editor", "editor", 640, 480));
+        await source.StartAsync(target, Quality, default);
+
+        // The process remains alive and Windows has already reused the HWND for its replacement.
+        api.IsWindowAlive = true;
+        api.ReuseWithSameProcess();
+        await closed.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.Equal(1, capture.StopCalls);
+        await source.DisposeAsync();
+    }
+
     private static VideoQuality Quality => new(720, 30, 1000);
 
     private sealed class FakeWindowApi : IWindowApi
     {
         public bool Valid { get; init; } = true;
+        public bool IsWindowAlive { get; set; } = true;
+        private Action? _destroyed;
+        public IDisposable WatchWindowDestroy(nint handle, Action destroyed)
+        {
+            _destroyed = destroyed;
+            return new EmptyWatch();
+        }
+        public void ReuseWithSameProcess() => _destroyed?.Invoke();
         public IEnumerable<nint> EnumerateTopLevelWindows() => [(nint)44];
-        public bool IsWindow(nint handle) => Valid;
+        public bool IsWindow(nint handle) => Valid && IsWindowAlive;
         public bool IsVisible(nint handle) => Valid;
         public bool IsToolWindow(nint handle) => false;
         public bool IsShellWindow(nint handle) => false;
@@ -51,6 +79,7 @@ public sealed class GraphicsCaptureWindowSourceTests
         public bool TryGetBounds(nint handle, out int width, out int height) { width = 640; height = 480; return true; }
         public bool TryGetProcessIdentity(uint processId, out string processName, out DateTime startTimeUtc)
         { processName = "editor"; startTimeUtc = Started; return Valid; }
+        private sealed class EmptyWatch : IDisposable { public void Dispose() { } }
     }
 
     private sealed class FakeCaptureSource : IScreenCaptureSource, IScreenCaptureDiagnostics

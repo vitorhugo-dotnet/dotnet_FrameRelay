@@ -7,6 +7,8 @@ namespace SonicDesktopRelay.Media.Windows;
 
 internal interface IWindowApi
 {
+    IDisposable WatchWindowDestroy(nint handle, Action destroyed) => EmptyWindowWatch.Instance;
+
     IEnumerable<nint> EnumerateTopLevelWindows();
 
     bool IsWindow(nint handle);
@@ -24,6 +26,12 @@ internal interface IWindowApi
     bool TryGetBounds(nint handle, out int width, out int height);
 
     bool TryGetProcessIdentity(uint processId, out string processName, out DateTime startTimeUtc);
+}
+
+internal sealed class EmptyWindowWatch : IDisposable
+{
+    public static EmptyWindowWatch Instance { get; } = new();
+    public void Dispose() { }
 }
 
 /// <summary>Returns a snapshot of top-level windows that are reasonable share targets.</summary>
@@ -119,6 +127,18 @@ internal sealed unsafe partial class Win32WindowApi : IWindowApi
         return handles;
     }
 
+    public IDisposable WatchWindowDestroy(nint handle, Action destroyed)
+    {
+        var processId = GetProcessId(handle);
+        var callback = new WinEventCallback((hook, eventId, eventWindow, objectId, childId, threadId, eventTime) =>
+        {
+            if (eventWindow == handle && objectId == 0 && childId == 0) destroyed();
+        });
+        var hook = NativeMethods.SetWinEventHook(0x8001, 0x8001, nint.Zero, callback, processId, 0, 0);
+        if (hook == nint.Zero) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+        return new WinEventWatch(hook, callback);
+    }
+
     public bool IsWindow(nint handle) => NativeMethods.IsWindow(handle);
 
     public bool IsVisible(nint handle) => NativeMethods.IsWindowVisible(handle);
@@ -207,6 +227,14 @@ internal sealed unsafe partial class Win32WindowApi : IWindowApi
 
     private static partial class NativeMethods
     {
+        [DllImport("user32.dll", SetLastError = true)]
+        internal static extern nint SetWinEventHook(uint eventMin, uint eventMax, nint eventHookModule,
+            WinEventCallback callback, uint processId, uint threadId, uint flags);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        internal static extern bool UnhookWinEvent(nint hook);
+
         [LibraryImport("user32.dll")]
         [return: MarshalAs(UnmanagedType.Bool)]
         internal static partial bool IsWindow(nint handle);
@@ -233,6 +261,21 @@ internal sealed unsafe partial class Win32WindowApi : IWindowApi
         [LibraryImport("user32.dll", EntryPoint = "GetWindowRect")]
         [return: MarshalAs(UnmanagedType.Bool)]
         internal static partial bool GetWindowRect(nint handle, out WindowRect rect);
+    }
+
+    [UnmanagedFunctionPointer(CallingConvention.Winapi)]
+    private delegate void WinEventCallback(nint hook, uint eventType, nint window, int objectId,
+        int childId, uint eventThread, uint eventTime);
+
+    private sealed class WinEventWatch(nint hook, WinEventCallback callback) : IDisposable
+    {
+        private nint _hook = hook;
+        public void Dispose()
+        {
+            var current = Interlocked.Exchange(ref _hook, nint.Zero);
+            if (current != nint.Zero) _ = NativeMethods.UnhookWinEvent(current);
+            GC.KeepAlive(callback);
+        }
     }
 
     [StructLayout(LayoutKind.Sequential)]

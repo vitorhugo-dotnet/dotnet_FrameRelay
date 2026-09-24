@@ -11,6 +11,7 @@ public sealed class GraphicsCaptureWindowSource : IScreenCaptureSource, IScreenC
     private readonly IScreenCaptureSource _source;
     private readonly IScreenCaptureDiagnostics _diagnostics;
     private CancellationTokenSource? _ownerMonitor;
+    private IDisposable? _windowDestroyWatch;
     private int _closeNotified;
 
     public GraphicsCaptureWindowSource() : this(new Win32WindowApi(), new GraphicsCaptureItemSource()) { }
@@ -45,7 +46,22 @@ public sealed class GraphicsCaptureWindowSource : IScreenCaptureSource, IScreenC
             throw new ArgumentException("A window target is required.", nameof(target));
 
         ValidateWindow(window.Info);
-        await _source.StartAsync(target, quality, ct).ConfigureAwait(false);
+        _closeNotified = 0;
+        _windowDestroyWatch?.Dispose();
+        _windowDestroyWatch = _windowApi.WatchWindowDestroy(window.Info.Handle,
+            () => _ = HandleWindowDestroyedAsync(window.Info));
+        try
+        {
+            await _source.StartAsync(target, quality, ct).ConfigureAwait(false);
+            ValidateWindow(window.Info);
+        }
+        catch
+        {
+            _windowDestroyWatch.Dispose();
+            _windowDestroyWatch = null;
+            await _source.StopAsync().ConfigureAwait(false);
+            throw;
+        }
         _ownerMonitor?.Cancel();
         _ownerMonitor?.Dispose();
         _ownerMonitor = new CancellationTokenSource();
@@ -55,6 +71,8 @@ public sealed class GraphicsCaptureWindowSource : IScreenCaptureSource, IScreenC
     public Task StopAsync()
     {
         _ownerMonitor?.Cancel();
+        _windowDestroyWatch?.Dispose();
+        _windowDestroyWatch = null;
         return _source.StopAsync();
     }
 
@@ -65,6 +83,8 @@ public sealed class GraphicsCaptureWindowSource : IScreenCaptureSource, IScreenC
         _ownerMonitor?.Cancel();
         _ownerMonitor?.Dispose();
         _ownerMonitor = null;
+        _windowDestroyWatch?.Dispose();
+        _windowDestroyWatch = null;
         await _source.DisposeAsync().ConfigureAwait(false);
     }
 
@@ -72,9 +92,19 @@ public sealed class GraphicsCaptureWindowSource : IScreenCaptureSource, IScreenC
     {
         if (window.Handle == nint.Zero || !_windowApi.IsWindow(window.Handle)
             || !_windowApi.IsVisible(window.Handle) || _windowApi.GetProcessId(window.Handle) != window.ProcessId
-            || !_windowApi.TryGetProcessIdentity(window.ProcessId, out _, out var startTime)
-            || startTime != window.ProcessStartTimeUtc)
+            || !_windowApi.TryGetProcessIdentity(window.ProcessId, out var processName, out var startTime)
+            || startTime != window.ProcessStartTimeUtc
+            || !string.Equals(processName, window.ProcessName, StringComparison.Ordinal)
+            || !string.Equals(_windowApi.GetTitle(window.Handle).Trim(), window.Title, StringComparison.Ordinal)
+            || !_windowApi.TryGetBounds(window.Handle, out var width, out var height)
+            || width != window.Width || height != window.Height)
             throw new InvalidOperationException("The selected window is no longer available.");
+    }
+
+    private async Task HandleWindowDestroyedAsync(WindowInfo window)
+    {
+        try { await _source.StopAsync().ConfigureAwait(false); }
+        finally { NotifyClosed($"Window '{window.Title}' was destroyed."); }
     }
 
     private async Task MonitorOwnerAsync(WindowInfo window, CancellationToken ct)
@@ -89,8 +119,8 @@ public sealed class GraphicsCaptureWindowSource : IScreenCaptureSource, IScreenC
                     && _windowApi.TryGetProcessIdentity(window.ProcessId, out _, out var startTime)
                     && startTime == window.ProcessStartTimeUtc) continue;
 
-                await _source.StopAsync().ConfigureAwait(false);
-                NotifyClosed($"Window '{window.Title}' or its owner process exited.");
+                try { await _source.StopAsync().ConfigureAwait(false); }
+                finally { NotifyClosed($"Window '{window.Title}' or its owner process exited."); }
                 return;
             }
         }

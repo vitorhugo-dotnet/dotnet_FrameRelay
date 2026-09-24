@@ -233,6 +233,30 @@ public sealed class SessionRuntimeTests
     }
 
     [Fact]
+    public async Task User_stop_racing_target_close_ends_owned_session_only_once()
+    {
+        var api = new FakeSessionApi();
+        var host = new FakeVideoPublishHost();
+        var runtime = new SessionRuntime(api, () => new FakeConnection(), host);
+        var failed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        runtime.Changed += snapshot =>
+        {
+            if (snapshot.Phase == SessionPhase.Failed) failed.TrySetResult();
+        };
+        await runtime.StartSharingAsync(new CaptureTarget.Window(Window), VideoPublishProfile.Default, 3, CancellationToken.None);
+        host.StopGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        host.RaiseCaptureTargetClosed("window destroyed");
+        var manualStop = runtime.StopAsync(CancellationToken.None);
+        host.StopGate.SetResult();
+        await manualStop;
+        await failed.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.Equal(1, api.EndCalls);
+        Assert.Equal(SessionPhase.Failed, runtime.Snapshot.Phase);
+    }
+
+    [Fact]
     public async Task A_viewer_joining_is_added_to_the_publisher()
     {
         var api = new FakeSessionApi();
@@ -572,6 +596,8 @@ public sealed class SessionRuntimeTests
 
         public bool CloseDuringStart { get; init; }
 
+        public TaskCompletionSource? StopGate { get; set; }
+
         public event Action<string>? CaptureTargetClosed;
 
         public Task StartAsync(MonitorInfo monitor, VideoPublishProfile profile, CancellationToken ct)
@@ -595,10 +621,10 @@ public sealed class SessionRuntimeTests
 
         public void RaiseCaptureTargetClosed(string message) => CaptureTargetClosed?.Invoke(message);
 
-        public Task StopAsync()
+        public async Task StopAsync()
         {
             Stopped = true;
-            return Task.CompletedTask;
+            if (StopGate is not null) await StopGate.Task;
         }
 
         public Task AddViewerAsync(Guid participantId, CancellationToken ct)

@@ -77,6 +77,8 @@ public interface ISessionApi
 
     Task<Guid> JoinAsync(string code, CancellationToken ct);
 
+    Task<Guid> JoinByIdAsync(Guid sessionId, CancellationToken ct);
+
     Task EndAsync(Guid sessionId, CancellationToken ct);
 }
 

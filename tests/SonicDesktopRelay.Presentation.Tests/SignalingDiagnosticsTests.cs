@@ -113,6 +113,8 @@ public sealed class SignalingDiagnosticsTests
 
         public Task<Guid> JoinAsync(string code, CancellationToken ct) => Task.FromResult(SessionId);
 
+        public Task<Guid> JoinByIdAsync(Guid sessionId, CancellationToken ct) => Task.FromResult(sessionId);
+
         public Task EndAsync(Guid sessionId, CancellationToken ct) => Task.CompletedTask;
     }
 

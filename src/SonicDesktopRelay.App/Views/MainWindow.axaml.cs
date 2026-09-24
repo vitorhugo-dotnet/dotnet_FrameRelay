@@ -3,6 +3,9 @@ using System.Runtime.Versioning;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using Avalonia.Threading;
+using Microsoft.Extensions.Logging;
+using SonicDesktopRelay.Core;
 using SonicDesktopRelay.Presentation;
 using AppPage = SonicDesktopRelay.Presentation.Page;
 
@@ -12,6 +15,8 @@ namespace SonicDesktopRelay.App.Views;
 public partial class MainWindow : Window
 {
     private WindowState _restoreState = WindowState.Normal;
+    private readonly Action<LaunchActivation> _activationHandler;
+    private readonly ILogger _logger;
 
     public MainWindow()
     {
@@ -20,9 +25,14 @@ public partial class MainWindow : Window
         DataContext = shell;
         shell.PropertyChanged += OnShellPropertyChanged;
         AddHandler(KeyDownEvent, OnWindowKeyDown, RoutingStrategies.Tunnel);
+        _logger = FrameRelayLogging.Current?.LoggerFactory.CreateLogger("FrameRelay.LaunchActivation")
+                  ?? Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance;
+        _activationHandler = OnLaunchActivation;
+        LaunchActivationRouter.Register(_activationHandler);
         Closed += async (_, _) =>
         {
             shell.PropertyChanged -= OnShellPropertyChanged;
+            LaunchActivationRouter.Unregister(_activationHandler);
             await shell.DisposeAsync();
         };
     }
@@ -58,6 +68,24 @@ public partial class MainWindow : Window
             e.Handled = true;
         }
     }
+
+    private void OnLaunchActivation(LaunchActivation activation) =>
+        Dispatcher.UIThread.Post(async () =>
+        {
+            if (!IsVisible) Show();
+            if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
+            Activate();
+            try
+            {
+                if (DataContext is Shell shell)
+                    await shell.ActivateLaunchAsync(activation, CancellationToken.None);
+            }
+            catch (Exception exception)
+            {
+                _logger.LogError("Could not process FrameRelay launch activation. kind={Kind} type={ExceptionType}",
+                    activation.Kind, exception.GetType().Name);
+            }
+        });
 
     private void OnNavigate(object? sender, RoutedEventArgs e)
     {

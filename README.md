@@ -1,5 +1,11 @@
 # FrameRelay
 
+## Discord one-click sharing
+
+The standalone Go bot provides `/framerelay share` and `/framerelay watch <code>`. Share opens this desktop app with a short-lived, single-use launch link; the user selects a capture target and starts the normal screen-share flow. When the session is ready, the bot posts a watch button in the originating channel. Watch opens this app directly into the selected session. The app registers the `framerelay://` protocol for the current Windows user and forwards links to its existing process when one is already running.
+
+RelayControl owns the launch capabilities and the normal session authorization, device pairing, capacity, and join checks. See the bot repository's README for its environment and container setup.
+
 FrameRelay is a Windows desktop screen-sharing client built on .NET 10 and Avalonia. The current
 desktop project names still use the legacy `SonicDesktopRelay.*` namespace; this migration does
 not rename them.

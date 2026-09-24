@@ -1,10 +1,13 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.Net;
+using System.Net.Http;
 using System.Runtime.CompilerServices;
 using System.Runtime.Versioning;
 using Avalonia.Threading;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using SonicDesktopRelay.ApiClient;
 using SonicDesktopRelay.Core;
 using SonicDesktopRelay.Media;
 using SonicDesktopRelay.Media.Windows;
@@ -50,6 +53,7 @@ public sealed class Shell : INotifyPropertyChanged, IAsyncDisposable
     private double _playbackVolume = 100;
     private double _lastNonZeroPlaybackVolume = 100;
     private bool _isPlaybackMuted;
+    private Guid? _pendingShareIntentId;
     private long _uiFramesDelivered;
     private long _lastUiFrameUtcTicks;
 
@@ -575,12 +579,102 @@ public sealed class Shell : INotifyPropertyChanged, IAsyncDisposable
         _startingPublicShare = true;
         Raise(nameof(PreviewStatus));
         await _preview.SetTargetAsync(null);
-        try { await GuardAsync(() => runtime.StartSharingAsync(target, profile, DefaultMaxViewers, ct)); }
+        try
+        {
+            await GuardAsync(() => runtime.StartSharingAsync(target, profile, DefaultMaxViewers, ct));
+            if (_pendingShareIntentId is { } intentId
+                && runtime.Snapshot.Phase == SessionPhase.Sharing
+                && runtime.Snapshot.SessionId is { } sessionId)
+            {
+                try
+                {
+                    await CompleteShareWithRetryAsync(intentId, sessionId, ct);
+                    _pendingShareIntentId = null;
+                }
+                catch (ApiException exception)
+                {
+                    _pendingShareIntentId = null;
+                    _logger.LogWarning("Could not complete share launch intent. intent={IntentId} code={ErrorCode}",
+                        intentId, exception.ErrorCode);
+                    ShellError = "The share started, but Discord could not be notified. The session remains available in FrameRelay.";
+                }
+                catch (Exception exception) when (exception is HttpRequestException or TaskCanceledException)
+                {
+                    if (ct.IsCancellationRequested) throw;
+                    _pendingShareIntentId = null;
+                    _logger.LogWarning("Could not complete share launch intent. intent={IntentId} type={ExceptionType}",
+                        intentId, exception.GetType().Name);
+                    ShellError = "The share started, but Discord could not be notified. The session remains available in FrameRelay.";
+                }
+            }
+        }
         finally
         {
             _startingPublicShare = false;
             Raise(nameof(PreviewStatus));
             await UpdatePreviewAsync();
+        }
+    }
+
+    private async Task CompleteShareWithRetryAsync(Guid intentId, Guid sessionId, CancellationToken ct)
+    {
+        var delays = new[] { TimeSpan.Zero, TimeSpan.FromMilliseconds(500), TimeSpan.FromSeconds(1) };
+        for (var attempt = 0; attempt < delays.Length; attempt++)
+        {
+            if (delays[attempt] > TimeSpan.Zero) await Task.Delay(delays[attempt], ct);
+            try
+            {
+                await _composition!.LaunchIntents.CompleteShareAsync(intentId, sessionId, ct);
+                return;
+            }
+            catch (ApiException exception) when (attempt < delays.Length - 1
+                && (exception.StatusCode == HttpStatusCode.TooManyRequests
+                    || (int)exception.StatusCode >= 500))
+            {
+                // A lost successful response is safe to retry because RelayControl completion is idempotent.
+            }
+            catch (HttpRequestException) when (attempt < delays.Length - 1)
+            {
+                // Retry transient network failures while leaving media streaming active.
+            }
+            catch (TaskCanceledException) when (!ct.IsCancellationRequested && attempt < delays.Length - 1)
+            {
+                // The API client timed out before confirming the launch intent.
+            }
+        }
+        throw new InvalidOperationException("Share launch confirmation attempts were exhausted.");
+    }
+
+    public async Task ActivateLaunchAsync(LaunchActivation activation, CancellationToken ct)
+    {
+        var runtime = TryGetRuntime();
+        if (runtime is null || _composition is null) return;
+        ShellError = null;
+        try
+        {
+            if (activation.Kind == LaunchActivationKind.Share)
+            {
+                var intent = await _composition.LaunchIntents.ConsumeShareAsync(activation.Token, ct);
+                _pendingShareIntentId = intent.Id;
+                ViewModel.CurrentPage = Page.Share;
+                if (SelectedCaptureTarget is not null) await ShareAsync(ct);
+                return;
+            }
+
+            var sessionId = await _composition.LaunchIntents.ResolveWatchAsync(activation.Token, ct);
+            ViewModel.CurrentPage = Page.Watch;
+            await GuardAsync(() => runtime.StartWatchingSessionAsync(sessionId, ct));
+        }
+        catch (ApiException exception)
+        {
+            _logger.LogWarning("Launch activation was refused. kind={Kind} code={ErrorCode} status={StatusCode}",
+                activation.Kind, exception.ErrorCode, exception.StatusCode);
+            ShellError = exception.ErrorCode switch
+            {
+                "invalid_or_expired_intent" => "This FrameRelay launch link has expired or was already used.",
+                "invalid_or_expired_watch_link" or "session_unavailable" => "This FrameRelay share has ended or the link has expired.",
+                _ => "FrameRelay could not open that launch link. Try again from Discord."
+            };
         }
     }
 

@@ -23,6 +23,7 @@ public sealed class GraphicsCaptureWindowSource : IScreenCaptureSource, IScreenC
             ?? throw new ArgumentException("The capture source must expose diagnostics.", nameof(source));
         _source.FrameCaptured += frame => FrameCaptured?.Invoke(frame);
         _source.TargetClosed += NotifyClosed;
+        _source.DimensionsChanged += (width, height) => DimensionsChanged?.Invoke(width, height);
     }
 
     public MonitorInfo Monitor => _source.Monitor;
@@ -33,6 +34,7 @@ public sealed class GraphicsCaptureWindowSource : IScreenCaptureSource, IScreenC
     public long FramesDropped => _diagnostics.FramesDropped;
     public event Action<VideoFrame>? FrameCaptured;
     public event Action<string>? TargetClosed;
+    public event Action<int, int>? DimensionsChanged;
 
     public Task StartAsync(MonitorInfo monitor, VideoQuality quality, CancellationToken ct) =>
         Task.FromException(new ArgumentException("A window target is required.", nameof(monitor)));

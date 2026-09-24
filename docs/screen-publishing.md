@@ -20,7 +20,13 @@ Media Foundation H.264 encoder ----+
 WASAPI loopback -> PCM -> Opus ----+--> SIPSorcery WebRTC --> viewers
 ```
 
-`GraphicsCaptureScreenSource` is the only screen source. `ScreenPublishPipeline` owns one
+The Share page lets the publisher choose a connected monitor or an eligible application window.
+Window entries show their title and process name; refresh keeps the selection only while the
+HWND, PID and process start time still identify the same process. A closed window or exited
+owner stops publishing and ends the session.
+
+`GraphicsCaptureScreenSource` and `GraphicsCaptureWindowSource` share one WGC/D3D lifecycle.
+`ScreenPublishPipeline` owns one
 `IVideoEncoder` for the entire session, so adding viewers adds peer subscriptions rather than
 additional encoders.
 
@@ -56,6 +62,12 @@ connection as video.
 
 Video is required for a screen-sharing session. System audio is degradable: if the endpoint
 cannot be opened or disappears, video continues and Diagnostics records the audio reason.
+
+Window sharing captures audio from the selected process and its child-process tree. This feature
+requires Windows 10 build 20348 or later. On older builds, or when process-loopback activation
+fails, the session continues as video only and Diagnostics shows why audio is unavailable.
+Window sharing never falls back to system loopback, so audio from unrelated applications is not
+sent to viewers.
 
 ## One clock for audio and video
 
@@ -166,6 +178,7 @@ audio sink.
 The Diagnostics page reports runtime state rather than probing a second codec instance:
 
 - capture backend;
+- capture source type, selected window title/process identity, dimensions and close reason;
 - selected Media Foundation encoder/decoder transform;
 - transform CLSID and hardware/software path;
 - input/output pixel formats;
@@ -175,6 +188,7 @@ The Diagnostics page reports runtime state rather than probing a second codec in
 - selected Direct/TURN and UDP/TCP transport classification;
 - rejected transform candidates and reasons;
 - WASAPI capture/render endpoint state;
+- audio capture mode (system endpoint or process tree), process PID/name and activation/degraded status;
 - Opus encoder/decoder state;
 - session and bounded signaling metadata.
 
@@ -203,3 +217,4 @@ set. CI checks both the portable folder and single-file executable for legacy co
 
 See [native-media-validation.md](native-media-validation.md) for the automated and manual
 validation matrix.
+Diagnostics use structured metadata fields including `capture_source_type`, `target_title`, `target_process`, `target_pid`, `dimensions_width`, `dimensions_height`, `resize_reason`, `close_reason`, `audio_capture_mode`, `process_tree`, `activation_result`, and `degraded_reason`. No video frames or PCM bytes are logged.

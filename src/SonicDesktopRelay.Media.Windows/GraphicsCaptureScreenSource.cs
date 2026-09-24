@@ -27,6 +27,7 @@ public sealed class GraphicsCaptureScreenSource : IScreenCaptureSource, IScreenC
         _source = new GraphicsCaptureItemSource();
         _source.FrameCaptured += frame => FrameCaptured?.Invoke(frame);
         _source.TargetClosed += reason => TargetClosed?.Invoke(reason);
+        _source.DimensionsChanged += (width, height) => DimensionsChanged?.Invoke(width, height);
     }
 
     /// <summary>
@@ -55,6 +56,8 @@ public sealed class GraphicsCaptureScreenSource : IScreenCaptureSource, IScreenC
     public event Action<VideoFrame>? FrameCaptured;
 
     public event Action<string>? TargetClosed;
+
+    public event Action<int, int>? DimensionsChanged;
 
     public long FramesArrived => _source.FramesArrived;
 

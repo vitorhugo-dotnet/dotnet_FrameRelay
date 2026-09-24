@@ -87,6 +87,8 @@ internal sealed class GraphicsCaptureItemSource : IScreenCaptureSource, IScreenC
 
     public event Action<VideoFrame>? FrameCaptured;
 
+    public event Action<int, int>? DimensionsChanged;
+
     public event Action<string>? TargetClosed;
 
     public long FramesArrived => Interlocked.Read(ref _framesArrived);
@@ -183,7 +185,9 @@ internal sealed class GraphicsCaptureItemSource : IScreenCaptureSource, IScreenC
 
         lock (_gate)
         {
-            if (!_running) return Task.CompletedTask;
+            if (!_running && _item is null && _pool is null && _session is null && _staging is null
+                && _context is null && _device is null && _runtimeDevice is null)
+                return Task.CompletedTask;
 
             // Cleared inside the lock so that any callback already in flight finishes, and any
             // callback that arrives next sees a stopped source and returns before touching
@@ -303,6 +307,7 @@ internal sealed class GraphicsCaptureItemSource : IScreenCaptureSource, IScreenC
         {
             _poolSize = contentSize;
             pool.Recreate(_runtimeDevice, DirectXPixelFormat.B8G8R8A8UIntNormalized, PoolDepth, _poolSize);
+            DimensionsChanged?.Invoke(contentSize.Width, contentSize.Height);
             return null;
         }
 

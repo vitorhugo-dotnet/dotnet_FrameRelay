@@ -28,6 +28,12 @@ public interface IScreenCaptureSource : IAsyncDisposable
 
     event Action<VideoFrame>? FrameCaptured;
 
+    event Action<int, int>? DimensionsChanged
+    {
+        add { }
+        remove { }
+    }
+
     event Action<string>? TargetClosed
     {
         add { }

@@ -31,7 +31,7 @@ public sealed class ProcessLoopbackAudioSource : IAudioCaptureSource
     private readonly object _gate = new();
     private IProcessLoopbackClient? _client;
     private bool _acceptAudio;
-    private bool _disposed;
+        private bool _disposed;
 
     public ProcessLoopbackAudioSource(WindowInfo target) : this(target, new ProcessLoopbackClientFactory(), null) { }
 
@@ -48,6 +48,7 @@ public sealed class ProcessLoopbackAudioSource : IAudioCaptureSource
     public bool IncludesProcessTree => true;
     public bool IsAvailable { get; private set; }
     public string? DegradedReason { get; private set; }
+    public string ActivationResult { get; private set; } = "not-started";
     public event Action<AudioFrame>? AudioCaptured;
 
     public Task StartAsync(CancellationToken ct)
@@ -60,6 +61,7 @@ public sealed class ProcessLoopbackAudioSource : IAudioCaptureSource
             if (!_isSupported)
             {
                 DegradedReason = "Per-process audio capture requires Windows build 20348 or later.";
+                ActivationResult = "unsupported_os";
                 return Task.CompletedTask;
             }
 
@@ -71,6 +73,7 @@ public sealed class ProcessLoopbackAudioSource : IAudioCaptureSource
             catch (Exception e) when (e is not OperationCanceledException)
             {
                 DegradedReason = $"Per-process audio capture is unavailable: {e.Message}";
+                ActivationResult = "activation_failed";
                 return Task.CompletedTask;
             }
 
@@ -84,10 +87,12 @@ public sealed class ProcessLoopbackAudioSource : IAudioCaptureSource
                 client.Start();
                 IsAvailable = true;
                 DegradedReason = null;
+                ActivationResult = "started";
             }
             catch (Exception e)
             {
                 DegradedReason = $"Per-process audio capture failed to start: {e.Message}";
+                ActivationResult = "start_failed";
                 _acceptAudio = false;
                 client.DataAvailable -= OnDataAvailable;
                 client.Stopped -= OnStopped;
@@ -141,6 +146,7 @@ public sealed class ProcessLoopbackAudioSource : IAudioCaptureSource
             IsAvailable = false;
             _accumulator.Reset();
             DegradedReason ??= $"Per-process audio capture stopped: {error.Message}";
+            ActivationResult = "stopped_with_error";
         }
     }
 

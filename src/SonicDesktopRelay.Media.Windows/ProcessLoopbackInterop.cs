@@ -55,9 +55,9 @@ internal static class ProcessLoopbackInterop
             var handler = new ActivationHandler(completed);
             var audioClientIid = AudioClientIid;
             Marshal.ThrowExceptionForHR(ActivateAudioInterfaceAsync(ProcessLoopbackDevice, ref audioClientIid,
-                ref prop, handler, out _));
-            if (!completed.WaitOne(TimeSpan.FromSeconds(15)))
-                throw new TimeoutException("Process-loopback activation timed out.");
+                ref prop, handler, out var activationOperation));
+            try { completed.WaitOne(); }
+            finally { if (activationOperation != nint.Zero) Marshal.Release(activationOperation); }
             Marshal.ThrowExceptionForHR(handler.Result);
             if (handler.Client is null) throw new InvalidOperationException("Audio activation returned no client.");
             return new ProcessLoopbackClient(handler.Client, sampleRate, channels, bitsPerSample, frameSamples);
@@ -70,11 +70,11 @@ internal static class ProcessLoopbackInterop
 
     [StructLayout(LayoutKind.Sequential)]
     private struct ProcessParameters { public uint TargetProcessId; public int Mode; }
-    [StructLayout(LayoutKind.Explicit, Size = 16)]
+    [StructLayout(LayoutKind.Sequential)]
     private struct ActivationParameters
     {
-        [FieldOffset(0)] public int ActivationType;
-        [FieldOffset(8)] public ProcessParameters Process;
+        public int ActivationType;
+        public ProcessParameters Process;
     }
     [StructLayout(LayoutKind.Sequential)]
     private struct PropVariant

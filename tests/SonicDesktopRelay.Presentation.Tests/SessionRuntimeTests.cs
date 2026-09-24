@@ -213,6 +213,26 @@ public sealed class SessionRuntimeTests
     }
 
     [Fact]
+    public async Task A_window_closed_while_sharing_ends_once_and_detaches_signaling()
+    {
+        var api = new FakeSessionApi();
+        var connection = new FakeConnection();
+        var host = new FakeVideoPublishHost();
+        var runtime = new SessionRuntime(api, () => connection, host);
+        await runtime.StartSharingAsync(new CaptureTarget.Window(Window), VideoPublishProfile.Default, 3, CancellationToken.None);
+
+        host.RaiseCaptureTargetClosed("Editor process exited");
+        host.RaiseCaptureTargetClosed("duplicate notification");
+        await Task.Yield();
+
+        Assert.Equal(SessionPhase.Failed, runtime.Snapshot.Phase);
+        Assert.Equal("capture_target_closed", runtime.Snapshot.Error);
+        Assert.Equal(1, api.EndCalls);
+        Assert.True(host.Stopped);
+        Assert.Equal(SignalingState.Disconnected, runtime.Snapshot.Signaling);
+    }
+
+    [Fact]
     public async Task A_viewer_joining_is_added_to_the_publisher()
     {
         var api = new FakeSessionApi();

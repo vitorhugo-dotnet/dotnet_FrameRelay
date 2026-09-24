@@ -83,6 +83,20 @@ public sealed class ProcessLoopbackAudioSourceTests
         Assert.Equal(0, count);
     }
 
+    [Fact]
+    public async Task Silent_process_output_is_forwarded_as_a_silent_pcm_frame()
+    {
+        var factory = new FakeFactory();
+        await using var source = new ProcessLoopbackAudioSource(Window, factory, isSupported: true);
+        var frames = new List<AudioFrame>();
+        source.AudioCaptured += frames.Add;
+        await source.StartAsync(default);
+        factory.Client!.Push(new byte[3840]);
+
+        var frame = Assert.Single(frames);
+        Assert.All(frame.Data.ToArray(), sample => Assert.Equal(0, sample));
+    }
+
     private sealed class FakeFactory : IProcessLoopbackClientFactory
     {
         public int CreateCalls { get; private set; }

@@ -35,6 +35,7 @@ public sealed class RtcVideoPublishHost(
     private IAudioCaptureSource? _audioSource;
     private VideoPublisher? _publisher;
     private string? _audioPipelineFailure;
+    private CaptureTarget? _activeCaptureTarget;
 
     public string? EncoderName { get; private set; }
 
@@ -138,7 +139,9 @@ public sealed class RtcVideoPublishHost(
 
             var capture = _captureSelection.CreateVideo(target);
             _capture = capture;
+            _activeCaptureTarget = target;
             ((IScreenCaptureSource)capture).TargetClosed += OnCaptureTargetClosed;
+            capture.DimensionsChanged += OnCaptureDimensionsChanged;
             var pipeline = new ScreenPublishPipeline(
                 capture,
                 encoder,
@@ -194,13 +197,32 @@ public sealed class RtcVideoPublishHost(
             _publisher.TransportDiagnosticsChanged += OnTransportDiagnosticsChanged;
 
             _logger.LogInformation(
-                "Publisher media stack started. encoder={EncoderName} transform={TransformName} acceleration={Acceleration} monitor={MonitorId} dimensions={Width}x{Height}",
+                "Publisher media stack started. encoder={EncoderName} transform={TransformName} acceleration={Acceleration} capture_source_type={CaptureSourceType} target_title={TargetTitle} target_process={TargetProcess} target_pid={TargetPid} dimensions_width={Width} dimensions_height={Height}",
                 encoder.Name,
                 encoder.TransformInfo?.Name ?? encoder.Name,
                 encoder.TransformInfo?.IsHardware == true ? "hardware" : "software",
-                target switch { CaptureTarget.Monitor m => m.Info.Id, CaptureTarget.Window w => $"HWND:{w.Info.Handle:X} {w.Info.Title}", _ => "unknown" },
+                target is CaptureTarget.Window ? "window" : "monitor",
+                target is CaptureTarget.Window targetWindow ? targetWindow.Info.Title : null,
+                target is CaptureTarget.Window processWindow ? processWindow.Info.ProcessName : null,
+                target is CaptureTarget.Window pidWindow ? pidWindow.Info.ProcessId : null,
                 capture.CurrentDimensions.Width,
                 capture.CurrentDimensions.Height);
+
+            _logger.LogInformation(
+                "Publisher audio capture selected. audio_capture_mode={AudioCaptureMode} target_process={TargetProcess} target_pid={TargetPid} process_tree={IncludesProcessTree} available={Available} activation_result={ActivationResult} degraded_reason={DegradedReason}",
+                target is CaptureTarget.Window ? "process_tree" : "system_loopback",
+                target is CaptureTarget.Window audioWindow ? audioWindow.Info.ProcessName : null,
+                target is CaptureTarget.Window audioPidWindow ? audioPidWindow.Info.ProcessId : null,
+                target is CaptureTarget.Window,
+                audioSource is not null
+                    && (audioSource is not ProcessLoopbackAudioSource processSource || processSource.IsAvailable),
+                audioSource switch
+                {
+                    null => "unsupported_os",
+                    ProcessLoopbackAudioSource process => process.ActivationResult,
+                    _ => "started"
+                },
+                _audioPipelineFailure);
         }
         catch (Exception e) when (e is InvalidOperationException or PlatformNotSupportedException
                                       or HttpRequestException or ApiException)
@@ -254,7 +276,21 @@ public sealed class RtcVideoPublishHost(
         => _audioPipelineFailure ??= error.Message;
 
     private void OnCaptureTargetClosed(string reason)
-        => CaptureTargetClosed?.Invoke(reason);
+    {
+        _logger.LogWarning("Capture target closed. close_reason={CloseReason}", reason);
+        CaptureTargetClosed?.Invoke(reason);
+    }
+
+    private void OnCaptureDimensionsChanged(int width, int height)
+    {
+        _logger.LogInformation(
+            "Capture target resized. capture_source_type={CaptureSourceType} target_title={TargetTitle} dimensions_width={Width} dimensions_height={Height} resize_reason={ResizeReason}",
+            _activeCaptureTarget is CaptureTarget.Window ? "window" : "monitor",
+            (_activeCaptureTarget as CaptureTarget.Window)?.Info.Title,
+            width,
+            height,
+            "content_size_changed");
+    }
 
     private void OnTransportDiagnosticsChanged(Guid participantId, RtcTransportDiagnostics diagnostics)
     {
@@ -296,8 +332,12 @@ public sealed class RtcVideoPublishHost(
         _audioSource = null;
 
         if (_capture is { } captureSource)
+        {
             captureSource.TargetClosed -= OnCaptureTargetClosed;
+            captureSource.DimensionsChanged -= OnCaptureDimensionsChanged;
+        }
         _capture = null;
+        _activeCaptureTarget = null;
 
         if (_pipeline is not null)
         {

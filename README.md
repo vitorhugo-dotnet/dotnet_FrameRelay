@@ -7,6 +7,8 @@ not rename them.
 ## Runtime requirements
 
 - Windows 10 build 19041 or later.
+- Windows 10 build 20348 or later for audio from a selected application window; older builds
+  can still share window video without audio.
 - Access to the FrameRelay backend/signaling service.
 - No separate video codec runtime installation. Screen video uses the H.264 transforms shipped
   with Windows.
@@ -26,9 +28,16 @@ dotnet test SonicDesktopRelay.sln --configuration Release --no-build --no-restor
 Publishing uses one media session for every viewer:
 
 ```text
-Windows.Graphics.Capture -> BGRA -> NV12 -> Media Foundation H.264 -> WebRTC
-WASAPI loopback -> PCM 48 kHz stereo -> Opus ----------------------^
+Monitor: Windows.Graphics.Capture -> BGRA -> NV12 -> Media Foundation H.264 -> WebRTC
+         WASAPI system loopback -> PCM 48 kHz stereo -> Opus ---------^
+Window:  Windows.Graphics.Capture -> BGRA -> NV12 -> Media Foundation H.264 -> WebRTC
+         selected process tree -> PCM 48 kHz stereo -> Opus ----------^
 ```
+
+The Share page can target a monitor or an eligible application window. Window audio is limited
+to the selected process and its child processes. It never falls back to system loopback; when
+process capture is unsupported or unavailable, viewers receive window video only. See
+[screen publishing and watching](docs/screen-publishing.md) for target and diagnostics details.
 
 Watching mirrors that path:
 

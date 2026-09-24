@@ -463,9 +463,18 @@ public sealed class Shell : INotifyPropertyChanged
             }
             catch (ApiException exception)
             {
+                _pendingShareIntentId = null;
                 _logger.LogWarning("Could not complete share launch intent. intent={IntentId} code={ErrorCode}",
                     intentId, exception.ErrorCode);
-                ShellError = "The share started, but Discord could not be notified. Try again from Discord.";
+                ShellError = "The share started, but Discord could not be notified. The session remains available in FrameRelay.";
+            }
+            catch (Exception exception) when (exception is HttpRequestException or TaskCanceledException)
+            {
+                if (ct.IsCancellationRequested) throw;
+                _pendingShareIntentId = null;
+                _logger.LogWarning("Could not complete share launch intent. intent={IntentId} type={ExceptionType}",
+                    intentId, exception.GetType().Name);
+                ShellError = "The share started, but Discord could not be notified. The session remains available in FrameRelay.";
             }
         }
     }

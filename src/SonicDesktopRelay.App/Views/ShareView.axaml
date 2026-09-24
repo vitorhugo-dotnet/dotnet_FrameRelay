@@ -1,6 +1,7 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:app="clr-namespace:SonicDesktopRelay.App"
+             xmlns:controls="clr-namespace:SonicDesktopRelay.App.Controls"
              xmlns:media="clr-namespace:SonicDesktopRelay.Media;assembly=SonicDesktopRelay.Media"
              x:Class="SonicDesktopRelay.App.Views.ShareView"
              x:DataType="app:Shell"
@@ -40,7 +41,7 @@
             <WrapPanel Orientation="Horizontal">
                 <StackPanel Name="controlColumn" Margin="0,0,16,16"
                             Spacing="{StaticResource SpaceMd}">
-                    <Border Classes="card unavailable" IsEnabled="False" Focusable="False">
+                    <Border Classes="card">
                         <StackPanel Spacing="{StaticResource SpaceSm}">
                             <TextBlock Text="Display preview"
                                        FontSize="{StaticResource FontSizeLg}"
@@ -48,17 +49,19 @@
                                        Foreground="{StaticResource TextPrimaryBrush}" />
                             <Border Background="{StaticResource RailBrush}"
                                     CornerRadius="{StaticResource ControlCornerRadius}"
-                                    MinHeight="180">
-                                <StackPanel HorizontalAlignment="Center"
-                                            VerticalAlignment="Center"
-                                            Spacing="{StaticResource SpaceXs}">
-                                    <TextBlock Text="---" HorizontalAlignment="Center"
+                                    Height="240" ClipToBounds="True">
+                                <Grid>
+                                    <controls:VideoSurface Name="PreviewSurface"
+                                                           HorizontalAlignment="Stretch"
+                                                           VerticalAlignment="Stretch" />
+                                    <TextBlock Name="PreviewEmptyMarker" Text="---"
+                                               HorizontalAlignment="Center" VerticalAlignment="Center"
                                                FontSize="{StaticResource FontSizeXl}"
                                                Foreground="{StaticResource TextMutedBrush}" />
-                                    <TextBlock Text="Preview unavailable"
-                                               Foreground="{StaticResource TextSecondaryBrush}" />
-                                </StackPanel>
+                                </Grid>
                             </Border>
+                            <TextBlock Text="{Binding PreviewStatus}" TextWrapping="Wrap"
+                                       Foreground="{StaticResource TextSecondaryBrush}" />
                         </StackPanel>
                     </Border>
 
@@ -118,8 +121,6 @@
                                         </DataTemplate>
                                     </ListBox.ItemTemplate>
                                 </ListBox>
-                                <TextBlock Text="{Binding WindowAudioStatus}"
-                                           Foreground="{StaticResource TextSecondaryBrush}" />
                             </StackPanel>
                             <StackPanel Spacing="{StaticResource SpaceXs}">
                                 <TextBlock Text="Video quality" FontSize="{StaticResource FontSizeSm}"
@@ -152,28 +153,6 @@
                         </StackPanel>
                     </Border>
 
-                    <Border Classes="card unavailable" IsEnabled="False" Focusable="False">
-                        <StackPanel Spacing="{StaticResource SpaceXs}">
-                            <TextBlock Text="Share system audio" FontSize="{StaticResource FontSizeMd}"
-                                       FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" />
-                            <TextBlock Text="Audio control unavailable" FontSize="{StaticResource FontSizeSm}"
-                                       Foreground="{StaticResource TextSecondaryBrush}" />
-                        </StackPanel>
-                    </Border>
-
-                    <Border Classes="card">
-                        <StackPanel Spacing="{StaticResource SpaceSm}">
-                            <Button Content="Start sharing" HorizontalAlignment="Stretch"
-                                    Background="{StaticResource AccentBrush}"
-                                    IsEnabled="{Binding ViewModel.CanShare}" Click="OnShare" />
-                            <Button Content="Stop sharing" HorizontalAlignment="Stretch"
-                                    IsEnabled="{Binding ViewModel.CanStop}" Click="OnStop" />
-                            <TextBlock Text="{Binding ShellError}"
-                                       IsVisible="{Binding ShellError, Converter={x:Static ObjectConverters.IsNotNull}}"
-                                       TextWrapping="Wrap" FontSize="{StaticResource FontSizeSm}"
-                                       Foreground="{StaticResource DangerBrush}" />
-                        </StackPanel>
-                    </Border>
                 </StackPanel>
 
                 <StackPanel Name="sessionColumn" Margin="0,0,16,16"
@@ -207,15 +186,23 @@
                             <TextBlock Text="{Binding ViewModel.ViewerCountText, StringFormat='Viewers: {0}'}"
                                        FontSize="{StaticResource FontSizeSm}"
                                        Foreground="{StaticResource TextSecondaryBrush}" />
+                            <TextBlock Text="{Binding ShareAudioStatus, StringFormat='Audio: {0}'}"
+                                       TextWrapping="Wrap" FontSize="{StaticResource FontSizeSm}"
+                                       Foreground="{StaticResource TextSecondaryBrush}" />
                         </StackPanel>
                     </Border>
 
-                    <Border Classes="card unavailable" IsEnabled="False" Focusable="False">
+                    <Border Classes="card">
                         <StackPanel Spacing="{StaticResource SpaceSm}">
-                            <TextBlock Text="Connected viewers" FontSize="{StaticResource FontSizeLg}"
-                                       FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" />
-                            <TextBlock Text="Viewer details unavailable" FontSize="{StaticResource FontSizeSm}"
-                                       Foreground="{StaticResource TextSecondaryBrush}" />
+                            <Button Content="Start sharing" HorizontalAlignment="Stretch"
+                                    Background="{StaticResource AccentBrush}"
+                                    IsEnabled="{Binding CanStartShare}" Click="OnShare" />
+                            <Button Content="Stop sharing" HorizontalAlignment="Stretch"
+                                    IsEnabled="{Binding ViewModel.CanStop}" Click="OnStop" />
+                            <TextBlock Text="{Binding ShellError}"
+                                       IsVisible="{Binding ShellError, Converter={x:Static ObjectConverters.IsNotNull}}"
+                                       TextWrapping="Wrap" FontSize="{StaticResource FontSizeSm}"
+                                       Foreground="{StaticResource DangerBrush}" />
                         </StackPanel>
                     </Border>
 
@@ -223,7 +210,7 @@
                         <StackPanel Spacing="{StaticResource SpaceMd}">
                             <TextBlock Text="Connection summary" FontSize="{StaticResource FontSizeLg}"
                                        FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" />
-                            <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto,Auto,Auto,Auto"
+                            <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto"
                                   RowSpacing="{StaticResource SpaceSm}">
                                 <TextBlock Grid.Row="0" Text="Session" Foreground="{StaticResource TextSecondaryBrush}" />
                                 <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding ViewModel.Snapshot.Phase}"
@@ -232,14 +219,23 @@
                                 <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding ViewModel.Snapshot.Signaling}"
                                            Foreground="{StaticResource TextPrimaryBrush}" />
                                 <TextBlock Grid.Row="2" Text="Latency" Foreground="{StaticResource TextSecondaryBrush}" />
-                                <TextBlock Grid.Row="2" Grid.Column="1" Text="---"
-                                           Foreground="{StaticResource TextMutedBrush}" />
-                                <TextBlock Grid.Row="3" Text="Bitrate" Foreground="{StaticResource TextSecondaryBrush}" />
-                                <TextBlock Grid.Row="3" Grid.Column="1" Text="---"
-                                           Foreground="{StaticResource TextMutedBrush}" />
-                                <TextBlock Grid.Row="4" Text="Codec" Foreground="{StaticResource TextSecondaryBrush}" />
-                                <TextBlock Grid.Row="4" Grid.Column="1" Text="---"
-                                           Foreground="{StaticResource TextMutedBrush}" />
+                                <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding ViewModel.LatencyText}"
+                                           Foreground="{StaticResource TextPrimaryBrush}" />
+                                <TextBlock Grid.Row="3" Text="Resolution" Foreground="{StaticResource TextSecondaryBrush}" />
+                                <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding ViewModel.ResolutionText}"
+                                           Foreground="{StaticResource TextPrimaryBrush}" />
+                                <TextBlock Grid.Row="4" Text="Bitrate" Foreground="{StaticResource TextSecondaryBrush}" />
+                                <TextBlock Grid.Row="4" Grid.Column="1" Text="{Binding ViewModel.VideoBitrateText}"
+                                           Foreground="{StaticResource TextPrimaryBrush}" />
+                                <TextBlock Grid.Row="5" Text="Frame rate" Foreground="{StaticResource TextSecondaryBrush}" />
+                                <TextBlock Grid.Row="5" Grid.Column="1" Text="{Binding ViewModel.VideoFrameRateText}"
+                                           Foreground="{StaticResource TextPrimaryBrush}" />
+                                <TextBlock Grid.Row="6" Text="Codec" Foreground="{StaticResource TextSecondaryBrush}" />
+                                <TextBlock Grid.Row="6" Grid.Column="1" Text="{Binding ViewModel.CodecText}"
+                                           Foreground="{StaticResource TextPrimaryBrush}" />
+                                <TextBlock Grid.Row="7" Text="Transport" Foreground="{StaticResource TextSecondaryBrush}" />
+                                <TextBlock Grid.Row="7" Grid.Column="1" Text="{Binding ViewModel.TransportText}"
+                                           TextWrapping="Wrap" Foreground="{StaticResource TextPrimaryBrush}" />
                             </Grid>
                         </StackPanel>
                     </Border>

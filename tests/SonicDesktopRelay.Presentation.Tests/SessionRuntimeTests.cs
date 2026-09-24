@@ -23,6 +23,111 @@ public sealed class SessionRuntimeTests
     }
 
     [Fact]
+    public async Task A_late_metric_sample_cannot_restore_stopped_session_data()
+    {
+        var runtime = new SessionRuntime(new FakeSessionApi(), () => new FakeConnection());
+        var metrics = new SessionMediaMetrics(1920, 1080, 4_000_000, 30, null, "H.264", "Direct/UDP");
+        await runtime.StartWatchingAsync("AB12CD", CancellationToken.None);
+        runtime.UpdateMetrics(metrics);
+        Assert.Equal(metrics, runtime.Snapshot.Metrics);
+
+        await runtime.StopAsync(CancellationToken.None);
+        runtime.UpdateMetrics(metrics);
+
+        Assert.Equal(SessionPhase.Idle, runtime.Snapshot.Phase);
+        Assert.Null(runtime.Snapshot.Metrics);
+    }
+
+    [Fact]
+    public async Task Late_watch_and_signaling_callbacks_cannot_restore_stopped_session_state()
+    {
+        var host = new FakeVideoWatchHost();
+        var connection = new FakeConnection();
+        var runtime = new SessionRuntime(new FakeSessionApi(), () => connection, watchHost: host);
+        var metrics = new SessionMediaMetrics(1920, 1080, 4_000_000, 30, null, "H.264", "Direct/UDP");
+        await runtime.StartWatchingAsync("AB12CD", CancellationToken.None);
+        runtime.UpdateMetrics(metrics);
+        var delayedSignaling = connection.CaptureStateChanged();
+        delayedSignaling?.Invoke(SignalingState.Reconnecting);
+        Assert.Equal(SignalingState.Reconnecting, runtime.Snapshot.Signaling);
+
+        await runtime.StopAsync(CancellationToken.None);
+        host.Raise(WatchState.Receiving);
+        host.RaiseNegotiationFailure("late negotiation failure");
+        delayedSignaling?.Invoke(SignalingState.Connected);
+
+        Assert.Equal(SessionSnapshot.Idle, runtime.Snapshot);
+    }
+
+    [Fact]
+    public async Task Retired_session_callbacks_cannot_change_a_new_watch_session()
+    {
+        var host = new FakeVideoWatchHost();
+        var firstConnection = new FakeConnection();
+        var secondConnection = new FakeConnection();
+        var connections = new Queue<FakeConnection>([firstConnection, secondConnection]);
+        var runtime = new SessionRuntime(new FakeSessionApi(), () => connections.Dequeue(), watchHost: host);
+
+        await runtime.StartWatchingAsync("AB12CD", CancellationToken.None);
+        var oldWatchState = host.CaptureWatchStateChanged();
+        var oldNegotiationFailure = host.CaptureNegotiationFailed();
+        var oldSignalingState = firstConnection.CaptureStateChanged();
+        var oldFrame = firstConnection.CaptureFrameReceived();
+        await runtime.StopAsync(CancellationToken.None);
+
+        await runtime.StartWatchingAsync("AB12CD", CancellationToken.None);
+        host.Raise(WatchState.Receiving);
+        runtime.UpdateMetrics(new SessionMediaMetrics(1280, 720, 2_000_000, 24, null, "H.264", "TURN/TCP"));
+        var expected = runtime.Snapshot;
+
+        oldWatchState?.Invoke(WatchState.Stalled);
+        oldNegotiationFailure?.Invoke("old peer failed");
+        oldSignalingState?.Invoke(SignalingState.Reconnecting);
+        oldFrame?.Invoke(new SignalingEnvelope(SignalingMessageTypes.SessionEnded,
+            null, null, null, null, null, null));
+
+        Assert.Equal(SessionPhase.Watching, runtime.Snapshot.Phase);
+        Assert.Equal(WatchState.Receiving, runtime.Snapshot.Watching);
+        Assert.Equal(expected, runtime.Snapshot);
+    }
+
+    [Fact]
+    public async Task Retired_capture_closure_cannot_stop_a_new_sharing_session()
+    {
+        var api = new FakeSessionApi();
+        var host = new FakeVideoPublishHost();
+        var runtime = new SessionRuntime(api, () => new FakeConnection(), host);
+        await runtime.StartSharingAsync(Monitor, 3, CancellationToken.None);
+        var oldClosure = host.CaptureTargetClosedHandler();
+        await runtime.StopAsync(CancellationToken.None);
+
+        await runtime.StartSharingAsync(Monitor, 3, CancellationToken.None);
+        runtime.UpdateMetrics(new SessionMediaMetrics(1920, 1080, null, null, null, "H.264", "Direct/UDP"));
+        var expected = runtime.Snapshot;
+        var endCalls = api.EndCalls;
+
+        oldClosure?.Invoke("session A's source closed late");
+
+        Assert.Equal(SessionPhase.Sharing, runtime.Snapshot.Phase);
+        Assert.Equal(expected, runtime.Snapshot);
+        Assert.Equal(endCalls, api.EndCalls);
+    }
+
+    [Fact]
+    public async Task Metrics_clear_across_a_role_change()
+    {
+        var runtime = new SessionRuntime(new FakeSessionApi(), () => new FakeConnection());
+        var metrics = new SessionMediaMetrics(1920, 1080, 4_000_000, 30, null, "H.264", "Direct/UDP");
+        await runtime.StartSharingAsync(Monitor, 3, CancellationToken.None);
+        runtime.UpdateMetrics(metrics);
+
+        await runtime.StopAsync(CancellationToken.None);
+        await runtime.StartWatchingAsync("AB12CD", CancellationToken.None);
+
+        Assert.Null(runtime.Snapshot.Metrics);
+    }
+
+    [Fact]
     public async Task Sharing_creates_the_session_and_exposes_its_code()
     {
         var api = new FakeSessionApi();
@@ -563,6 +668,10 @@ public sealed class SessionRuntimeTests
 
         public event Action<string>? NegotiationFailed;
 
+        public Action<WatchState>? CaptureWatchStateChanged() => WatchStateChanged;
+
+        public Action<string>? CaptureNegotiationFailed() => NegotiationFailed;
+
         public Task StartAsync(CancellationToken ct)
         {
             if (StartFailure is not null) throw new InvalidOperationException(StartFailure);
@@ -612,6 +721,8 @@ public sealed class SessionRuntimeTests
         public TaskCompletionSource? StopGate { get; set; }
 
         public event Action<string>? CaptureTargetClosed;
+
+        public Action<string>? CaptureTargetClosedHandler() => CaptureTargetClosed;
 
         public Task StartAsync(MonitorInfo monitor, VideoPublishProfile profile, CancellationToken ct)
         {
@@ -712,6 +823,10 @@ public sealed class SessionRuntimeTests
         public event Action<SignalingEnvelope>? FrameReceived;
 
         public event Action<SignalingState>? StateChanged;
+
+        public Action<SignalingState>? CaptureStateChanged() => StateChanged;
+
+        public Action<SignalingEnvelope>? CaptureFrameReceived() => FrameReceived;
 
         public Task StartAsync(Guid sessionId, CancellationToken ct)
         {

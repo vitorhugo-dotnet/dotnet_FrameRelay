@@ -126,6 +126,70 @@ public sealed class MainWindowViewModelTests
     }
 
     [Fact]
+    public void Zero_viewers_is_an_available_sharing_count()
+    {
+        var viewModel = new MainWindowViewModel();
+        var changed = new List<string?>();
+        viewModel.PropertyChanged += (_, args) => changed.Add(args.PropertyName);
+
+        Assert.False(viewModel.HasViewerCount);
+        viewModel.Apply(new SessionSnapshot(SessionPhase.Sharing, "AB12CD",
+            Guid.NewGuid(), 0, SignalingState.Connected, null));
+
+        Assert.True(viewModel.HasViewerCount);
+        Assert.Equal("0", viewModel.ViewerCountText);
+        Assert.Contains(nameof(viewModel.HasViewerCount), changed);
+        Assert.Equal("---", viewModel.ResolutionText);
+        Assert.Equal("---", viewModel.VideoBitrateText);
+        Assert.Equal("---", viewModel.VideoFrameRateText);
+        Assert.Equal("---", viewModel.LatencyText);
+        Assert.Equal("---", viewModel.CodecText);
+        Assert.Equal("---", viewModel.TransportText);
+
+        viewModel.Apply(SessionSnapshot.Idle);
+        Assert.False(viewModel.HasViewerCount);
+        Assert.Equal("---", viewModel.ViewerCountText);
+    }
+
+    [Fact]
+    public void Live_metrics_are_formatted_from_the_current_snapshot()
+    {
+        var viewModel = new MainWindowViewModel();
+        var metrics = new SessionMediaMetrics(1920, 1080, 2_500_000, 29.5, 42, "H.264", "TURN/TCP");
+
+        viewModel.Apply(new SessionSnapshot(SessionPhase.Watching, null,
+            Guid.NewGuid(), 0, SignalingState.Connected, null, Metrics: metrics));
+
+        Assert.Equal("1920 × 1080", viewModel.ResolutionText);
+        Assert.Equal("2.5 Mbps", viewModel.VideoBitrateText);
+        Assert.Equal("29.5 fps", viewModel.VideoFrameRateText);
+        Assert.Equal("42 ms", viewModel.LatencyText);
+        Assert.Equal("H.264", viewModel.CodecText);
+        Assert.Equal("TURN/TCP", viewModel.TransportText);
+
+        viewModel.Apply(SessionSnapshot.Idle);
+        Assert.Equal("---", viewModel.ResolutionText);
+        Assert.Equal("---", viewModel.VideoBitrateText);
+        Assert.Equal("---", viewModel.VideoFrameRateText);
+        Assert.Equal("---", viewModel.LatencyText);
+        Assert.Equal("---", viewModel.CodecText);
+        Assert.Equal("---", viewModel.TransportText);
+    }
+
+    [Fact]
+    public void Publisher_quality_targets_are_identified_as_targets()
+    {
+        var viewModel = new MainWindowViewModel();
+        var metrics = new SessionMediaMetrics(TargetVideoBitrateBitsPerSecond: 4_000_000,
+            TargetVideoFramesPerSecond: 30);
+        viewModel.Apply(new SessionSnapshot(SessionPhase.Sharing, "AB12CD", Guid.NewGuid(), 0,
+            SignalingState.Connected, null, Metrics: metrics));
+
+        Assert.Equal("4.0 Mbps target", viewModel.VideoBitrateText);
+        Assert.Equal("30.0 fps target", viewModel.VideoFrameRateText);
+    }
+
+    [Fact]
     public void A_viewer_negotiation_failure_replaces_the_generic_waiting_message()
     {
         var viewModel = new MainWindowViewModel();

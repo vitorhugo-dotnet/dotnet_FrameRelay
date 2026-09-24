@@ -48,7 +48,9 @@
                                    Foreground="{StaticResource TextMutedBrush}" />
                     </StackPanel>
                 </Border>
-                <Border Classes="card summaryCard" Margin="0,0,16,16">
+                <Border Classes="card summaryCard"
+                        Classes.unavailable="{Binding !ViewModel.HasViewerCount}"
+                        IsEnabled="{Binding ViewModel.HasViewerCount}" Margin="0,0,16,16">
                     <StackPanel Spacing="{StaticResource SpaceSm}">
                         <TextBlock Text="Viewers" FontSize="{StaticResource FontSizeSm}"
                                    Foreground="{StaticResource TextSecondaryBrush}" />
@@ -71,27 +73,36 @@
                 </StackPanel>
             </Border>
 
-            <Border Classes="card unavailable" IsEnabled="False" Focusable="False">
+            <Border Classes="card">
                 <StackPanel Spacing="{StaticResource SpaceMd}">
-                    <TextBlock Text="Connection health metrics unavailable"
+                    <TextBlock Text="Connection health"
                                FontSize="{StaticResource FontSizeLg}" FontWeight="SemiBold"
                                Foreground="{StaticResource TextPrimaryBrush}" />
                     <WrapPanel Orientation="Horizontal">
-                        <StackPanel Width="120" Margin="0,0,16,8">
+                        <StackPanel Width="140" Margin="0,0,16,8">
                             <TextBlock Text="Latency" Foreground="{StaticResource TextSecondaryBrush}" />
-                            <TextBlock Text="---" Foreground="{StaticResource TextMutedBrush}" />
+                            <TextBlock Text="{Binding ViewModel.LatencyText}" Foreground="{StaticResource TextPrimaryBrush}" />
                         </StackPanel>
-                        <StackPanel Width="120" Margin="0,0,16,8">
+                        <StackPanel Width="140" Margin="0,0,16,8">
                             <TextBlock Text="Bitrate" Foreground="{StaticResource TextSecondaryBrush}" />
-                            <TextBlock Text="---" Foreground="{StaticResource TextMutedBrush}" />
+                            <TextBlock Text="{Binding ViewModel.VideoBitrateText}" Foreground="{StaticResource TextPrimaryBrush}" />
                         </StackPanel>
-                        <StackPanel Width="120" Margin="0,0,16,8">
-                            <TextBlock Text="Packet loss" Foreground="{StaticResource TextSecondaryBrush}" />
-                            <TextBlock Text="---" Foreground="{StaticResource TextMutedBrush}" />
+                        <StackPanel Width="140" Margin="0,0,16,8">
+                            <TextBlock Text="Frame rate" Foreground="{StaticResource TextSecondaryBrush}" />
+                            <TextBlock Text="{Binding ViewModel.VideoFrameRateText}" Foreground="{StaticResource TextPrimaryBrush}" />
                         </StackPanel>
-                        <StackPanel Width="120" Margin="0,0,16,8">
-                            <TextBlock Text="Jitter" Foreground="{StaticResource TextSecondaryBrush}" />
-                            <TextBlock Text="---" Foreground="{StaticResource TextMutedBrush}" />
+                        <StackPanel Width="140" Margin="0,0,16,8">
+                            <TextBlock Text="Resolution" Foreground="{StaticResource TextSecondaryBrush}" />
+                            <TextBlock Text="{Binding ViewModel.ResolutionText}" Foreground="{StaticResource TextPrimaryBrush}" />
+                        </StackPanel>
+                        <StackPanel Width="140" Margin="0,0,16,8">
+                            <TextBlock Text="Codec" Foreground="{StaticResource TextSecondaryBrush}" />
+                            <TextBlock Text="{Binding ViewModel.CodecText}" Foreground="{StaticResource TextPrimaryBrush}" />
+                        </StackPanel>
+                        <StackPanel Width="140" Margin="0,0,16,8">
+                            <TextBlock Text="Transport" Foreground="{StaticResource TextSecondaryBrush}" />
+                            <TextBlock Text="{Binding ViewModel.TransportText}" TextWrapping="Wrap"
+                                       Foreground="{StaticResource TextPrimaryBrush}" />
                         </StackPanel>
                     </WrapPanel>
                 </StackPanel>

@@ -1,5 +1,6 @@
 using SonicDesktopRelay.App;
 using SonicDesktopRelay.Media;
+using SonicDesktopRelay.Presentation;
 
 namespace SonicDesktopRelay.Media.Windows.Tests;
 
@@ -9,6 +10,29 @@ public sealed class ShellShareSelectionTests
     private static readonly WindowInfo First = new((nint)10, 20, new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc), "Editor", "editor", 1280, 720);
     private readonly FakeMonitorEnumerator _monitors = new(Primary);
     private readonly FakeWindowEnumerator _windows = new(First);
+
+    [Fact]
+    public void Playback_controls_keep_the_last_audible_level_without_a_watch_session()
+    {
+        var shell = CreateShell();
+        Assert.Equal(100, shell.PlaybackVolume);
+        Assert.False(shell.IsPlaybackMuted);
+
+        shell.PlaybackVolume = 35;
+        shell.TogglePlaybackMute();
+        Assert.True(shell.IsPlaybackMuted);
+        Assert.Equal(35, shell.PlaybackVolume);
+
+        shell.TogglePlaybackMute();
+        Assert.False(shell.IsPlaybackMuted);
+        Assert.Equal(35, shell.PlaybackVolume);
+
+        shell.PlaybackVolume = 0;
+        Assert.True(shell.IsPlaybackMuted);
+        shell.TogglePlaybackMute();
+        Assert.False(shell.IsPlaybackMuted);
+        Assert.Equal(35, shell.PlaybackVolume);
+    }
 
     [Fact]
     public void Defaults_to_primary_monitor_and_switches_typed_selection()
@@ -21,6 +45,20 @@ public sealed class ShellShareSelectionTests
         shell.IsWindowSourceSelected = true;
         Assert.Equal(new CaptureTarget.Window(First), shell.SelectedCaptureTarget);
         Assert.True(shell.CanShareSelectedTarget);
+    }
+
+    [Fact]
+    public void Share_audio_summary_follows_the_selected_capture_mode()
+    {
+        var shell = CreateShell();
+        var changed = new List<string?>();
+        shell.PropertyChanged += (_, args) => changed.Add(args.PropertyName);
+
+        Assert.Contains("System audio", shell.ShareAudioStatus);
+
+        shell.IsWindowSourceSelected = true;
+        Assert.Contains("window", shell.ShareAudioStatus, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(nameof(shell.ShareAudioStatus), changed);
     }
 
     [Fact]
@@ -82,7 +120,49 @@ public sealed class ShellShareSelectionTests
         Assert.Null(shell.SelectedCaptureTarget);
     }
 
+    [Fact]
+    public async Task Preview_follows_active_share_page_without_creating_a_session()
+    {
+        var sources = new List<PreviewCapture>();
+        var shell = new Shell(_monitors, _windows, _ =>
+        {
+            var source = new PreviewCapture();
+            sources.Add(source);
+            return source;
+        });
+
+        await shell.SetShareViewAttachedAsync(true);
+        Assert.Equal(new CaptureTarget.Monitor(Primary), sources[0].StartedTarget);
+        Assert.Equal(SessionPhase.Idle, shell.ViewModel.Snapshot.Phase);
+
+        shell.IsWindowSourceSelected = true;
+        await shell.WhenPreviewIdleAsync();
+        Assert.Equal(new CaptureTarget.Window(First), sources[1].StartedTarget);
+        Assert.Equal(1, sources[0].DisposeCount);
+
+        shell.ViewModel.CurrentPage = Page.Watch;
+        await shell.WhenPreviewIdleAsync();
+        Assert.Equal(1, sources[1].DisposeCount);
+        await shell.DisposeAsync();
+    }
+
     private Shell CreateShell() => new(_monitors, _windows);
+
+    private sealed class PreviewCapture : IScreenCaptureSource
+    {
+        public MonitorInfo Monitor => Primary;
+        public event Action<VideoFrame>? FrameCaptured { add { } remove { } }
+        public event Action<string>? TargetClosed { add { } remove { } }
+        public CaptureTarget? StartedTarget { get; private set; }
+        public int DisposeCount { get; private set; }
+        public Task StartAsync(MonitorInfo monitor, VideoQuality quality, CancellationToken ct) =>
+            StartAsync(new CaptureTarget.Monitor(monitor), quality, ct);
+        public Task StartAsync(CaptureTarget target, VideoQuality quality, CancellationToken ct)
+        { StartedTarget = target; return Task.CompletedTask; }
+        public void SetFrameRate(int framesPerSecond) { }
+        public Task StopAsync() => Task.CompletedTask;
+        public ValueTask DisposeAsync() { DisposeCount++; return ValueTask.CompletedTask; }
+    }
 
     private sealed class FakeMonitorEnumerator(params MonitorInfo[] monitors) : IMonitorEnumerator
     {

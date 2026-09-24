@@ -420,6 +420,8 @@ public sealed class VideoSubscriberTests
     private sealed class FakeAudioSink : IAudioSink
     {
         public string Name => "fake-sink";
+        public float Volume { get; set; } = 1f;
+        public bool IsMuted { get; set; }
         public List<AudioFrame> Frames { get; } = [];
 
         public Task StartAsync(CancellationToken ct) => Task.CompletedTask;

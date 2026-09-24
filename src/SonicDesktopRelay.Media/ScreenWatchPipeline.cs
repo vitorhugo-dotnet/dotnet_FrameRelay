@@ -35,6 +35,7 @@ public sealed class ScreenWatchPipeline(
     private long _statsTimestamp = time.GetTimestamp();
     private long _statsAccessUnitBaseline;
     private long _statsDecodedFrameBaseline;
+    private long _statsEncodedBytes;
     private long _lastSampleDurationTicks;
 
     private DateTimeOffset? _lastFrameAt;
@@ -45,6 +46,7 @@ public sealed class ScreenWatchPipeline(
     private long _nullDecodeResults;
     private long _keyFrameRequests;
     private long _maximumAccessUnitBytes;
+    private VideoReceiverStats? _latestStatsSnapshot;
     private bool _stallKeyFrameAsked;
     private WatchState _state = WatchState.Waiting;
 
@@ -70,6 +72,12 @@ public sealed class ScreenWatchPipeline(
 
     public long MaximumAccessUnitBytes => Interlocked.Read(ref _maximumAccessUnitBytes);
 
+    /// <summary>The last feedback interval, shared with UI diagnostics without consuming it.</summary>
+    public VideoReceiverStats? LatestStatsSnapshot
+    {
+        get { lock (_statsGate) return _latestStatsSnapshot; }
+    }
+
     public DateTimeOffset? LastAccessUnitAt
     {
         get
@@ -93,6 +101,9 @@ public sealed class ScreenWatchPipeline(
                 : (long)Math.Min(long.MaxValue, elapsed.TotalMilliseconds);
             var accessUnits = Math.Max(0, VideoAccessUnitsReceived - _statsAccessUnitBaseline);
             var decodedFrames = Math.Max(0, DecodedFrames - _statsDecodedFrameBaseline);
+            var bitrate = elapsed > TimeSpan.Zero && _statsEncodedBytes > 0
+                ? _statsEncodedBytes * 8d / elapsed.TotalSeconds
+                : (double?)null;
             var durationTicks = _lastSampleDurationTicks;
             var fps = durationTicks <= 0
                 ? 0
@@ -101,8 +112,9 @@ public sealed class ScreenWatchPipeline(
             _statsTimestamp = now;
             _statsAccessUnitBaseline = VideoAccessUnitsReceived;
             _statsDecodedFrameBaseline = DecodedFrames;
+            _statsEncodedBytes = 0;
 
-            return new VideoReceiverStats(
+            return _latestStatsSnapshot = new VideoReceiverStats(
                 Version: 1,
                 IntervalMilliseconds: intervalMilliseconds,
                 RtpPacketsReceived: 0,
@@ -110,7 +122,8 @@ public sealed class ScreenWatchPipeline(
                 AccessUnitsReceived: accessUnits,
                 IncompleteAccessUnits: 0,
                 DecodedFrames: decodedFrames,
-                TargetFramesPerSecond: fps);
+                TargetFramesPerSecond: fps,
+                VideoBitrateBitsPerSecond: bitrate);
         }
     }
 
@@ -125,6 +138,7 @@ public sealed class ScreenWatchPipeline(
         lock (_statsGate)
         {
             Interlocked.Increment(ref _videoAccessUnitsReceived);
+            _statsEncodedBytes += sample.Data.Length;
             _lastSampleDurationTicks = sample.Duration.Ticks;
         }
         Interlocked.Exchange(ref _lastAccessUnitUtcTicks, time.GetUtcNow().UtcTicks);

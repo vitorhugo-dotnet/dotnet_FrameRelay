@@ -34,6 +34,7 @@ public sealed class RtcVideoPublishHost(
     private AudioPublishPipeline? _audioPipeline;
     private IAudioCaptureSource? _audioSource;
     private VideoPublisher? _publisher;
+    private ITimer? _diagnosticsTimer;
     private string? _audioPipelineFailure;
     private CaptureTarget? _activeCaptureTarget;
 
@@ -53,6 +54,26 @@ public sealed class RtcVideoPublishHost(
 
     public IReadOnlyDictionary<Guid, RtcTransportDiagnostics> TransportDiagnostics =>
         _publisher?.TransportDiagnostics ?? EmptyTransportDiagnostics;
+
+    /// <summary>Current effective encoder settings and selected peer transports for the UI.</summary>
+    public SessionMediaMetrics? CurrentMetrics
+    {
+        get
+        {
+            if (_pipeline is null) return null;
+            var video = VideoDiagnostics;
+            var quality = EffectiveQuality;
+            var transport = TransportDiagnostics.Count == 0 ? null : string.Join(", ",
+                TransportDiagnostics.Values.Select(x => x.ToString()).Distinct(StringComparer.Ordinal));
+            return new SessionMediaMetrics(
+                Width: video?.Width is > 0 ? video.Width : null,
+                Height: video?.Height is > 0 ? video.Height : null,
+                Codec: video?.OutputFormat ?? EncoderName,
+                Transport: transport,
+                TargetVideoBitrateBitsPerSecond: quality?.TargetBitsPerSecond,
+                TargetVideoFramesPerSecond: quality?.FramesPerSecond);
+        }
+    }
 
     public long FramesCaptured => _pipeline?.FramesCaptured ?? 0;
 
@@ -195,6 +216,9 @@ public sealed class RtcVideoPublishHost(
                 connection,
                 audioPipeline);
             _publisher.TransportDiagnosticsChanged += OnTransportDiagnosticsChanged;
+            _diagnosticsTimer = TimeProvider.System.CreateTimer(
+                _ => VideoDiagnosticsChanged?.Invoke(), null,
+                TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
 
             _logger.LogInformation(
                 "Publisher media stack started. encoder={EncoderName} transform={TransformName} acceleration={Acceleration} capture_source_type={CaptureSourceType} target_title={TargetTitle} target_process={TargetProcess} target_pid={TargetPid} dimensions_width={Width} dimensions_height={Height}",
@@ -315,6 +339,11 @@ public sealed class RtcVideoPublishHost(
 
     private async Task DisposeStackAsync()
     {
+        if (_diagnosticsTimer is not null)
+        {
+            await _diagnosticsTimer.DisposeAsync();
+            _diagnosticsTimer = null;
+        }
         if (_publisher is not null)
         {
             _publisher.TransportDiagnosticsChanged -= OnTransportDiagnosticsChanged;

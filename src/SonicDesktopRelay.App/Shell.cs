@@ -29,7 +29,7 @@ public enum ShareSourceKind { Monitor, Window }
 /// built lazily because the backend address can be wrong until someone fixes it in Settings.
 /// </summary>
 [SupportedOSPlatform("windows10.0.19041.0")]
-public sealed class Shell : INotifyPropertyChanged
+public sealed class Shell : INotifyPropertyChanged, IAsyncDisposable
 {
     private const int DefaultMaxViewers = 3;
 
@@ -37,6 +37,9 @@ public sealed class Shell : INotifyPropertyChanged
     private readonly IMonitorEnumerator _monitorEnumerator;
     private readonly IWindowEnumerator _windowEnumerator;
     private readonly ILogger<Shell> _logger;
+    private readonly SharePreviewController _preview;
+    private bool _shareViewAttached;
+    private bool _startingPublicShare;
     private AppComposition? _composition;
     private string _backendAddress;
     private string _deviceName = Environment.MachineName;
@@ -47,6 +50,9 @@ public sealed class Shell : INotifyPropertyChanged
     private ShareQualityOption? _selectedShareQuality;
     private ShareFrameRateOption? _selectedShareFrameRate;
     private bool _isVideoFullScreen;
+    private double _playbackVolume = 100;
+    private double _lastNonZeroPlaybackVolume = 100;
+    private bool _isPlaybackMuted;
     private Guid? _pendingShareIntentId;
     private long _uiFramesDelivered;
     private long _lastUiFrameUtcTicks;
@@ -58,6 +64,10 @@ public sealed class Shell : INotifyPropertyChanged
     /// shell only carries the frame across the thread boundary, exactly as it does snapshots.
     /// </summary>
     public event Action<VideoFrame>? FrameDecoded;
+    public event Action<VideoFrame>? PreviewFrameCaptured;
+    public string PreviewStatus => _startingPublicShare || !ViewModel.CanShare
+        ? "Preview paused while sharing."
+        : _preview.PreviewStatus;
 
     public MainWindowViewModel ViewModel { get; } = new();
 
@@ -67,15 +77,26 @@ public sealed class Shell : INotifyPropertyChanged
         : this(new MonitorEnumerator(), new WindowEnumerator()) { }
 
     public Shell(IMonitorEnumerator monitorEnumerator, IWindowEnumerator windowEnumerator)
+        : this(monitorEnumerator, windowEnumerator, new PublisherCaptureSelection().CreateVideo,
+            action => Dispatcher.UIThread.Post(action)) { }
+
+    internal Shell(IMonitorEnumerator monitorEnumerator, IWindowEnumerator windowEnumerator,
+        Func<CaptureTarget, IScreenCaptureSource> previewSourceFactory,
+        Action<Action>? postToUi = null)
     {
         _monitorEnumerator = monitorEnumerator ?? throw new ArgumentNullException(nameof(monitorEnumerator));
         _windowEnumerator = windowEnumerator ?? throw new ArgumentNullException(nameof(windowEnumerator));
         _logger = FrameRelayLogging.Current?.LoggerFactory.CreateLogger<Shell>()
                   ?? NullLogger<Shell>.Instance;
+        _preview = new SharePreviewController(previewSourceFactory,
+            postToUi ?? (action => action()));
+        _preview.FrameCaptured += frame => PreviewFrameCaptured?.Invoke(frame);
+        _preview.StatusChanged += () => Raise(nameof(PreviewStatus));
         _backendAddressStore = new FileBackendAddressStore(FileBackendAddressStore.DefaultPath);
         _backendAddress = _backendAddressStore.Read();
         SelectedShareQuality = ShareQualities[0];
         SelectedShareFrameRate = ShareFrameRates[1];
+        ViewModel.PropertyChanged += OnViewModelPropertyChanged;
         RefreshMonitors();
         RefreshWindows();
     }
@@ -165,12 +186,95 @@ public sealed class Shell : INotifyPropertyChanged
     public bool IsVideoFullScreen
     {
         get => _isVideoFullScreen;
-        set
+        private set
         {
             if (_isVideoFullScreen == value) return;
             _isVideoFullScreen = value;
             Raise();
         }
+    }
+
+    public void EnterVideoFullScreen()
+    {
+        if (ViewModel.CurrentPage == Page.Watch && ViewModel.Snapshot.Phase == SessionPhase.Watching)
+            IsVideoFullScreen = true;
+    }
+
+    public void ExitVideoFullScreen() => IsVideoFullScreen = false;
+
+    public void ToggleVideoFullScreen()
+    {
+        if (IsVideoFullScreen) ExitVideoFullScreen();
+        else EnterVideoFullScreen();
+    }
+
+    private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(MainWindowViewModel.CurrentPage))
+            _ = UpdatePreviewAsync();
+        if ((e.PropertyName == nameof(MainWindowViewModel.CurrentPage)
+             && ViewModel.CurrentPage != Page.Watch)
+            || (e.PropertyName == nameof(MainWindowViewModel.Snapshot)
+                && ViewModel.Snapshot.Phase != SessionPhase.Watching))
+            ExitVideoFullScreen();
+    }
+
+    internal Task SetShareViewAttachedAsync(bool attached)
+    {
+        _shareViewAttached = attached;
+        return UpdatePreviewAsync();
+    }
+
+    internal Task WhenPreviewIdleAsync() => _preview.WhenIdleAsync();
+
+    private bool ShouldPreview => _shareViewAttached && !_startingPublicShare
+        && ViewModel.CurrentPage == Page.Share && ViewModel.CanShare;
+
+    private Task UpdatePreviewAsync() =>
+        _preview.SetTargetAsync(ShouldPreview ? SelectedCaptureTarget : null);
+
+    public async ValueTask DisposeAsync()
+    {
+        ViewModel.PropertyChanged -= OnViewModelPropertyChanged;
+        await _preview.DisposeAsync();
+    }
+
+    /// <summary>Watch playback level on the 0–100 scale shown by both watch controls.</summary>
+    public double PlaybackVolume
+    {
+        get => _playbackVolume;
+        set
+        {
+            var volume = double.IsNaN(value) ? 0 : Math.Clamp(value, 0, 100);
+            if (_playbackVolume == volume) return;
+            _playbackVolume = volume;
+            if (volume > 0) _lastNonZeroPlaybackVolume = volume;
+            var wasMuted = _isPlaybackMuted;
+            _isPlaybackMuted = volume == 0;
+            ApplyPlaybackControls();
+            Raise();
+            if (wasMuted != _isPlaybackMuted) Raise(nameof(IsPlaybackMuted));
+        }
+    }
+
+    public bool IsPlaybackMuted => _isPlaybackMuted;
+
+    public void TogglePlaybackMute()
+    {
+        _isPlaybackMuted = !_isPlaybackMuted;
+        if (!_isPlaybackMuted && _playbackVolume == 0)
+        {
+            _playbackVolume = _lastNonZeroPlaybackVolume;
+            Raise(nameof(PlaybackVolume));
+        }
+        ApplyPlaybackControls();
+        Raise(nameof(IsPlaybackMuted));
+    }
+
+    private void ApplyPlaybackControls()
+    {
+        if (_composition is not { } composition) return;
+        composition.WatchHost.SetPlaybackControls((float)(_playbackVolume / 100), _isPlaybackMuted);
     }
 
     public IReadOnlyList<ShareQualityOption> ShareQualities { get; } =
@@ -231,6 +335,7 @@ public sealed class Shell : INotifyPropertyChanged
             Raise(nameof(CanShareSelectedTarget));
             Raise(nameof(CanStartShare));
             Raise(nameof(WindowAudioStatus));
+            Raise(nameof(ShareAudioStatus));
         }
     }
 
@@ -262,6 +367,26 @@ public sealed class Shell : INotifyPropertyChanged
         : ProcessLoopbackAudioSource.IsSupported
             ? "Audio: this window and its child processes"
             : "Audio unavailable: Windows build 20348 or later is required.";
+
+    /// <summary>Compact capture mode and health shown beside the sharing session.</summary>
+    public string ShareAudioStatus
+    {
+        get
+        {
+            var mode = IsWindowSourceSelected
+                ? "Window audio and child processes"
+                : "System audio from the default output";
+            var degraded = _composition?.PublishHost.AudioDegradedReason;
+            if (ViewModel.Snapshot.Phase == SessionPhase.Sharing
+                && !string.IsNullOrWhiteSpace(degraded)) return $"{mode} — degraded: {degraded}";
+            if (IsWindowSourceSelected && !ProcessLoopbackAudioSource.IsSupported)
+                return "Window audio unavailable: Windows build 20348 or later is required.";
+            if (ViewModel.Snapshot.Phase != SessionPhase.Sharing) return mode;
+            return _composition?.PublishHost.AudioEncoderName is not null
+                ? $"{mode} — active"
+                : $"{mode} — starting";
+        }
+    }
 
     public MonitorInfo? SelectedMonitor
     {
@@ -451,31 +576,43 @@ public sealed class Shell : INotifyPropertyChanged
         }
 
         var profile = new VideoPublishProfile(quality.MaxHeight, frameRate.FramesPerSecond);
-        await GuardAsync(() => runtime.StartSharingAsync(target, profile, DefaultMaxViewers, ct));
-        if (_pendingShareIntentId is { } intentId
-            && runtime.Snapshot.Phase == SessionPhase.Sharing
-            && runtime.Snapshot.SessionId is { } sessionId)
+        _startingPublicShare = true;
+        Raise(nameof(PreviewStatus));
+        await _preview.SetTargetAsync(null);
+        try
         {
-            try
+            await GuardAsync(() => runtime.StartSharingAsync(target, profile, DefaultMaxViewers, ct));
+            if (_pendingShareIntentId is { } intentId
+                && runtime.Snapshot.Phase == SessionPhase.Sharing
+                && runtime.Snapshot.SessionId is { } sessionId)
             {
-                await CompleteShareWithRetryAsync(intentId, sessionId, ct);
-                _pendingShareIntentId = null;
+                try
+                {
+                    await CompleteShareWithRetryAsync(intentId, sessionId, ct);
+                    _pendingShareIntentId = null;
+                }
+                catch (ApiException exception)
+                {
+                    _pendingShareIntentId = null;
+                    _logger.LogWarning("Could not complete share launch intent. intent={IntentId} code={ErrorCode}",
+                        intentId, exception.ErrorCode);
+                    ShellError = "The share started, but Discord could not be notified. The session remains available in FrameRelay.";
+                }
+                catch (Exception exception) when (exception is HttpRequestException or TaskCanceledException)
+                {
+                    if (ct.IsCancellationRequested) throw;
+                    _pendingShareIntentId = null;
+                    _logger.LogWarning("Could not complete share launch intent. intent={IntentId} type={ExceptionType}",
+                        intentId, exception.GetType().Name);
+                    ShellError = "The share started, but Discord could not be notified. The session remains available in FrameRelay.";
+                }
             }
-            catch (ApiException exception)
-            {
-                _pendingShareIntentId = null;
-                _logger.LogWarning("Could not complete share launch intent. intent={IntentId} code={ErrorCode}",
-                    intentId, exception.ErrorCode);
-                ShellError = "The share started, but Discord could not be notified. The session remains available in FrameRelay.";
-            }
-            catch (Exception exception) when (exception is HttpRequestException or TaskCanceledException)
-            {
-                if (ct.IsCancellationRequested) throw;
-                _pendingShareIntentId = null;
-                _logger.LogWarning("Could not complete share launch intent. intent={IntentId} type={ExceptionType}",
-                    intentId, exception.GetType().Name);
-                ShellError = "The share started, but Discord could not be notified. The session remains available in FrameRelay.";
-            }
+        }
+        finally
+        {
+            _startingPublicShare = false;
+            Raise(nameof(PreviewStatus));
+            await UpdatePreviewAsync();
         }
     }
 
@@ -554,9 +691,10 @@ public sealed class Shell : INotifyPropertyChanged
 
     public async Task StopAsync(CancellationToken ct)
     {
+        ExitVideoFullScreen();
         var runtime = _composition?.Runtime;
-        if (runtime is null) return;
-        await GuardAsync(() => runtime.StopAsync(ct));
+        if (runtime is not null) await GuardAsync(() => runtime.StopAsync(ct));
+        await UpdatePreviewAsync();
     }
 
     private SessionRuntime? TryGetRuntime()
@@ -571,6 +709,7 @@ public sealed class Shell : INotifyPropertyChanged
         if (_composition is null)
         {
             _composition = new AppComposition(settings, _deviceName);
+            ApplyPlaybackControls();
             _composition.Runtime.Changed += OnSnapshot;
             _composition.Runtime.SignalingDiagnosticAdded += OnSignalingDiagnostic;
             _composition.PublishHost.VideoDiagnosticsChanged += OnVideoDiagnosticsChanged;
@@ -649,19 +788,22 @@ public sealed class Shell : INotifyPropertyChanged
     // and the observable collection are the UI thread's alone.
     private void OnSnapshot(SessionSnapshot snapshot)
     {
-        _logger.LogInformation(
-            "Session snapshot. phase={Phase} signaling={Signaling} session={SessionId} viewers={ViewerCount} watching={Watching}",
-            snapshot.Phase,
-            snapshot.Signaling,
-            snapshot.SessionId,
-            snapshot.ViewerCount,
-            snapshot.Watching);
-
         Dispatcher.UIThread.Post(() =>
         {
+            var previous = ViewModel.Snapshot;
             ViewModel.Apply(snapshot);
+            if (snapshot.Phase != previous.Phase)
+            {
+                Raise(nameof(PreviewStatus));
+                _ = UpdatePreviewAsync();
+            }
             Raise(nameof(CanStartShare));
             Raise(nameof(MediaStatusText));
+            Raise(nameof(ShareAudioStatus));
+            if (Equals(snapshot with { Metrics = null }, previous with { Metrics = null })) return;
+            _logger.LogInformation(
+                "Session snapshot. phase={Phase} signaling={Signaling} session={SessionId} viewers={ViewerCount} watching={Watching}",
+                snapshot.Phase, snapshot.Signaling, snapshot.SessionId, snapshot.ViewerCount, snapshot.Watching);
             Diagnostics.Insert(0,
                 $"{DateTimeOffset.Now:HH:mm:ss}  {snapshot.Phase}  signaling={snapshot.Signaling}  " +
                 $"session={snapshot.SessionId?.ToString() ?? "-"}  viewers={snapshot.ViewerCount}");
@@ -693,8 +835,25 @@ public sealed class Shell : INotifyPropertyChanged
         });
     }
 
-    private void OnVideoDiagnosticsChanged() =>
-        Dispatcher.UIThread.Post(() => Raise(nameof(MediaStatusText)));
+    private void OnVideoDiagnosticsChanged()
+    {
+        var composition = _composition;
+        if (composition is null) return;
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (!ReferenceEquals(_composition, composition)) return;
+            var runtime = composition.Runtime;
+            var metrics = runtime.Snapshot.Phase switch
+            {
+                SessionPhase.Sharing => composition.PublishHost.CurrentMetrics,
+                SessionPhase.Watching => composition.WatchHost.CurrentMetrics,
+                _ => null
+            };
+            if (metrics is not null) runtime.UpdateMetrics(metrics);
+            Raise(nameof(MediaStatusText));
+            Raise(nameof(ShareAudioStatus));
+        });
+    }
 
     private void OnWebRtcDiagnostic(ViewerNegotiationDiagnosticEntry entry)
     {
@@ -738,6 +897,9 @@ public sealed class Shell : INotifyPropertyChanged
         });
     }
 
-    private void Raise([CallerMemberName] string? property = null) =>
+    private void Raise([CallerMemberName] string? property = null)
+    {
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(property));
+        if (property == nameof(SelectedCaptureTarget)) _ = UpdatePreviewAsync();
+    }
 }

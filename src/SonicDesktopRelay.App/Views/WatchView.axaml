@@ -2,15 +2,18 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:app="clr-namespace:SonicDesktopRelay.App"
              xmlns:controls="clr-namespace:SonicDesktopRelay.App.Controls"
+             xmlns:conv="clr-namespace:SonicDesktopRelay.App.Converters"
              x:Class="SonicDesktopRelay.App.Views.WatchView"
              x:DataType="app:Shell"
              Container.Name="watchPage" Container.Sizing="Width">
     <UserControl.Styles>
         <Style Selector="ScrollViewer#pageScroll">
             <Setter Property="Margin" Value="{StaticResource PagePadding}" />
+            <Setter Property="VerticalScrollBarVisibility" Value="Auto" />
         </Style>
         <Style Selector="ScrollViewer#pageScroll.fullScreen">
             <Setter Property="Margin" Value="0" />
+            <Setter Property="VerticalScrollBarVisibility" Value="Disabled" />
         </Style>
         <Style Selector="Grid#pageLayout">
             <Setter Property="MaxWidth" Value="1400" />
@@ -44,7 +47,7 @@
     </UserControl.Styles>
 
     <ScrollViewer Name="pageScroll" Classes.fullScreen="{Binding IsVideoFullScreen}"
-                  HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+                  HorizontalScrollBarVisibility="Disabled">
         <Grid Name="pageLayout" Classes.fullScreen="{Binding IsVideoFullScreen}"
               MinHeight="{Binding #pageScroll.Bounds.Height}"
               HorizontalAlignment="Stretch"
@@ -93,22 +96,44 @@
                                            FontSize="{StaticResource FontSizeSm}"
                                            Foreground="{StaticResource TextSecondaryBrush}" />
                             </StackPanel>
-                            <TextBlock Grid.Column="1" Text="F11: fullscreen   Esc: return"
-                                       VerticalAlignment="Center" FontSize="{StaticResource FontSizeSm}"
-                                       Foreground="{StaticResource TextMutedBrush}" />
+                            <Button Grid.Column="1" Content="Fullscreen" Click="OnEnterFullScreen"
+                                    IsEnabled="{Binding ViewModel.Snapshot.Phase, Converter={x:Static conv:EnumEqualsConverter.Instance}, ConverterParameter=Watching}"
+                                    VerticalAlignment="Center" ToolTip.Tip="Fill the window (F11)" />
                         </Grid>
-                        <Border Grid.Row="1" Background="Black"
-                                CornerRadius="{StaticResource ControlCornerRadius}"
-                                MinHeight="240" ClipToBounds="True">
+                        <Grid Grid.Row="1" MinHeight="240" Background="Black" ClipToBounds="True">
                             <controls:VideoSurface Name="Surface" HorizontalAlignment="Stretch"
                                                    VerticalAlignment="Stretch" />
-                        </Border>
+                            <Border HorizontalAlignment="Center" VerticalAlignment="Bottom"
+                                    Margin="16" Padding="12,8" CornerRadius="8"
+                                    Background="#C01B2028"
+                                    IsVisible="{Binding IsVideoFullScreen}">
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <Button Content="Return" Click="OnExitFullScreen"
+                                            ToolTip.Tip="Leave fullscreen (Esc)" />
+                                    <Button Content="🔊" IsVisible="{Binding !IsPlaybackMuted}"
+                                            Click="OnTogglePlaybackMute" ToolTip.Tip="Mute playback" />
+                                    <Button Content="🔇" IsVisible="{Binding IsPlaybackMuted}"
+                                            Click="OnTogglePlaybackMute" ToolTip.Tip="Unmute playback" />
+                                    <Slider Width="150" Minimum="0" Maximum="100"
+                                            Value="{Binding PlaybackVolume, Mode=TwoWay}"
+                                            VerticalAlignment="Center" ToolTip.Tip="Playback volume" />
+                                </StackPanel>
+                            </Border>
+                        </Grid>
                         <WrapPanel Grid.Row="2" Orientation="Horizontal" Margin="0,8,0,0"
                                    IsVisible="{Binding !IsVideoFullScreen}">
                             <Button Content="Fit to screen" IsEnabled="False" Margin="0,0,8,8"
                                     ToolTip.Tip="Fit control unavailable; the picture fits automatically." />
-                            <Button Content="Audio controls unavailable" IsEnabled="False" Margin="0,0,8,8"
-                                    ToolTip.Tip="Audio playback is automatic." />
+                            <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,0,8,8"
+                                        VerticalAlignment="Center">
+                                <Button Content="🔊" IsVisible="{Binding !IsPlaybackMuted}"
+                                        Click="OnTogglePlaybackMute" ToolTip.Tip="Mute playback" />
+                                <Button Content="🔇" IsVisible="{Binding IsPlaybackMuted}"
+                                        Click="OnTogglePlaybackMute" ToolTip.Tip="Unmute playback" />
+                                <Slider Width="150" Minimum="0" Maximum="100"
+                                        Value="{Binding PlaybackVolume, Mode=TwoWay}"
+                                        VerticalAlignment="Center" ToolTip.Tip="Playback volume" />
+                            </StackPanel>
                         </WrapPanel>
                     </Grid>
                 </Border>
@@ -119,7 +144,7 @@
                         <StackPanel Spacing="{StaticResource SpaceMd}">
                             <TextBlock Text="Session details" FontSize="{StaticResource FontSizeLg}"
                                        FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" />
-                            <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto,Auto,Auto"
+                            <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto,Auto,Auto,Auto"
                                   RowSpacing="{StaticResource SpaceSm}">
                                 <TextBlock Grid.Row="0" Text="Session" Foreground="{StaticResource TextSecondaryBrush}" />
                                 <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding ViewModel.Snapshot.Phase}"
@@ -127,27 +152,33 @@
                                 <TextBlock Grid.Row="1" Text="Signaling" Foreground="{StaticResource TextSecondaryBrush}" />
                                 <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding ViewModel.Snapshot.Signaling}"
                                            Foreground="{StaticResource TextPrimaryBrush}" />
-                                <TextBlock Grid.Row="2" Text="Host" Foreground="{StaticResource TextSecondaryBrush}" />
-                                <TextBlock Grid.Row="2" Grid.Column="1" Text="---"
-                                           Foreground="{StaticResource TextMutedBrush}" />
+                                <TextBlock Grid.Row="2" Text="Transport" Foreground="{StaticResource TextSecondaryBrush}" />
+                                <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding ViewModel.TransportText}"
+                                           TextWrapping="Wrap" Foreground="{StaticResource TextPrimaryBrush}" />
                                 <TextBlock Grid.Row="3" Text="Resolution" Foreground="{StaticResource TextSecondaryBrush}" />
-                                <TextBlock Grid.Row="3" Grid.Column="1" Text="---"
-                                           Foreground="{StaticResource TextMutedBrush}" />
+                                <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding ViewModel.ResolutionText}"
+                                           Foreground="{StaticResource TextPrimaryBrush}" />
+                                <TextBlock Grid.Row="4" Text="Codec" Foreground="{StaticResource TextSecondaryBrush}" />
+                                <TextBlock Grid.Row="4" Grid.Column="1" Text="{Binding ViewModel.CodecText}"
+                                           Foreground="{StaticResource TextPrimaryBrush}" />
                             </Grid>
                         </StackPanel>
                     </Border>
-                    <Border Classes="card unavailable" IsEnabled="False" Focusable="False">
+                    <Border Classes="card">
                         <StackPanel Spacing="{StaticResource SpaceMd}">
                             <TextBlock Text="Connection stats" FontSize="{StaticResource FontSizeLg}"
                                        FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" />
                             <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto,Auto"
                                   RowSpacing="{StaticResource SpaceSm}">
                                 <TextBlock Grid.Row="0" Text="Latency" Foreground="{StaticResource TextSecondaryBrush}" />
-                                <TextBlock Grid.Row="0" Grid.Column="1" Text="---" />
+                                <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding ViewModel.LatencyText}"
+                                           Foreground="{StaticResource TextPrimaryBrush}" />
                                 <TextBlock Grid.Row="1" Text="Bitrate" Foreground="{StaticResource TextSecondaryBrush}" />
-                                <TextBlock Grid.Row="1" Grid.Column="1" Text="---" />
+                                <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding ViewModel.VideoBitrateText}"
+                                           Foreground="{StaticResource TextPrimaryBrush}" />
                                 <TextBlock Grid.Row="2" Text="Frame rate" Foreground="{StaticResource TextSecondaryBrush}" />
-                                <TextBlock Grid.Row="2" Grid.Column="1" Text="---" />
+                                <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding ViewModel.VideoFrameRateText}"
+                                           Foreground="{StaticResource TextPrimaryBrush}" />
                             </Grid>
                         </StackPanel>
                     </Border>

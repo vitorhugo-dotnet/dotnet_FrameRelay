@@ -123,13 +123,19 @@ public sealed class SessionRuntime(
         }
     }
 
-    public async Task StartWatchingAsync(string code, CancellationToken ct)
+    public Task StartWatchingAsync(string code, CancellationToken ct) =>
+        StartWatchingCoreAsync(token => api.JoinAsync(code, token), ct);
+
+    public Task StartWatchingSessionAsync(Guid sessionId, CancellationToken ct) =>
+        StartWatchingCoreAsync(token => api.JoinByIdAsync(sessionId, token), ct);
+
+    private async Task StartWatchingCoreAsync(Func<CancellationToken, Task<Guid>> join, CancellationToken ct)
     {
         RequireIdle();
         Publish(Snapshot with { Phase = SessionPhase.Joining, Error = null });
         try
         {
-            var sessionId = await api.JoinAsync(code, ct);
+            var sessionId = await join(ct);
             _isOwner = false;
             await AttachAsync(sessionId, ct);
 

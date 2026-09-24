@@ -302,6 +302,7 @@ internal sealed unsafe partial class Win32WindowApi : IWindowApi
         private uint _threadId;
         private nint _hook;
         private int _hookError;
+        private int _disposeStarted;
 
         public WinEventWatch(nint handle, uint processId, Action destroyed)
         {
@@ -326,7 +327,8 @@ internal sealed unsafe partial class Win32WindowApi : IWindowApi
             _ = NativeMethods.PeekMessageW(out _, nint.Zero, 0, 0, 0); // create the thread's message queue
             var callback = new WinEventCallback((hook, eventId, eventWindow, objectId, childId, eventThread, eventTime) =>
             {
-                if (eventWindow == handle && objectId == 0 && childId == 0) destroyed();
+                if (eventWindow == handle && objectId == 0 && childId == 0)
+                    ThreadPool.QueueUserWorkItem(static state => ((Action)state!).Invoke(), destroyed);
             });
             _hook = NativeMethods.SetWinEventHook(0x8001, 0x8001, nint.Zero, callback, processId, 0, 0);
             if (_hook == nint.Zero) _hookError = Marshal.GetLastWin32Error();
@@ -345,9 +347,11 @@ internal sealed unsafe partial class Win32WindowApi : IWindowApi
 
         public void Dispose()
         {
+            if (Interlocked.Exchange(ref _disposeStarted, 1) != 0) return;
             if (_hook != nint.Zero)
             {
                 _ = NativeMethods.PostThreadMessageW(_threadId, 0x0012, 0, nint.Zero); // WM_QUIT
+                if (Thread.CurrentThread == _thread) return;
                 _thread.Join();
                 _hook = nint.Zero;
             }

@@ -303,6 +303,7 @@ internal sealed unsafe partial class Win32WindowApi : IWindowApi
         private nint _hook;
         private int _hookError;
         private int _disposeStarted;
+        private int _disposeOnPumpExit;
 
         public WinEventWatch(nint handle, uint processId, Action destroyed)
         {
@@ -341,6 +342,8 @@ internal sealed unsafe partial class Win32WindowApi : IWindowApi
                     _ = NativeMethods.DispatchMessageW(ref message);
                 }
                 _ = NativeMethods.UnhookWinEvent(_hook);
+                _hook = nint.Zero;
+                if (Volatile.Read(ref _disposeOnPumpExit) != 0) _ready.Dispose();
             }
             GC.KeepAlive(callback);
         }
@@ -351,7 +354,11 @@ internal sealed unsafe partial class Win32WindowApi : IWindowApi
             if (_hook != nint.Zero)
             {
                 _ = NativeMethods.PostThreadMessageW(_threadId, 0x0012, 0, nint.Zero); // WM_QUIT
-                if (Thread.CurrentThread == _thread) return;
+                if (Thread.CurrentThread == _thread)
+                {
+                    Volatile.Write(ref _disposeOnPumpExit, 1);
+                    return;
+                }
                 _thread.Join();
                 _hook = nint.Zero;
             }

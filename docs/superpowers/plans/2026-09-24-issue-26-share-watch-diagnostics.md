@@ -111,7 +111,7 @@
 - Modify: `src/SonicDesktopRelay.App/Views/WatchView.axaml`
 - Modify: `src/SonicDesktopRelay.App/Views/WatchView.axaml.cs`
 - Modify: `src/SonicDesktopRelay.App/Shell.cs`
-- Test: `tests/SonicDesktopRelay.Presentation.Tests/MainWindowViewModelTests.cs`
+- Test: `tests/SonicDesktopRelay.Media.Windows.Tests/ShellFullscreenTests.cs`
 
 **Interfaces:**
 - Consumes `Shell.IsVideoFullScreen`, playback controls from Task 3, and the existing `WatchView.Surface`.

@@ -7,6 +7,90 @@ namespace SonicDesktopRelay.Media.Windows.Tests;
 public sealed class WasapiAudioSinkTests
 {
     [Fact]
+    public async Task Volume_is_clamped_and_applied_to_playback()
+    {
+        var factory = new FakePlaybackFactory();
+        await using var sink = new WasapiAudioSink(factory);
+        sink.Volume = 2;
+        await sink.StartAsync(CancellationToken.None);
+        Assert.Equal(1f, sink.Volume);
+        Assert.Equal(1f, factory.Session!.Gain);
+
+        sink.Volume = -1;
+        Assert.Equal(0f, sink.Volume);
+        Assert.Equal(0f, factory.Session.Gain);
+    }
+
+    [Fact]
+    public async Task Muting_silences_playback_and_unmuting_restores_last_nonzero_volume()
+    {
+        var factory = new FakePlaybackFactory();
+        await using var sink = new WasapiAudioSink(factory);
+        sink.Volume = 0.4f;
+        await sink.StartAsync(CancellationToken.None);
+
+        sink.IsMuted = true;
+        Assert.Equal(0f, factory.Session!.Gain);
+        Assert.Equal(0.4f, sink.Volume);
+
+        sink.IsMuted = false;
+        Assert.Equal(0.4f, factory.Session.Gain);
+
+        sink.Volume = 0;
+        Assert.True(sink.IsMuted);
+        sink.IsMuted = false;
+        Assert.Equal(0.4f, sink.Volume);
+        Assert.Equal(0.4f, factory.Session.Gain);
+        Assert.Equal(1, factory.Session.PlayCalls);
+    }
+
+    [Fact]
+    public async Task Applying_a_muted_control_snapshot_never_briefly_restores_gain()
+    {
+        var factory = new FakePlaybackFactory();
+        await using var sink = new WasapiAudioSink(factory);
+        await sink.StartAsync(CancellationToken.None);
+        sink.IsMuted = true;
+        var changesBefore = factory.Session!.GainChanges.Count;
+
+        sink.SetPlaybackControls(0.25f, true);
+
+        Assert.All(factory.Session.GainChanges.Skip(changesBefore), gain => Assert.Equal(0f, gain));
+        Assert.Equal(0.25f, sink.Volume);
+        Assert.True(sink.IsMuted);
+    }
+
+    [Fact]
+    public void Playback_provider_scales_pcm_without_changing_the_queued_samples()
+    {
+        var queue = new BoundedPcmBuffer(16);
+        var source = new BoundedPcmWaveProvider(queue, 48_000, 2) { Gain = 0.5f };
+        var samples = new short[] { 1000, -1000, 2000, -2000 };
+        queue.Write(System.Runtime.InteropServices.MemoryMarshal.AsBytes(samples.AsSpan()));
+        Span<byte> output = stackalloc byte[8];
+
+        source.Read(output);
+
+        Assert.Equal(new short[] { 500, -500, 1000, -1000 },
+            System.Runtime.InteropServices.MemoryMarshal.Cast<byte, short>(output).ToArray());
+        Assert.Empty(queue.Snapshot());
+    }
+
+    [Fact]
+    public void Muted_playback_provider_outputs_silence_and_consumes_queued_audio()
+    {
+        var queue = new BoundedPcmBuffer(16);
+        var source = new BoundedPcmWaveProvider(queue, 48_000, 2) { Gain = 0f };
+        queue.Write([0xE8, 0x03, 0x18, 0xFC]);
+        Span<byte> output = stackalloc byte[4];
+
+        source.Read(output);
+
+        Assert.Equal(new byte[4], output.ToArray());
+        Assert.Empty(queue.Snapshot());
+    }
+
+    [Fact]
     public async Task Start_and_stop_are_idempotent_and_use_48khz_stereo()
     {
         var factory = new FakePlaybackFactory();
@@ -80,6 +164,17 @@ public sealed class WasapiAudioSinkTests
     private sealed class FakePlaybackSession(bool throwOnPlay) : IWasapiPlaybackSession
     {
         public string EndpointName => "Fake Speakers";
+        private float _gain = 1;
+        public List<float> GainChanges { get; } = [];
+        public float Gain
+        {
+            get => _gain;
+            set
+            {
+                _gain = value;
+                GainChanges.Add(value);
+            }
+        }
         public int PlayCalls { get; private set; }
         public int StopCalls { get; private set; }
 

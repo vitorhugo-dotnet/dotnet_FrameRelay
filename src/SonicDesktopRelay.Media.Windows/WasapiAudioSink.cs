@@ -1,4 +1,5 @@
 using NAudio.Wave;
+using System.Runtime.InteropServices;
 using SonicDesktopRelay.Media;
 
 namespace SonicDesktopRelay.Media.Windows;
@@ -24,6 +25,9 @@ public sealed class WasapiAudioSink : IAudioSink
     private bool _stopped;
     private bool _terminalFailure;
     private bool _disposed;
+    private float _volume = 1f;
+    private float _lastNonZeroVolume = 1f;
+    private bool _isMuted;
 
     public WasapiAudioSink()
         : this(new NAudioWasapiPlaybackFactory(), DefaultMaxBufferedMilliseconds)
@@ -48,6 +52,48 @@ public sealed class WasapiAudioSink : IAudioSink
 
     public string? DegradedReason { get; private set; }
 
+    public float Volume
+    {
+        get { lock (_gate) return _volume; }
+        set
+        {
+            lock (_gate)
+            {
+                _volume = float.IsNaN(value) ? 0f : Math.Clamp(value, 0f, 1f);
+                if (_volume > 0f) _lastNonZeroVolume = _volume;
+                _isMuted = _volume == 0f;
+                ApplyGain();
+            }
+        }
+    }
+
+    public bool IsMuted
+    {
+        get { lock (_gate) return _isMuted; }
+        set
+        {
+            lock (_gate)
+            {
+                _isMuted = value;
+                if (!value && _volume == 0f) _volume = _lastNonZeroVolume;
+                ApplyGain();
+            }
+        }
+    }
+
+    public void SetPlaybackControls(float volume, bool isMuted)
+    {
+        lock (_gate)
+        {
+            _volume = float.IsNaN(volume) ? 0f : Math.Clamp(volume, 0f, 1f);
+            if (_volume > 0f) _lastNonZeroVolume = _volume;
+            _isMuted = isMuted || _volume == 0f;
+            ApplyGain();
+        }
+    }
+
+    private void ApplyGain() => _session?.Gain = _isMuted ? 0f : _volume;
+
     public Task StartAsync(CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
@@ -60,6 +106,7 @@ public sealed class WasapiAudioSink : IAudioSink
             try
             {
                 _session ??= _factory.Create(_buffer, SampleRate, Channels);
+                ApplyGain();
                 ActiveEndpointName = _session.EndpointName;
                 _session.Play();
                 _started = true;
@@ -151,6 +198,8 @@ public interface IWasapiPlaybackSession : IAsyncDisposable
 {
     string EndpointName { get; }
 
+    float Gain { get; set; }
+
     void Play();
 
     void Stop();
@@ -174,7 +223,7 @@ internal sealed class NAudioWasapiPlaybackFactory : IWasapiPlaybackFactory
                 .WithMmcssThreadPriority("Audio")
                 .Build();
             player.Init(source);
-            return new NAudioWasapiPlaybackSession(player);
+            return new NAudioWasapiPlaybackSession(player, source);
         }
         catch
         {
@@ -185,9 +234,11 @@ internal sealed class NAudioWasapiPlaybackFactory : IWasapiPlaybackFactory
     }
 }
 
-internal sealed class NAudioWasapiPlaybackSession(WasapiPlayer player) : IWasapiPlaybackSession
+internal sealed class NAudioWasapiPlaybackSession(WasapiPlayer player, BoundedPcmWaveProvider source) : IWasapiPlaybackSession
 {
     public string EndpointName => player.DeviceFriendlyName ?? "Default render endpoint";
+
+    public float Gain { get => source.Gain; set => source.Gain = value; }
 
     public void Play() => player.Play();
 
@@ -199,6 +250,7 @@ internal sealed class NAudioWasapiPlaybackSession(WasapiPlayer player) : IWasapi
 internal sealed class BoundedPcmWaveProvider : IWaveProvider
 {
     private readonly BoundedPcmBuffer _buffer;
+    private float _gain = 1f;
 
     public BoundedPcmWaveProvider(BoundedPcmBuffer buffer, int sampleRate, int channels)
     {
@@ -208,5 +260,21 @@ internal sealed class BoundedPcmWaveProvider : IWaveProvider
 
     public WaveFormat WaveFormat { get; }
 
-    public int Read(Span<byte> buffer) => _buffer.Read(buffer);
+    public float Gain { get => Volatile.Read(ref _gain); set => Volatile.Write(ref _gain, value); }
+
+    public int Read(Span<byte> buffer)
+    {
+        var count = _buffer.Read(buffer);
+        var gain = Gain;
+        if (gain == 1f) return count;
+        if (gain == 0f)
+        {
+            buffer[..count].Clear();
+            return count;
+        }
+
+        foreach (ref var sample in MemoryMarshal.Cast<byte, short>(buffer[..(count & ~1)]))
+            sample = (short)Math.Clamp((int)MathF.Round(sample * gain), short.MinValue, short.MaxValue);
+        return count;
+    }
 }

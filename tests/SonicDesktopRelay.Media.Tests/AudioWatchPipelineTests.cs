@@ -75,6 +75,8 @@ public sealed class AudioWatchPipelineTests
     private sealed class FakeSink : IAudioSink
     {
         public string Name => "fake-sink";
+        public float Volume { get; set; } = 1f;
+        public bool IsMuted { get; set; }
         public List<AudioFrame> Frames { get; } = [];
         public int WriteCalls { get; private set; }
         public Exception? Failure { get; init; }

@@ -55,6 +55,8 @@ public sealed class AudioAbstractionsTests
     private sealed class FakeSink : IAudioSink
     {
         public string Name => "fake-sink";
+        public float Volume { get; set; } = 1f;
+        public bool IsMuted { get; set; }
         public Task StartAsync(CancellationToken ct) => Task.CompletedTask;
         public void Write(AudioFrame frame) { }
         public Task StopAsync() => Task.CompletedTask;

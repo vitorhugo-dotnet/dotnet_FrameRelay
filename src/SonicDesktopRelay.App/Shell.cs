@@ -44,6 +44,9 @@ public sealed class Shell : INotifyPropertyChanged
     private ShareQualityOption? _selectedShareQuality;
     private ShareFrameRateOption? _selectedShareFrameRate;
     private bool _isVideoFullScreen;
+    private double _playbackVolume = 100;
+    private double _lastNonZeroPlaybackVolume = 100;
+    private bool _isPlaybackMuted;
     private long _uiFramesDelivered;
     private long _lastUiFrameUtcTicks;
 
@@ -167,6 +170,44 @@ public sealed class Shell : INotifyPropertyChanged
             _isVideoFullScreen = value;
             Raise();
         }
+    }
+
+    /// <summary>Watch playback level on the 0–100 scale shown by both watch controls.</summary>
+    public double PlaybackVolume
+    {
+        get => _playbackVolume;
+        set
+        {
+            var volume = double.IsNaN(value) ? 0 : Math.Clamp(value, 0, 100);
+            if (_playbackVolume == volume) return;
+            _playbackVolume = volume;
+            if (volume > 0) _lastNonZeroPlaybackVolume = volume;
+            var wasMuted = _isPlaybackMuted;
+            _isPlaybackMuted = volume == 0;
+            ApplyPlaybackControls();
+            Raise();
+            if (wasMuted != _isPlaybackMuted) Raise(nameof(IsPlaybackMuted));
+        }
+    }
+
+    public bool IsPlaybackMuted => _isPlaybackMuted;
+
+    public void TogglePlaybackMute()
+    {
+        _isPlaybackMuted = !_isPlaybackMuted;
+        if (!_isPlaybackMuted && _playbackVolume == 0)
+        {
+            _playbackVolume = _lastNonZeroPlaybackVolume;
+            Raise(nameof(PlaybackVolume));
+        }
+        ApplyPlaybackControls();
+        Raise(nameof(IsPlaybackMuted));
+    }
+
+    private void ApplyPlaybackControls()
+    {
+        if (_composition is not { } composition) return;
+        composition.WatchHost.SetPlaybackControls((float)(_playbackVolume / 100), _isPlaybackMuted);
     }
 
     public IReadOnlyList<ShareQualityOption> ShareQualities { get; } =
@@ -501,6 +542,7 @@ public sealed class Shell : INotifyPropertyChanged
         if (_composition is null)
         {
             _composition = new AppComposition(settings, _deviceName);
+            ApplyPlaybackControls();
             _composition.Runtime.Changed += OnSnapshot;
             _composition.Runtime.SignalingDiagnosticAdded += OnSignalingDiagnostic;
             _composition.PublishHost.VideoDiagnosticsChanged += OnVideoDiagnosticsChanged;

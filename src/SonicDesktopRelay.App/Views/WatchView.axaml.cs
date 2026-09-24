@@ -124,4 +124,9 @@ public partial class WatchView : UserControl
         Surface.Clear();
         await shell.StopAsync(CancellationToken.None);
     }
+
+    private void OnTogglePlaybackMute(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is Shell shell) shell.TogglePlaybackMute();
+    }
 }

@@ -11,6 +11,29 @@ public sealed class ShellShareSelectionTests
     private readonly FakeWindowEnumerator _windows = new(First);
 
     [Fact]
+    public void Playback_controls_keep_the_last_audible_level_without_a_watch_session()
+    {
+        var shell = CreateShell();
+        Assert.Equal(100, shell.PlaybackVolume);
+        Assert.False(shell.IsPlaybackMuted);
+
+        shell.PlaybackVolume = 35;
+        shell.TogglePlaybackMute();
+        Assert.True(shell.IsPlaybackMuted);
+        Assert.Equal(35, shell.PlaybackVolume);
+
+        shell.TogglePlaybackMute();
+        Assert.False(shell.IsPlaybackMuted);
+        Assert.Equal(35, shell.PlaybackVolume);
+
+        shell.PlaybackVolume = 0;
+        Assert.True(shell.IsPlaybackMuted);
+        shell.TogglePlaybackMute();
+        Assert.False(shell.IsPlaybackMuted);
+        Assert.Equal(35, shell.PlaybackVolume);
+    }
+
+    [Fact]
     public void Defaults_to_primary_monitor_and_switches_typed_selection()
     {
         var shell = CreateShell();

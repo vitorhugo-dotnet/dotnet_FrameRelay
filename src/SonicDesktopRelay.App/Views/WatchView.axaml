@@ -107,8 +107,16 @@
                                    IsVisible="{Binding !IsVideoFullScreen}">
                             <Button Content="Fit to screen" IsEnabled="False" Margin="0,0,8,8"
                                     ToolTip.Tip="Fit control unavailable; the picture fits automatically." />
-                            <Button Content="Audio controls unavailable" IsEnabled="False" Margin="0,0,8,8"
-                                    ToolTip.Tip="Audio playback is automatic." />
+                            <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,0,8,8"
+                                        VerticalAlignment="Center">
+                                <Button Content="🔊" IsVisible="{Binding !IsPlaybackMuted}"
+                                        Click="OnTogglePlaybackMute" ToolTip.Tip="Mute playback" />
+                                <Button Content="🔇" IsVisible="{Binding IsPlaybackMuted}"
+                                        Click="OnTogglePlaybackMute" ToolTip.Tip="Unmute playback" />
+                                <Slider Width="150" Minimum="0" Maximum="100"
+                                        Value="{Binding PlaybackVolume, Mode=TwoWay}"
+                                        VerticalAlignment="Center" ToolTip.Tip="Playback volume" />
+                            </StackPanel>
                         </WrapPanel>
                     </Grid>
                 </Border>

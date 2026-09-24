@@ -92,6 +92,28 @@ public sealed class SessionRuntimeTests
     }
 
     [Fact]
+    public async Task Retired_capture_closure_cannot_stop_a_new_sharing_session()
+    {
+        var api = new FakeSessionApi();
+        var host = new FakeVideoPublishHost();
+        var runtime = new SessionRuntime(api, () => new FakeConnection(), host);
+        await runtime.StartSharingAsync(Monitor, 3, CancellationToken.None);
+        var oldClosure = host.CaptureTargetClosedHandler();
+        await runtime.StopAsync(CancellationToken.None);
+
+        await runtime.StartSharingAsync(Monitor, 3, CancellationToken.None);
+        runtime.UpdateMetrics(new SessionMediaMetrics(1920, 1080, null, null, null, "H.264", "Direct/UDP"));
+        var expected = runtime.Snapshot;
+        var endCalls = api.EndCalls;
+
+        oldClosure?.Invoke("session A's source closed late");
+
+        Assert.Equal(SessionPhase.Sharing, runtime.Snapshot.Phase);
+        Assert.Equal(expected, runtime.Snapshot);
+        Assert.Equal(endCalls, api.EndCalls);
+    }
+
+    [Fact]
     public async Task Metrics_clear_across_a_role_change()
     {
         var runtime = new SessionRuntime(new FakeSessionApi(), () => new FakeConnection());
@@ -686,6 +708,8 @@ public sealed class SessionRuntimeTests
         public TaskCompletionSource? StopGate { get; set; }
 
         public event Action<string>? CaptureTargetClosed;
+
+        public Action<string>? CaptureTargetClosedHandler() => CaptureTargetClosed;
 
         public Task StartAsync(MonitorInfo monitor, VideoPublishProfile profile, CancellationToken ct)
         {

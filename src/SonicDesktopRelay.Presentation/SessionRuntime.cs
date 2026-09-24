@@ -27,6 +27,7 @@ public sealed class SessionRuntime(
     private ISignalingConnection? _connection;
     private Action<SignalingEnvelope>? _frameHandler;
     private Action<SignalingState>? _signalingStateHandler;
+    private Action<string>? _captureTargetClosedHandler;
     private Action<WatchState>? _watchStateHandler;
     private Action<string>? _watchNegotiationHandler;
     private long _sessionGeneration;
@@ -98,7 +99,8 @@ public sealed class SessionRuntime(
                     _captureTargetClosedDuringStart = false;
                     _captureTargetCloseHandled = false;
                 }
-                publishHost.CaptureTargetClosed += OnCaptureTargetClosed;
+                _captureTargetClosedHandler = reason => OnCaptureTargetClosed(reason, generation);
+                publishHost.CaptureTargetClosed += _captureTargetClosedHandler;
 
                 try
                 {
@@ -192,15 +194,21 @@ public sealed class SessionRuntime(
         }
     }
 
-    public async Task StopAsync(CancellationToken ct)
+    public async Task StopAsync(CancellationToken ct) => await StopCoreAsync(ct, null);
+
+    private async Task<long?> StopCoreAsync(CancellationToken ct, long? expectedGeneration)
     {
         await _stopGate.WaitAsync(ct);
         try
         {
+            long stoppedGeneration;
             lock (_snapshotGate)
             {
-                if (Snapshot.Phase == SessionPhase.Idle) return;
-                ++_sessionGeneration;
+                if (Snapshot.Phase == SessionPhase.Idle
+                    || expectedGeneration is { } expected
+                       && (expected != _sessionGeneration || Snapshot.Phase != SessionPhase.Sharing))
+                    return null;
+                stoppedGeneration = ++_sessionGeneration;
                 Publish(Snapshot with { Phase = SessionPhase.Ending });
             }
 
@@ -219,6 +227,7 @@ public sealed class SessionRuntime(
 
             await DetachAsync();
             Publish(SessionSnapshot.Idle);
+            return stoppedGeneration;
         }
         finally
         {
@@ -226,30 +235,39 @@ public sealed class SessionRuntime(
         }
     }
 
-    private void OnCaptureTargetClosed(string reason)
+    private void OnCaptureTargetClosed(string reason, long generation)
     {
         lock (_captureTargetGate)
         {
-            if (_publishStartInProgress)
+            lock (_snapshotGate)
             {
-                _captureTargetClosedDuringStart = true;
-                return;
-            }
+                if (generation != _sessionGeneration) return;
+                if (_publishStartInProgress)
+                {
+                    _captureTargetClosedDuringStart = true;
+                    return;
+                }
 
-            if (Snapshot.Phase != SessionPhase.Sharing || _captureTargetCloseHandled) return;
-            _captureTargetCloseHandled = true;
+                if (Snapshot.Phase != SessionPhase.Sharing || _captureTargetCloseHandled) return;
+                _captureTargetCloseHandled = true;
+            }
         }
 
-        _ = StopAfterCaptureTargetClosedAsync(reason);
+        _ = StopAfterCaptureTargetClosedAsync(reason, generation);
     }
 
-    private async Task StopAfterCaptureTargetClosedAsync(string reason)
+    private async Task StopAfterCaptureTargetClosedAsync(string reason, long generation)
     {
         try
         {
-            await StopAsync(CancellationToken.None);
-            Publish(new SessionSnapshot(
-                SessionPhase.Failed, null, null, 0, SignalingState.Disconnected, "capture_target_closed"));
+            var stoppedGeneration = await StopCoreAsync(CancellationToken.None, generation);
+            lock (_snapshotGate)
+            {
+                if (stoppedGeneration is null || stoppedGeneration != _sessionGeneration
+                    || Snapshot.Phase != SessionPhase.Idle) return;
+                Publish(new SessionSnapshot(
+                    SessionPhase.Failed, null, null, 0, SignalingState.Disconnected, "capture_target_closed"));
+            }
         }
         catch (Exception e) when (e is InvalidOperationException or TaskCanceledException)
         {
@@ -293,7 +311,9 @@ public sealed class SessionRuntime(
 
     private async Task DetachAsync()
     {
-        if (publishHost is not null) publishHost.CaptureTargetClosed -= OnCaptureTargetClosed;
+        if (publishHost is not null && _captureTargetClosedHandler is not null)
+            publishHost.CaptureTargetClosed -= _captureTargetClosedHandler;
+        _captureTargetClosedHandler = null;
         if (watchHost is not null)
         {
             if (_watchStateHandler is not null) watchHost.WatchStateChanged -= _watchStateHandler;

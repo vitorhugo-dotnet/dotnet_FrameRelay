@@ -130,13 +130,7 @@ internal sealed unsafe partial class Win32WindowApi : IWindowApi
     public IDisposable WatchWindowDestroy(nint handle, Action destroyed)
     {
         var processId = GetProcessId(handle);
-        var callback = new WinEventCallback((hook, eventId, eventWindow, objectId, childId, threadId, eventTime) =>
-        {
-            if (eventWindow == handle && objectId == 0 && childId == 0) destroyed();
-        });
-        var hook = NativeMethods.SetWinEventHook(0x8001, 0x8001, nint.Zero, callback, processId, 0, 0);
-        if (hook == nint.Zero) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
-        return new WinEventWatch(hook, callback);
+        return new WinEventWatch(handle, processId, destroyed);
     }
 
     public bool IsWindow(nint handle) => NativeMethods.IsWindow(handle);
@@ -235,6 +229,27 @@ internal sealed unsafe partial class Win32WindowApi : IWindowApi
         [return: MarshalAs(UnmanagedType.Bool)]
         internal static extern bool UnhookWinEvent(nint hook);
 
+        [DllImport("user32.dll", EntryPoint = "GetMessageW", SetLastError = true)]
+        internal static extern int GetMessageW(out NativeMessage message, nint window, uint minimum, uint maximum);
+
+        [DllImport("user32.dll", EntryPoint = "PeekMessageW")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        internal static extern bool PeekMessageW(out NativeMessage message, nint window, uint minimum, uint maximum, uint remove);
+
+        [DllImport("user32.dll", EntryPoint = "TranslateMessage")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        internal static extern bool TranslateMessage(ref NativeMessage message);
+
+        [DllImport("user32.dll", EntryPoint = "DispatchMessageW")]
+        internal static extern nint DispatchMessageW(ref NativeMessage message);
+
+        [DllImport("user32.dll", EntryPoint = "PostThreadMessageW", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        internal static extern bool PostThreadMessageW(uint threadId, uint message, nint wParam, nint lParam);
+
+        [DllImport("kernel32.dll")]
+        internal static extern uint GetCurrentThreadId();
+
         [LibraryImport("user32.dll")]
         [return: MarshalAs(UnmanagedType.Bool)]
         internal static partial bool IsWindow(nint handle);
@@ -267,14 +282,76 @@ internal sealed unsafe partial class Win32WindowApi : IWindowApi
     private delegate void WinEventCallback(nint hook, uint eventType, nint window, int objectId,
         int childId, uint eventThread, uint eventTime);
 
-    private sealed class WinEventWatch(nint hook, WinEventCallback callback) : IDisposable
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativeMessage
     {
-        private nint _hook = hook;
+        public nint Window;
+        public uint Message;
+        public nint WParam;
+        public nint LParam;
+        public uint Time;
+        public int PointX;
+        public int PointY;
+        public uint Private;
+    }
+
+    private sealed class WinEventWatch : IDisposable
+    {
+        private readonly ManualResetEventSlim _ready = new(false);
+        private readonly Thread _thread;
+        private uint _threadId;
+        private nint _hook;
+        private int _hookError;
+
+        public WinEventWatch(nint handle, uint processId, Action destroyed)
+        {
+            _thread = new Thread(() => Run(handle, processId, destroyed))
+            {
+                IsBackground = true,
+                Name = "FrameRelay window lifetime hook"
+            };
+            _thread.Start();
+            _ready.Wait();
+            if (_hook == nint.Zero)
+            {
+                _thread.Join();
+                _ready.Dispose();
+                throw new System.ComponentModel.Win32Exception(_hookError);
+            }
+        }
+
+        private void Run(nint handle, uint processId, Action destroyed)
+        {
+            _threadId = NativeMethods.GetCurrentThreadId();
+            _ = NativeMethods.PeekMessageW(out _, nint.Zero, 0, 0, 0); // create the thread's message queue
+            var callback = new WinEventCallback((hook, eventId, eventWindow, objectId, childId, eventThread, eventTime) =>
+            {
+                if (eventWindow == handle && objectId == 0 && childId == 0) destroyed();
+            });
+            _hook = NativeMethods.SetWinEventHook(0x8001, 0x8001, nint.Zero, callback, processId, 0, 0);
+            if (_hook == nint.Zero) _hookError = Marshal.GetLastWin32Error();
+            _ready.Set();
+            if (_hook != nint.Zero)
+            {
+                while (NativeMethods.GetMessageW(out var message, nint.Zero, 0, 0) > 0)
+                {
+                    _ = NativeMethods.TranslateMessage(ref message);
+                    _ = NativeMethods.DispatchMessageW(ref message);
+                }
+                _ = NativeMethods.UnhookWinEvent(_hook);
+            }
+            GC.KeepAlive(callback);
+        }
+
         public void Dispose()
         {
-            var current = Interlocked.Exchange(ref _hook, nint.Zero);
-            if (current != nint.Zero) _ = NativeMethods.UnhookWinEvent(current);
-            GC.KeepAlive(callback);
+            if (_hook != nint.Zero)
+            {
+                _ = NativeMethods.PostThreadMessageW(_threadId, 0x0012, 0, nint.Zero); // WM_QUIT
+                _thread.Join();
+                _hook = nint.Zero;
+            }
+            _ready.Dispose();
         }
     }
 

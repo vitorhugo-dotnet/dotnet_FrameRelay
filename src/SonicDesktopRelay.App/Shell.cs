@@ -17,6 +17,8 @@ public sealed record ShareQualityOption(string Label, int MaxHeight);
 
 public sealed record ShareFrameRateOption(string Label, int FramesPerSecond);
 
+public enum ShareSourceKind { Monitor, Window }
+
 /// <summary>
 /// What the window binds to: the plan's <see cref="MainWindowViewModel"/> for everything the
 /// UI may know about a session, plus the few things only the shell owns — the configured
@@ -29,12 +31,16 @@ public sealed class Shell : INotifyPropertyChanged
     private const int DefaultMaxViewers = 3;
 
     private readonly FileBackendAddressStore _backendAddressStore;
+    private readonly IMonitorEnumerator _monitorEnumerator;
+    private readonly IWindowEnumerator _windowEnumerator;
     private readonly ILogger<Shell> _logger;
     private AppComposition? _composition;
     private string _backendAddress;
     private string _deviceName = Environment.MachineName;
     private string? _shellError;
     private MonitorInfo? _selectedMonitor;
+    private WindowInfo? _selectedWindow;
+    private ShareSourceKind _shareSourceKind = ShareSourceKind.Monitor;
     private ShareQualityOption? _selectedShareQuality;
     private ShareFrameRateOption? _selectedShareFrameRate;
     private bool _isVideoFullScreen;
@@ -54,7 +60,12 @@ public sealed class Shell : INotifyPropertyChanged
     public string AppVersion => typeof(Shell).Assembly.GetName().Version?.ToString(3) ?? "0.0.0";
 
     public Shell()
+        : this(new MonitorEnumerator(), new WindowEnumerator()) { }
+
+    public Shell(IMonitorEnumerator monitorEnumerator, IWindowEnumerator windowEnumerator)
     {
+        _monitorEnumerator = monitorEnumerator ?? throw new ArgumentNullException(nameof(monitorEnumerator));
+        _windowEnumerator = windowEnumerator ?? throw new ArgumentNullException(nameof(windowEnumerator));
         _logger = FrameRelayLogging.Current?.LoggerFactory.CreateLogger<Shell>()
                   ?? NullLogger<Shell>.Instance;
         _backendAddressStore = new FileBackendAddressStore(FileBackendAddressStore.DefaultPath);
@@ -62,6 +73,7 @@ public sealed class Shell : INotifyPropertyChanged
         SelectedShareQuality = ShareQualities[0];
         SelectedShareFrameRate = ShareFrameRates[1];
         RefreshMonitors();
+        RefreshWindows();
     }
 
     public string LogDirectory =>
@@ -197,6 +209,56 @@ public sealed class Shell : INotifyPropertyChanged
     /// <summary>The monitors this machine can share, newest enumeration each time it is read.</summary>
     public ObservableCollection<MonitorInfo> Monitors { get; } = [];
 
+    public ObservableCollection<WindowInfo> Windows { get; } = [];
+
+    public IReadOnlyList<ShareSourceKind> ShareSourceKinds { get; } = [ShareSourceKind.Monitor, ShareSourceKind.Window];
+
+    public ShareSourceKind ShareSourceKind
+    {
+        get => _shareSourceKind;
+        set
+        {
+            if (_shareSourceKind == value) return;
+            _shareSourceKind = value;
+            Raise();
+            Raise(nameof(IsMonitorSourceSelected));
+            Raise(nameof(IsWindowSourceSelected));
+            Raise(nameof(SelectedCaptureTarget));
+            Raise(nameof(CanShareSelectedTarget));
+            Raise(nameof(CanStartShare));
+            Raise(nameof(WindowAudioStatus));
+        }
+    }
+
+    public bool IsMonitorSourceSelected
+    {
+        get => ShareSourceKind == ShareSourceKind.Monitor;
+        set { if (value) ShareSourceKind = ShareSourceKind.Monitor; }
+    }
+
+    public bool IsWindowSourceSelected
+    {
+        get => ShareSourceKind == ShareSourceKind.Window;
+        set { if (value) ShareSourceKind = ShareSourceKind.Window; }
+    }
+
+    public CaptureTarget? SelectedCaptureTarget => ShareSourceKind switch
+    {
+        ShareSourceKind.Monitor when SelectedMonitor is { } monitor => new CaptureTarget.Monitor(monitor),
+        ShareSourceKind.Window when SelectedWindow is { } window => new CaptureTarget.Window(window),
+        _ => null
+    };
+
+    public bool CanShareSelectedTarget => SelectedCaptureTarget is not null;
+
+    public bool CanStartShare => ViewModel.CanShare && CanShareSelectedTarget;
+
+    public string WindowAudioStatus => !IsWindowSourceSelected
+        ? string.Empty
+        : ProcessLoopbackAudioSource.IsSupported
+            ? "Audio: this window and its child processes"
+            : "Audio unavailable: Windows build 20348 or later is required.";
+
     public MonitorInfo? SelectedMonitor
     {
         get => _selectedMonitor;
@@ -205,6 +267,23 @@ public sealed class Shell : INotifyPropertyChanged
             if (Nullable.Equals(_selectedMonitor, value)) return;
             _selectedMonitor = value;
             Raise();
+            Raise(nameof(SelectedCaptureTarget));
+            Raise(nameof(CanShareSelectedTarget));
+            Raise(nameof(CanStartShare));
+        }
+    }
+
+    public WindowInfo? SelectedWindow
+    {
+        get => _selectedWindow;
+        set
+        {
+            if (Equals(_selectedWindow, value)) return;
+            _selectedWindow = value;
+            Raise();
+            Raise(nameof(SelectedCaptureTarget));
+            Raise(nameof(CanShareSelectedTarget));
+            Raise(nameof(CanStartShare));
         }
     }
 
@@ -322,24 +401,44 @@ public sealed class Shell : INotifyPropertyChanged
     /// <summary>Refreshes <see cref="Monitors"/> from the OS and keeps a sensible selection.</summary>
     public void RefreshMonitors()
     {
-        var monitors = new MonitorEnumerator().List();
+        var monitors = _monitorEnumerator.List();
         Monitors.Clear();
         foreach (var monitor in monitors) Monitors.Add(monitor);
 
         if (SelectedMonitor is { } selected && monitors.Any(x => x.Id == selected.Id)) return;
-        SelectedMonitor = monitors.FirstOrDefault(x => x.IsPrimary, monitors.FirstOrDefault());
+        SelectedMonitor = monitors.Where(x => x.IsPrimary).Select(x => (MonitorInfo?)x).FirstOrDefault()
+                          ?? monitors.Select(x => (MonitorInfo?)x).FirstOrDefault();
+    }
+
+    public void RefreshWindows()
+    {
+        var windows = _windowEnumerator.List();
+        Windows.Clear();
+        foreach (var window in windows) Windows.Add(window);
+        if (SelectedWindow is { } selected)
+        {
+            var retained = windows.FirstOrDefault(x => SameWindowIdentity(x, selected));
+            if (retained is not null)
+            {
+                SelectedWindow = retained;
+                return;
+            }
+        }
+        SelectedWindow = windows.FirstOrDefault();
     }
 
     public async Task ShareAsync(CancellationToken ct)
     {
-        var runtime = TryGetRuntime();
-        if (runtime is null) return;
-
-        if (SelectedMonitor is not { } monitor)
+        if (SelectedCaptureTarget is not { } target)
         {
-            ShellError = "No monitor is available to share.";
+            ShellError = ShareSourceKind == ShareSourceKind.Monitor
+                ? "No monitor is available to share."
+                : "Select an available application window to share.";
             return;
         }
+
+        var runtime = TryGetRuntime();
+        if (runtime is null) return;
 
         if (SelectedShareQuality is not { } quality || SelectedShareFrameRate is not { } frameRate)
         {
@@ -348,8 +447,12 @@ public sealed class Shell : INotifyPropertyChanged
         }
 
         var profile = new VideoPublishProfile(quality.MaxHeight, frameRate.FramesPerSecond);
-        await GuardAsync(() => runtime.StartSharingAsync(monitor, profile, DefaultMaxViewers, ct));
+        await GuardAsync(() => runtime.StartSharingAsync(target, profile, DefaultMaxViewers, ct));
     }
+
+    private static bool SameWindowIdentity(WindowInfo left, WindowInfo right) =>
+        left.Handle == right.Handle && left.ProcessId == right.ProcessId
+                                   && left.ProcessStartTimeUtc == right.ProcessStartTimeUtc;
 
     public async Task WatchAsync(string code, CancellationToken ct)
     {
@@ -466,6 +569,7 @@ public sealed class Shell : INotifyPropertyChanged
         Dispatcher.UIThread.Post(() =>
         {
             ViewModel.Apply(snapshot);
+            Raise(nameof(CanStartShare));
             Raise(nameof(MediaStatusText));
             Diagnostics.Insert(0,
                 $"{DateTimeOffset.Now:HH:mm:ss}  {snapshot.Phase}  signaling={snapshot.Signaling}  " +

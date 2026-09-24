@@ -17,7 +17,6 @@ internal interface IProcessLoopbackClient : IAsyncDisposable
 }
 
 /// <summary>Captures normalized PCM from a selected process tree, without falling back to system audio.</summary>
-[SupportedOSPlatform("windows10.0.20348.0")]
 public sealed class ProcessLoopbackAudioSource : IAudioCaptureSource
 {
     public const int SampleRate = 48_000;

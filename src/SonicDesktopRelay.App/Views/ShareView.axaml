@@ -68,12 +68,22 @@
                                        FontSize="{StaticResource FontSizeLg}"
                                        FontWeight="SemiBold"
                                        Foreground="{StaticResource TextPrimaryBrush}" />
+                            <StackPanel Orientation="Horizontal" Spacing="{StaticResource SpaceMd}">
+                                <RadioButton Content="Monitor"
+                                             IsChecked="{Binding IsMonitorSourceSelected}"
+                                             IsEnabled="{Binding ViewModel.CanShare}" />
+                                <RadioButton Content="Application window"
+                                             IsChecked="{Binding IsWindowSourceSelected}"
+                                             IsEnabled="{Binding ViewModel.CanShare}" />
+                            </StackPanel>
                             <StackPanel Spacing="{StaticResource SpaceXs}">
                                 <TextBlock Text="Display" FontSize="{StaticResource FontSizeSm}"
-                                           Foreground="{StaticResource TextSecondaryBrush}" />
+                                           Foreground="{StaticResource TextSecondaryBrush}"
+                                           IsVisible="{Binding IsMonitorSourceSelected}" />
                                 <ComboBox Name="MonitorPicker" HorizontalAlignment="Stretch"
                                           ItemsSource="{Binding Monitors}"
                                           SelectedItem="{Binding SelectedMonitor}"
+                                          IsVisible="{Binding IsMonitorSourceSelected}"
                                           IsEnabled="{Binding ViewModel.CanShare}">
                                     <ComboBox.ItemTemplate>
                                         <DataTemplate x:DataType="media:MonitorInfo">
@@ -81,6 +91,35 @@
                                         </DataTemplate>
                                     </ComboBox.ItemTemplate>
                                 </ComboBox>
+                            </StackPanel>
+                            <StackPanel Spacing="{StaticResource SpaceXs}"
+                                        IsVisible="{Binding IsWindowSourceSelected}">
+                                <StackPanel Orientation="Horizontal" Spacing="{StaticResource SpaceSm}">
+                                    <TextBlock Text="Application windows"
+                                               FontSize="{StaticResource FontSizeSm}"
+                                               Foreground="{StaticResource TextSecondaryBrush}"
+                                               VerticalAlignment="Center" />
+                                    <Button Content="Refresh" Click="OnRefreshWindows"
+                                            IsEnabled="{Binding ViewModel.CanShare}" />
+                                </StackPanel>
+                                <ListBox Name="WindowPicker" Height="220"
+                                         ItemsSource="{Binding Windows}"
+                                         SelectedItem="{Binding SelectedWindow}"
+                                         IsEnabled="{Binding ViewModel.CanShare}">
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate x:DataType="media:WindowInfo">
+                                            <StackPanel Spacing="2">
+                                                <TextBlock Text="{Binding Title}"
+                                                           Foreground="{StaticResource TextPrimaryBrush}" />
+                                                <TextBlock Text="{Binding ProcessName}"
+                                                           FontSize="{StaticResource FontSizeSm}"
+                                                           Foreground="{StaticResource TextSecondaryBrush}" />
+                                            </StackPanel>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+                                <TextBlock Text="{Binding WindowAudioStatus}"
+                                           Foreground="{StaticResource TextSecondaryBrush}" />
                             </StackPanel>
                             <StackPanel Spacing="{StaticResource SpaceXs}">
                                 <TextBlock Text="Video quality" FontSize="{StaticResource FontSizeSm}"

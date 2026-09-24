@@ -5,7 +5,6 @@ using System.Threading;
 namespace SonicDesktopRelay.Media.Windows;
 
 /// <summary>Entry point isolated from the existing system-loopback recorder factory.</summary>
-[SupportedOSPlatform("windows10.0.20348.0")]
 internal sealed class ProcessLoopbackClientFactory : IProcessLoopbackClientFactory
 {
     public IProcessLoopbackClient Create(

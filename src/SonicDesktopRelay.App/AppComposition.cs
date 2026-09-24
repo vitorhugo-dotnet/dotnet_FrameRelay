@@ -77,6 +77,8 @@ public sealed class AppComposition
     public RtcVideoWatchHost WatchHost { get; }
 
     public IMonitorEnumerator Monitors { get; } = new MonitorEnumerator();
+
+    public IWindowEnumerator Windows { get; } = new WindowEnumerator();
 }
 
 /// <summary>Attaches the DeviceBearer token to every call, refreshing it before it lapses.</summary>

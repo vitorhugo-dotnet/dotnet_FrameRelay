@@ -29,4 +29,9 @@ public partial class ShareView : UserControl
         var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
         if (clipboard is not null) await clipboard.SetTextAsync(code);
     }
+
+    private void OnRefreshWindows(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is Shell shell) shell.RefreshWindows();
+    }
 }

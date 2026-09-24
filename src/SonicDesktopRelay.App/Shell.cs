@@ -75,6 +75,7 @@ public sealed class Shell : INotifyPropertyChanged
         _backendAddress = _backendAddressStore.Read();
         SelectedShareQuality = ShareQualities[0];
         SelectedShareFrameRate = ShareFrameRates[1];
+        ViewModel.PropertyChanged += OnViewModelPropertyChanged;
         RefreshMonitors();
         RefreshWindows();
     }
@@ -164,12 +165,35 @@ public sealed class Shell : INotifyPropertyChanged
     public bool IsVideoFullScreen
     {
         get => _isVideoFullScreen;
-        set
+        private set
         {
             if (_isVideoFullScreen == value) return;
             _isVideoFullScreen = value;
             Raise();
         }
+    }
+
+    public void EnterVideoFullScreen()
+    {
+        if (ViewModel.CurrentPage == Page.Watch && ViewModel.Snapshot.Phase == SessionPhase.Watching)
+            IsVideoFullScreen = true;
+    }
+
+    public void ExitVideoFullScreen() => IsVideoFullScreen = false;
+
+    public void ToggleVideoFullScreen()
+    {
+        if (IsVideoFullScreen) ExitVideoFullScreen();
+        else EnterVideoFullScreen();
+    }
+
+    private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if ((e.PropertyName == nameof(MainWindowViewModel.CurrentPage)
+             && ViewModel.CurrentPage != Page.Watch)
+            || (e.PropertyName == nameof(MainWindowViewModel.Snapshot)
+                && ViewModel.Snapshot.Phase != SessionPhase.Watching))
+            ExitVideoFullScreen();
     }
 
     /// <summary>Watch playback level on the 0–100 scale shown by both watch controls.</summary>
@@ -525,6 +549,7 @@ public sealed class Shell : INotifyPropertyChanged
 
     public async Task StopAsync(CancellationToken ct)
     {
+        ExitVideoFullScreen();
         var runtime = _composition?.Runtime;
         if (runtime is null) return;
         await GuardAsync(() => runtime.StopAsync(ct));

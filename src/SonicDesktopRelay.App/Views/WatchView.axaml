@@ -2,15 +2,18 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:app="clr-namespace:SonicDesktopRelay.App"
              xmlns:controls="clr-namespace:SonicDesktopRelay.App.Controls"
+             xmlns:conv="clr-namespace:SonicDesktopRelay.App.Converters"
              x:Class="SonicDesktopRelay.App.Views.WatchView"
              x:DataType="app:Shell"
              Container.Name="watchPage" Container.Sizing="Width">
     <UserControl.Styles>
         <Style Selector="ScrollViewer#pageScroll">
             <Setter Property="Margin" Value="{StaticResource PagePadding}" />
+            <Setter Property="VerticalScrollBarVisibility" Value="Auto" />
         </Style>
         <Style Selector="ScrollViewer#pageScroll.fullScreen">
             <Setter Property="Margin" Value="0" />
+            <Setter Property="VerticalScrollBarVisibility" Value="Disabled" />
         </Style>
         <Style Selector="Grid#pageLayout">
             <Setter Property="MaxWidth" Value="1400" />
@@ -44,7 +47,7 @@
     </UserControl.Styles>
 
     <ScrollViewer Name="pageScroll" Classes.fullScreen="{Binding IsVideoFullScreen}"
-                  HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+                  HorizontalScrollBarVisibility="Disabled">
         <Grid Name="pageLayout" Classes.fullScreen="{Binding IsVideoFullScreen}"
               MinHeight="{Binding #pageScroll.Bounds.Height}"
               HorizontalAlignment="Stretch"
@@ -93,16 +96,30 @@
                                            FontSize="{StaticResource FontSizeSm}"
                                            Foreground="{StaticResource TextSecondaryBrush}" />
                             </StackPanel>
-                            <TextBlock Grid.Column="1" Text="F11: fullscreen   Esc: return"
-                                       VerticalAlignment="Center" FontSize="{StaticResource FontSizeSm}"
-                                       Foreground="{StaticResource TextMutedBrush}" />
+                            <Button Grid.Column="1" Content="Fullscreen" Click="OnEnterFullScreen"
+                                    IsEnabled="{Binding ViewModel.Snapshot.Phase, Converter={x:Static conv:EnumEqualsConverter.Instance}, ConverterParameter=Watching}"
+                                    VerticalAlignment="Center" ToolTip.Tip="Fill the window (F11)" />
                         </Grid>
-                        <Border Grid.Row="1" Background="Black"
-                                CornerRadius="{StaticResource ControlCornerRadius}"
-                                MinHeight="240" ClipToBounds="True">
+                        <Grid Grid.Row="1" MinHeight="240" Background="Black" ClipToBounds="True">
                             <controls:VideoSurface Name="Surface" HorizontalAlignment="Stretch"
                                                    VerticalAlignment="Stretch" />
-                        </Border>
+                            <Border HorizontalAlignment="Center" VerticalAlignment="Bottom"
+                                    Margin="16" Padding="12,8" CornerRadius="8"
+                                    Background="#C01B2028"
+                                    IsVisible="{Binding IsVideoFullScreen}">
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <Button Content="Return" Click="OnExitFullScreen"
+                                            ToolTip.Tip="Leave fullscreen (Esc)" />
+                                    <Button Content="🔊" IsVisible="{Binding !IsPlaybackMuted}"
+                                            Click="OnTogglePlaybackMute" ToolTip.Tip="Mute playback" />
+                                    <Button Content="🔇" IsVisible="{Binding IsPlaybackMuted}"
+                                            Click="OnTogglePlaybackMute" ToolTip.Tip="Unmute playback" />
+                                    <Slider Width="150" Minimum="0" Maximum="100"
+                                            Value="{Binding PlaybackVolume, Mode=TwoWay}"
+                                            VerticalAlignment="Center" ToolTip.Tip="Playback volume" />
+                                </StackPanel>
+                            </Border>
+                        </Grid>
                         <WrapPanel Grid.Row="2" Orientation="Horizontal" Margin="0,8,0,0"
                                    IsVisible="{Binding !IsVideoFullScreen}">
                             <Button Content="Fit to screen" IsEnabled="False" Margin="0,0,8,8"

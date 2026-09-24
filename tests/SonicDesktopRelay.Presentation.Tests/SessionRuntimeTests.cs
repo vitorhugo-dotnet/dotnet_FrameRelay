@@ -60,6 +60,38 @@ public sealed class SessionRuntimeTests
     }
 
     [Fact]
+    public async Task Retired_session_callbacks_cannot_change_a_new_watch_session()
+    {
+        var host = new FakeVideoWatchHost();
+        var firstConnection = new FakeConnection();
+        var secondConnection = new FakeConnection();
+        var connections = new Queue<FakeConnection>([firstConnection, secondConnection]);
+        var runtime = new SessionRuntime(new FakeSessionApi(), () => connections.Dequeue(), watchHost: host);
+
+        await runtime.StartWatchingAsync("AB12CD", CancellationToken.None);
+        var oldWatchState = host.CaptureWatchStateChanged();
+        var oldNegotiationFailure = host.CaptureNegotiationFailed();
+        var oldSignalingState = firstConnection.CaptureStateChanged();
+        var oldFrame = firstConnection.CaptureFrameReceived();
+        await runtime.StopAsync(CancellationToken.None);
+
+        await runtime.StartWatchingAsync("AB12CD", CancellationToken.None);
+        host.Raise(WatchState.Receiving);
+        runtime.UpdateMetrics(new SessionMediaMetrics(1280, 720, 2_000_000, 24, null, "H.264", "TURN/TCP"));
+        var expected = runtime.Snapshot;
+
+        oldWatchState?.Invoke(WatchState.Stalled);
+        oldNegotiationFailure?.Invoke("old peer failed");
+        oldSignalingState?.Invoke(SignalingState.Reconnecting);
+        oldFrame?.Invoke(new SignalingEnvelope(SignalingMessageTypes.SessionEnded,
+            null, null, null, null, null, null));
+
+        Assert.Equal(SessionPhase.Watching, runtime.Snapshot.Phase);
+        Assert.Equal(WatchState.Receiving, runtime.Snapshot.Watching);
+        Assert.Equal(expected, runtime.Snapshot);
+    }
+
+    [Fact]
     public async Task Metrics_clear_across_a_role_change()
     {
         var runtime = new SessionRuntime(new FakeSessionApi(), () => new FakeConnection());
@@ -601,6 +633,10 @@ public sealed class SessionRuntimeTests
 
         public event Action<string>? NegotiationFailed;
 
+        public Action<WatchState>? CaptureWatchStateChanged() => WatchStateChanged;
+
+        public Action<string>? CaptureNegotiationFailed() => NegotiationFailed;
+
         public Task StartAsync(CancellationToken ct)
         {
             if (StartFailure is not null) throw new InvalidOperationException(StartFailure);
@@ -742,6 +778,8 @@ public sealed class SessionRuntimeTests
         public event Action<SignalingState>? StateChanged;
 
         public Action<SignalingState>? CaptureStateChanged() => StateChanged;
+
+        public Action<SignalingEnvelope>? CaptureFrameReceived() => FrameReceived;
 
         public Task StartAsync(Guid sessionId, CancellationToken ct)
         {

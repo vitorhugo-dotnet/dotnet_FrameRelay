@@ -25,8 +25,12 @@ public sealed class SessionRuntime(
     private readonly SemaphoreSlim _stopGate = new(1, 1);
     private readonly Queue<SignalingEnvelope> _pendingViewerSignaling = new();
     private ISignalingConnection? _connection;
+    private Action<SignalingEnvelope>? _frameHandler;
+    private Action<SignalingState>? _signalingStateHandler;
+    private Action<WatchState>? _watchStateHandler;
+    private Action<string>? _watchNegotiationHandler;
+    private long _sessionGeneration;
     private bool _isOwner;
-    private bool _watchHooked;
     private bool _watchReady;
     private bool _publishStartInProgress;
     private bool _captureTargetClosedDuringStart;
@@ -73,13 +77,18 @@ public sealed class SessionRuntime(
     {
         ArgumentNullException.ThrowIfNull(target);
         ArgumentNullException.ThrowIfNull(profile);
-        RequireIdle();
-        Publish(Snapshot with { Phase = SessionPhase.Preparing, Error = null });
+        long generation;
+        lock (_snapshotGate)
+        {
+            RequireIdle();
+            generation = ++_sessionGeneration;
+            Publish(Snapshot with { Phase = SessionPhase.Preparing, Error = null });
+        }
         try
         {
             var created = await api.CreateScreenShareAsync(maxViewers, ct);
             _isOwner = true;
-            await AttachAsync(created.SessionId, ct);
+            await AttachAsync(created.SessionId, generation, ct);
 
             if (publishHost is not null)
             {
@@ -137,22 +146,25 @@ public sealed class SessionRuntime(
 
     public async Task StartWatchingAsync(string code, CancellationToken ct)
     {
-        RequireIdle();
-        Publish(Snapshot with { Phase = SessionPhase.Joining, Error = null });
+        long generation;
+        lock (_snapshotGate)
+        {
+            RequireIdle();
+            generation = ++_sessionGeneration;
+            Publish(Snapshot with { Phase = SessionPhase.Joining, Error = null });
+        }
         try
         {
             var sessionId = await api.JoinAsync(code, ct);
             _isOwner = false;
-            await AttachAsync(sessionId, ct);
+            await AttachAsync(sessionId, generation, ct);
 
             if (watchHost is not null)
             {
-                if (!_watchHooked)
-                {
-                    watchHost.WatchStateChanged += OnWatchState;
-                    watchHost.NegotiationFailed += OnWatchNegotiationFailed;
-                    _watchHooked = true;
-                }
+                _watchStateHandler = state => OnWatchState(state, generation);
+                _watchNegotiationHandler = failure => OnWatchNegotiationFailed(failure, generation);
+                watchHost.WatchStateChanged += _watchStateHandler;
+                watchHost.NegotiationFailed += _watchNegotiationHandler;
 
                 try
                 {
@@ -185,8 +197,12 @@ public sealed class SessionRuntime(
         await _stopGate.WaitAsync(ct);
         try
         {
-            if (Snapshot.Phase == SessionPhase.Idle) return;
-            Publish(Snapshot with { Phase = SessionPhase.Ending });
+            lock (_snapshotGate)
+            {
+                if (Snapshot.Phase == SessionPhase.Idle) return;
+                ++_sessionGeneration;
+                Publish(Snapshot with { Phase = SessionPhase.Ending });
+            }
 
             // Capture stops before the session ends: the last thing a viewer should see is the
             // screen going away, not frames arriving for a session the server has already closed.
@@ -260,32 +276,53 @@ public sealed class SessionRuntime(
         }
     }
 
-    private async Task AttachAsync(Guid sessionId, CancellationToken ct)
+    private async Task AttachAsync(Guid sessionId, long generation, CancellationToken ct)
     {
         var connection = connectionFactory();
-        connection.FrameReceived += OnFrame;
+        _frameHandler = envelope => OnFrame(envelope, generation);
+        _signalingStateHandler = state => OnSignalingState(state, generation);
+        connection.FrameReceived += _frameHandler;
         _connection = connection;
         await connection.StartAsync(sessionId, ct);
 
         // Subscribed only after the initial connect: the state change that connecting itself
         // produces is already reflected in the snapshot the caller is about to publish, and
         // reacting to it here would emit a redundant intermediate snapshot to the UI.
-        connection.StateChanged += OnSignalingState;
+        connection.StateChanged += _signalingStateHandler;
     }
 
     private async Task DetachAsync()
     {
         if (publishHost is not null) publishHost.CaptureTargetClosed -= OnCaptureTargetClosed;
-        if (_connection is null) return;
-        _connection.FrameReceived -= OnFrame;
-        _connection.StateChanged -= OnSignalingState;
-        await _connection.DisposeAsync();
+        if (watchHost is not null)
+        {
+            if (_watchStateHandler is not null) watchHost.WatchStateChanged -= _watchStateHandler;
+            if (_watchNegotiationHandler is not null) watchHost.NegotiationFailed -= _watchNegotiationHandler;
+        }
+        _watchStateHandler = null;
+        _watchNegotiationHandler = null;
+        var connection = _connection;
+        if (connection is null) return;
+        if (_frameHandler is not null) connection.FrameReceived -= _frameHandler;
+        if (_signalingStateHandler is not null) connection.StateChanged -= _signalingStateHandler;
+        _frameHandler = null;
+        _signalingStateHandler = null;
         _connection = null;
         _isOwner = false;
         ClearPendingViewerSignaling();
+        await connection.DisposeAsync();
     }
 
-    private void OnFrame(SignalingEnvelope envelope)
+    private void OnFrame(SignalingEnvelope envelope, long generation)
+    {
+        lock (_snapshotGate)
+        {
+            if (generation != _sessionGeneration) return;
+            HandleFrame(envelope);
+        }
+    }
+
+    private void HandleFrame(SignalingEnvelope envelope)
     {
         var phase = Snapshot.Phase;
         var signaling = _connection?.State ?? Snapshot.Signaling;
@@ -354,6 +391,7 @@ public sealed class SessionRuntime(
                 break;
 
             case SignalingMessageTypes.SessionEnded:
+                ++_sessionGeneration;
                 if (publishHost is not null) _ = publishHost.StopAsync();
                 if (watchHost is not null) _ = watchHost.StopAsync();
                 _ = DetachAsync();
@@ -457,8 +495,9 @@ public sealed class SessionRuntime(
         return envelope.From;
     }
 
-    private void OnSignalingState(SignalingState state) =>
+    private void OnSignalingState(SignalingState state, long generation) =>
         TryUpdateSnapshot(
+            generation,
             snapshot => snapshot.Phase is SessionPhase.Preparing or SessionPhase.Joining
                 or SessionPhase.Sharing or SessionPhase.Watching,
             snapshot => snapshot with { Signaling = state });
@@ -468,14 +507,16 @@ public sealed class SessionRuntime(
     /// into <see cref="SessionSnapshot.Phase"/> would claim the connection had dropped when it
     /// had not.
     /// </summary>
-    private void OnWatchState(WatchState state)
+    private void OnWatchState(WatchState state, long generation)
     {
-        TryUpdateSnapshot(SessionPhase.Watching, snapshot => snapshot with { Watching = state });
+        TryUpdateSnapshot(generation, snapshot => snapshot.Phase == SessionPhase.Watching,
+            snapshot => snapshot with { Watching = state });
     }
 
-    private void OnWatchNegotiationFailed(string failure)
+    private void OnWatchNegotiationFailed(string failure, long generation)
     {
         TryUpdateSnapshot(
+            generation,
             snapshot => snapshot.Phase is SessionPhase.Joining or SessionPhase.Watching,
             snapshot => snapshot with { Error = failure });
     }
@@ -485,12 +526,18 @@ public sealed class SessionRuntime(
 
     private bool TryUpdateSnapshot(
         Func<SessionSnapshot, bool> accepts,
+        Func<SessionSnapshot, SessionSnapshot> update) =>
+        TryUpdateSnapshot(_sessionGeneration, accepts, update);
+
+    private bool TryUpdateSnapshot(
+        long generation,
+        Func<SessionSnapshot, bool> accepts,
         Func<SessionSnapshot, SessionSnapshot> update)
     {
         lock (_snapshotGate)
         {
             var current = Snapshot;
-            if (!accepts(current)) return false;
+            if (generation != _sessionGeneration || !accepts(current)) return false;
             Publish(update(current));
             return true;
         }
@@ -498,6 +545,7 @@ public sealed class SessionRuntime(
 
     private async Task FailAsync(string code)
     {
+        lock (_snapshotGate) ++_sessionGeneration;
         await DetachAsync();
         Publish(new SessionSnapshot(SessionPhase.Failed, null, null, 0, SignalingState.Disconnected, code));
     }

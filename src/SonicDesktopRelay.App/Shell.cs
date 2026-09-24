@@ -26,7 +26,7 @@ public enum ShareSourceKind { Monitor, Window }
 /// built lazily because the backend address can be wrong until someone fixes it in Settings.
 /// </summary>
 [SupportedOSPlatform("windows10.0.19041.0")]
-public sealed class Shell : INotifyPropertyChanged
+public sealed class Shell : INotifyPropertyChanged, IAsyncDisposable
 {
     private const int DefaultMaxViewers = 3;
 
@@ -34,6 +34,9 @@ public sealed class Shell : INotifyPropertyChanged
     private readonly IMonitorEnumerator _monitorEnumerator;
     private readonly IWindowEnumerator _windowEnumerator;
     private readonly ILogger<Shell> _logger;
+    private readonly SharePreviewController _preview;
+    private bool _shareViewAttached;
+    private bool _startingPublicShare;
     private AppComposition? _composition;
     private string _backendAddress;
     private string _deviceName = Environment.MachineName;
@@ -57,6 +60,10 @@ public sealed class Shell : INotifyPropertyChanged
     /// shell only carries the frame across the thread boundary, exactly as it does snapshots.
     /// </summary>
     public event Action<VideoFrame>? FrameDecoded;
+    public event Action<VideoFrame>? PreviewFrameCaptured;
+    public string PreviewStatus => _startingPublicShare || !ViewModel.CanShare
+        ? "Preview paused while sharing."
+        : _preview.PreviewStatus;
 
     public MainWindowViewModel ViewModel { get; } = new();
 
@@ -66,11 +73,21 @@ public sealed class Shell : INotifyPropertyChanged
         : this(new MonitorEnumerator(), new WindowEnumerator()) { }
 
     public Shell(IMonitorEnumerator monitorEnumerator, IWindowEnumerator windowEnumerator)
+        : this(monitorEnumerator, windowEnumerator, new PublisherCaptureSelection().CreateVideo,
+            action => Dispatcher.UIThread.Post(action)) { }
+
+    internal Shell(IMonitorEnumerator monitorEnumerator, IWindowEnumerator windowEnumerator,
+        Func<CaptureTarget, IScreenCaptureSource> previewSourceFactory,
+        Action<Action>? postToUi = null)
     {
         _monitorEnumerator = monitorEnumerator ?? throw new ArgumentNullException(nameof(monitorEnumerator));
         _windowEnumerator = windowEnumerator ?? throw new ArgumentNullException(nameof(windowEnumerator));
         _logger = FrameRelayLogging.Current?.LoggerFactory.CreateLogger<Shell>()
                   ?? NullLogger<Shell>.Instance;
+        _preview = new SharePreviewController(previewSourceFactory,
+            postToUi ?? (action => action()));
+        _preview.FrameCaptured += frame => PreviewFrameCaptured?.Invoke(frame);
+        _preview.StatusChanged += () => Raise(nameof(PreviewStatus));
         _backendAddressStore = new FileBackendAddressStore(FileBackendAddressStore.DefaultPath);
         _backendAddress = _backendAddressStore.Read();
         SelectedShareQuality = ShareQualities[0];
@@ -189,11 +206,33 @@ public sealed class Shell : INotifyPropertyChanged
 
     private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
+        if (e.PropertyName == nameof(MainWindowViewModel.CurrentPage))
+            _ = UpdatePreviewAsync();
         if ((e.PropertyName == nameof(MainWindowViewModel.CurrentPage)
              && ViewModel.CurrentPage != Page.Watch)
             || (e.PropertyName == nameof(MainWindowViewModel.Snapshot)
                 && ViewModel.Snapshot.Phase != SessionPhase.Watching))
             ExitVideoFullScreen();
+    }
+
+    internal Task SetShareViewAttachedAsync(bool attached)
+    {
+        _shareViewAttached = attached;
+        return UpdatePreviewAsync();
+    }
+
+    internal Task WhenPreviewIdleAsync() => _preview.WhenIdleAsync();
+
+    private bool ShouldPreview => _shareViewAttached && !_startingPublicShare
+        && ViewModel.CurrentPage == Page.Share && ViewModel.CanShare;
+
+    private Task UpdatePreviewAsync() =>
+        _preview.SetTargetAsync(ShouldPreview ? SelectedCaptureTarget : null);
+
+    public async ValueTask DisposeAsync()
+    {
+        ViewModel.PropertyChanged -= OnViewModelPropertyChanged;
+        await _preview.DisposeAsync();
     }
 
     /// <summary>Watch playback level on the 0–100 scale shown by both watch controls.</summary>
@@ -533,7 +572,16 @@ public sealed class Shell : INotifyPropertyChanged
         }
 
         var profile = new VideoPublishProfile(quality.MaxHeight, frameRate.FramesPerSecond);
-        await GuardAsync(() => runtime.StartSharingAsync(target, profile, DefaultMaxViewers, ct));
+        _startingPublicShare = true;
+        Raise(nameof(PreviewStatus));
+        await _preview.SetTargetAsync(null);
+        try { await GuardAsync(() => runtime.StartSharingAsync(target, profile, DefaultMaxViewers, ct)); }
+        finally
+        {
+            _startingPublicShare = false;
+            Raise(nameof(PreviewStatus));
+            await UpdatePreviewAsync();
+        }
     }
 
     private static bool SameWindowIdentity(WindowInfo left, WindowInfo right) =>
@@ -551,8 +599,8 @@ public sealed class Shell : INotifyPropertyChanged
     {
         ExitVideoFullScreen();
         var runtime = _composition?.Runtime;
-        if (runtime is null) return;
-        await GuardAsync(() => runtime.StopAsync(ct));
+        if (runtime is not null) await GuardAsync(() => runtime.StopAsync(ct));
+        await UpdatePreviewAsync();
     }
 
     private SessionRuntime? TryGetRuntime()
@@ -650,6 +698,11 @@ public sealed class Shell : INotifyPropertyChanged
         {
             var previous = ViewModel.Snapshot;
             ViewModel.Apply(snapshot);
+            if (snapshot.Phase != previous.Phase)
+            {
+                Raise(nameof(PreviewStatus));
+                _ = UpdatePreviewAsync();
+            }
             Raise(nameof(CanStartShare));
             Raise(nameof(MediaStatusText));
             Raise(nameof(ShareAudioStatus));
@@ -750,6 +803,9 @@ public sealed class Shell : INotifyPropertyChanged
         });
     }
 
-    private void Raise([CallerMemberName] string? property = null) =>
+    private void Raise([CallerMemberName] string? property = null)
+    {
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(property));
+        if (property == nameof(SelectedCaptureTarget)) _ = UpdatePreviewAsync();
+    }
 }

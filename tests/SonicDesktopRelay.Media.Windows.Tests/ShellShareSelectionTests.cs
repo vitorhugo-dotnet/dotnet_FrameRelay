@@ -1,5 +1,6 @@
 using SonicDesktopRelay.App;
 using SonicDesktopRelay.Media;
+using SonicDesktopRelay.Presentation;
 
 namespace SonicDesktopRelay.Media.Windows.Tests;
 
@@ -119,7 +120,49 @@ public sealed class ShellShareSelectionTests
         Assert.Null(shell.SelectedCaptureTarget);
     }
 
+    [Fact]
+    public async Task Preview_follows_active_share_page_without_creating_a_session()
+    {
+        var sources = new List<PreviewCapture>();
+        var shell = new Shell(_monitors, _windows, _ =>
+        {
+            var source = new PreviewCapture();
+            sources.Add(source);
+            return source;
+        });
+
+        await shell.SetShareViewAttachedAsync(true);
+        Assert.Equal(new CaptureTarget.Monitor(Primary), sources[0].StartedTarget);
+        Assert.Equal(SessionPhase.Idle, shell.ViewModel.Snapshot.Phase);
+
+        shell.IsWindowSourceSelected = true;
+        await shell.WhenPreviewIdleAsync();
+        Assert.Equal(new CaptureTarget.Window(First), sources[1].StartedTarget);
+        Assert.Equal(1, sources[0].DisposeCount);
+
+        shell.ViewModel.CurrentPage = Page.Watch;
+        await shell.WhenPreviewIdleAsync();
+        Assert.Equal(1, sources[1].DisposeCount);
+        await shell.DisposeAsync();
+    }
+
     private Shell CreateShell() => new(_monitors, _windows);
+
+    private sealed class PreviewCapture : IScreenCaptureSource
+    {
+        public MonitorInfo Monitor => Primary;
+        public event Action<VideoFrame>? FrameCaptured { add { } remove { } }
+        public event Action<string>? TargetClosed { add { } remove { } }
+        public CaptureTarget? StartedTarget { get; private set; }
+        public int DisposeCount { get; private set; }
+        public Task StartAsync(MonitorInfo monitor, VideoQuality quality, CancellationToken ct) =>
+            StartAsync(new CaptureTarget.Monitor(monitor), quality, ct);
+        public Task StartAsync(CaptureTarget target, VideoQuality quality, CancellationToken ct)
+        { StartedTarget = target; return Task.CompletedTask; }
+        public void SetFrameRate(int framesPerSecond) { }
+        public Task StopAsync() => Task.CompletedTask;
+        public ValueTask DisposeAsync() { DisposeCount++; return ValueTask.CompletedTask; }
+    }
 
     private sealed class FakeMonitorEnumerator(params MonitorInfo[] monitors) : IMonitorEnumerator
     {

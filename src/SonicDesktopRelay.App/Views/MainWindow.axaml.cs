@@ -20,7 +20,11 @@ public partial class MainWindow : Window
         DataContext = shell;
         shell.PropertyChanged += OnShellPropertyChanged;
         AddHandler(KeyDownEvent, OnWindowKeyDown, RoutingStrategies.Tunnel);
-        Closed += (_, _) => shell.PropertyChanged -= OnShellPropertyChanged;
+        Closed += async (_, _) =>
+        {
+            shell.PropertyChanged -= OnShellPropertyChanged;
+            await shell.DisposeAsync();
+        };
     }
 
     private void OnShellPropertyChanged(object? sender, PropertyChangedEventArgs e)

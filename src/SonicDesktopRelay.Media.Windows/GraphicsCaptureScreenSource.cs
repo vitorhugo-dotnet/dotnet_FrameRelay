@@ -1,4 +1,5 @@
 using System.Runtime.Versioning;
+using Microsoft.Extensions.Logging;
 using Vortice.Direct3D;
 using Vortice.Direct3D11;
 using Vortice.DXGI;
@@ -22,9 +23,16 @@ public sealed class GraphicsCaptureScreenSource : IScreenCaptureSource, IScreenC
 {
     private readonly GraphicsCaptureItemSource _source;
 
-    public GraphicsCaptureScreenSource()
+    public GraphicsCaptureScreenSource() : this(new GraphicsCaptureItemSource()) { }
+
+    public GraphicsCaptureScreenSource(ILogger logger) : this(new GraphicsCaptureItemSource(logger)) { }
+
+    internal GraphicsCaptureScreenSource(IBorderlessCapturePolicy borderlessPolicy)
+        : this(new GraphicsCaptureItemSource(borderlessPolicy)) { }
+
+    private GraphicsCaptureScreenSource(GraphicsCaptureItemSource source)
     {
-        _source = new GraphicsCaptureItemSource();
+        _source = source;
         _source.FrameCaptured += frame => FrameCaptured?.Invoke(frame);
         _source.TargetClosed += reason => TargetClosed?.Invoke(reason);
         _source.DimensionsChanged += (width, height) => DimensionsChanged?.Invoke(width, height);

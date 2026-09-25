@@ -30,6 +30,20 @@ owner stops publishing and ends the session.
 `IVideoEncoder` for the entire session, so adding viewers adds peer subscriptions rather than
 additional encoders.
 
+### Borderless capture
+
+On Windows builds that expose the borderless WGC APIs, FrameRelay requests
+`GraphicsCaptureAccessKind.Borderless` before starting monitor or window capture. When access is
+allowed, the session sets `IsBorderRequired` to `false`. If the APIs are unavailable, access is
+denied, the package capability is missing, or Windows rejects the property, capture continues
+with the normal colored border. The fallback outcome and reason are written to the application
+log with the capture target kind.
+
+The current application is published as an unpackaged Win32 executable and has no MSIX/AppX
+package manifest. Any future packaged build that requests borderless access must declare
+`graphicsCaptureWithoutBorder` in its package manifest; this capability does not belong in the
+existing Win32 `app.manifest`.
+
 ### Encoder selection
 
 `MediaFoundationH264Encoder` enumerates H.264 Media Foundation transforms in this order:

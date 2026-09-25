@@ -1,4 +1,5 @@
 using System.Runtime.Versioning;
+using Microsoft.Extensions.Logging;
 using SonicDesktopRelay.Media;
 
 namespace SonicDesktopRelay.Media.Windows;
@@ -15,6 +16,12 @@ public sealed class GraphicsCaptureWindowSource : IScreenCaptureSource, IScreenC
     private int _closeNotified;
 
     public GraphicsCaptureWindowSource() : this(new Win32WindowApi(), new GraphicsCaptureItemSource()) { }
+
+    public GraphicsCaptureWindowSource(ILogger logger)
+        : this(new Win32WindowApi(), new GraphicsCaptureItemSource(logger)) { }
+
+    internal GraphicsCaptureWindowSource(IBorderlessCapturePolicy borderlessPolicy, ILogger? logger = null)
+        : this(new Win32WindowApi(), new GraphicsCaptureItemSource(borderlessPolicy, logger)) { }
 
     internal GraphicsCaptureWindowSource(IWindowApi windowApi, IScreenCaptureSource source)
     {

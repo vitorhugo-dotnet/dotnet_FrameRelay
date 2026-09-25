@@ -1,6 +1,8 @@
 <Project>
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
+    <!-- Newer WinRT contracts enable runtime-guarded APIs while SupportedOSPlatformVersion preserves the existing OS floor. -->
+    <WindowsSdkPackageVersion>10.0.26100.87</WindowsSdkPackageVersion>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>

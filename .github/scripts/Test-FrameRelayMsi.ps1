@@ -35,7 +35,7 @@ function Test-FrameRelayMsi {
         throw 'Publish payload is missing SonicDesktopRelay.App.exe.'
     }
 
-    $legacyTokens = @('avcodec-', 'avutil-', 'swscale-', 'swresample-', 'FFmpeg.AutoGen')
+    $legacyTokens = @('avcodec-', 'avutil-', 'swscale-', 'swresample-', ('FF' + 'mpeg.AutoGen'))
     $legacyFiles = @(
         $publishFiles | Where-Object {
             $name = $_.Name

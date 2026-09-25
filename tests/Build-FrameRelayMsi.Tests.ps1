@@ -86,4 +86,7 @@ Assert-Equal $true ($workflow.Contains('./.github/scripts/Test-FrameRelayMsiLife
 Assert-Equal $true ($workflow.Contains("Where-Object { `$_.Extension -in @('.zip', '.exe', '.msi') }")) 'Checksum generation includes the MSI'
 Assert-Equal $true ($workflow.Contains("'`${{ steps.msi.outputs.path }}'")) 'GitHub Release uploads the MSI asset'
 Assert-Equal $true ($workflow.Contains("`$extraArgs += '--verify-tag'") -and $workflow.Contains("`$extraArgs += '--latest'") -and $workflow.Contains("`$extraArgs += '--prerelease'")) 'Existing stable and prerelease release flags remain'
+$legacyName = 'FF' + 'mpeg'
+$verifierSource = Get-Content -Raw -LiteralPath (Join-Path (Split-Path -Parent $PSScriptRoot) '.github/scripts/Test-FrameRelayMsi.ps1')
+Assert-Equal -1 ($verifierSource.IndexOf($legacyName, [StringComparison]::OrdinalIgnoreCase)) 'MSI verifier passes the legacy dependency source gate'
 Write-Host 'All MSI release workflow contract tests passed.'

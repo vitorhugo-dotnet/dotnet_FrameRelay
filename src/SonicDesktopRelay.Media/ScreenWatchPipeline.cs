@@ -133,6 +133,14 @@ public sealed class ScreenWatchPipeline(
     /// </summary>
     public string? LastFailure { get; private set; }
 
+    /// <summary>Marks the viewer media path terminal when transport negotiation cannot recover.</summary>
+    public void MarkFailed(string reason)
+    {
+        if (_state == WatchState.Failed) return;
+        LastFailure = reason;
+        SetState(WatchState.Failed);
+    }
+
     public void Submit(EncodedVideoSample sample)
     {
         lock (_statsGate)

@@ -38,6 +38,19 @@ public sealed class SipSorceryViewerPeerConnectionTests
         """;
 
     [Fact]
+    public async Task Relay_only_viewer_does_not_gather_host_candidates()
+    {
+        var factory = new SipSorceryViewerPeerConnectionFactory(Ice);
+        await using var peer = factory.Create(forceRelay: true);
+        var candidates = new List<string>();
+        peer.IceCandidateGathered += (candidate, _, _) => candidates.Add(candidate);
+
+        await peer.CreateAnswerAsync(PublisherOfferSdp, CancellationToken.None);
+
+        Assert.DoesNotContain(candidates, candidate => candidate.Contains(" typ host", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task The_answer_accepts_a_recvonly_h264_video_track()
     {
         var factory = new SipSorceryViewerPeerConnectionFactory(Ice);

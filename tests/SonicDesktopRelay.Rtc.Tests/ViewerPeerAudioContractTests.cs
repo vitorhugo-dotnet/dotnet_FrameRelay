@@ -26,6 +26,7 @@ public sealed class ViewerPeerAudioContractTests
 
     private sealed class FakeViewerPeer : IViewerPeerConnection
     {
+        public event Action<bool>? ConnectionStateChanged { add { } remove { } }
         private event Action<EncodedAudioSample>? AudioReceived;
 
         public event Action<string, string?, int?>? IceCandidateGathered

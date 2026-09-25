@@ -11,22 +11,24 @@
     <StandardDirectory Id="ProgramFiles64Folder">
       <Directory Id="INSTALLFOLDER" Name="FrameRelay" />
     </StandardDirectory>
-    <StandardDirectory Id="StartMenuFolder">
-      <Component Id="StartMenuShortcut" Guid="{31B65AE9-8101-4E7E-A77F-E1713A95A91A}">
-        <Shortcut
-            Id="FrameRelayStartMenuShortcut"
-            Name="FrameRelay"
-            Target="[INSTALLFOLDER]SonicDesktopRelay.App.exe"
-            WorkingDirectory="INSTALLFOLDER" />
-        <RemoveFolder Id="RemoveFrameRelayStartMenuFolder" On="uninstall" />
-        <RegistryValue
-            Root="HKCU"
-            Key="Software\FrameRelay"
-            Name="Installed"
-            Type="integer"
-            Value="1"
-            KeyPath="yes" />
-      </Component>
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="FrameRelayStartMenuFolder" Name="FrameRelay">
+        <Component Id="StartMenuShortcut" Guid="{31B65AE9-8101-4E7E-A77F-E1713A95A91A}">
+          <Shortcut
+              Id="FrameRelayStartMenuShortcut"
+              Name="FrameRelay"
+              Target="[INSTALLFOLDER]SonicDesktopRelay.App.exe"
+              WorkingDirectory="INSTALLFOLDER" />
+          <RemoveFolder Id="RemoveFrameRelayStartMenuFolder" On="uninstall" />
+          <RegistryValue
+              Root="HKCU"
+              Key="Software\FrameRelay"
+              Name="Installed"
+              Type="integer"
+              Value="1"
+              KeyPath="yes" />
+        </Component>
+      </Directory>
     </StandardDirectory>
     <Feature Id="MainFeature" Title="FrameRelay" Level="1">
       <ComponentGroupRef Id="PublishPayload" />

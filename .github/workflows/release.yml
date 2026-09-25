@@ -157,6 +157,35 @@ jobs:
             -ExpectedProductVersion $numericVersion
 
           "path=$msiPath" >> $env:GITHUB_OUTPUT
+          "version=$numericVersion" >> $env:GITHUB_OUTPUT
+
+      - name: Build MSI upgrade test package
+        id: msi-upgrade
+        shell: pwsh
+        run: |
+          . ./.github/scripts/Build-FrameRelayMsi.ps1
+          $releaseVersion = '${{ steps.release.outputs.version }}'
+          $upgradeVersion = Get-NextMsiVersion $releaseVersion
+          $publishDirectory = Join-Path $PWD 'artifacts/publish/win-x64'
+          $outputDirectory = Join-Path $PWD 'artifacts/lifecycle'
+          $upgradeMsi = Invoke-FrameRelayMsiBuild `
+            -PublishDirectory $publishDirectory `
+            -ReleaseVersion $upgradeVersion `
+            -OutputDirectory $outputDirectory
+          "path=$upgradeMsi" >> $env:GITHUB_OUTPUT
+          "version=$upgradeVersion" >> $env:GITHUB_OUTPUT
+
+      - name: Test MSI install, upgrade, and uninstall
+        shell: pwsh
+        run: |
+          $firstMsi = '${{ steps.msi.outputs.path }}'
+          $secondMsi = '${{ steps.msi-upgrade.outputs.path }}'
+          ./tests/Test-FrameRelayMsiLifecycle.Tests.ps1 `
+            -FirstMsiPath $firstMsi `
+            -SecondMsiPath $secondMsi
+          ./.github/scripts/Test-FrameRelayMsiLifecycle.ps1 `
+            -FirstMsiPath $firstMsi `
+            -SecondMsiPath $secondMsi
 
       - name: Verify legacy codec artifacts are absent
         shell: pwsh

@@ -163,7 +163,7 @@ function Test-FrameRelayMsi {
         $shortcutView.Execute()
         $hasStartMenuShortcut = $false
         while ($record = $shortcutView.Fetch()) {
-            if ($record.StringData(1) -match 'FrameRelay' -and $record.StringData(2) -eq 'StartMenuFolder') {
+            if ($record.StringData(1) -match 'FrameRelay' -and $record.StringData(2) -eq 'FrameRelayStartMenuFolder') {
                 $hasStartMenuShortcut = $true
             }
         }

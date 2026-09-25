@@ -32,6 +32,9 @@ function Assert-Throws {
 
 Assert-Equal '1.2.3' (ConvertTo-MsiVersion '1.2.3') 'Stable version maps to MSI version'
 Assert-Equal '0.0.0' (ConvertTo-MsiVersion '0.0.0-alpha.pr42.110') 'Prerelease maps to numeric MSI version'
+Assert-Equal '1.2.4' (Get-NextMsiVersion '1.2.3') 'Upgrade test increments the MSI patch version'
+Assert-Equal '1.3.0' (Get-NextMsiVersion '1.2.65535') 'Upgrade test carries to the minor version'
+Assert-Equal '2.0.0' (Get-NextMsiVersion '1.255.65535') 'Upgrade test carries to the major version'
 Assert-Equal 'FrameRelay-win-x64-0.0.0-alpha.pr42.110.msi' (Get-FrameRelayMsiFileName '0.0.0-alpha.pr42.110') 'Asset filename retains full release version'
 Assert-Throws { ConvertTo-MsiVersion 'v1.2.3' } 'semantic version' 'Version with tag prefix is rejected'
 Assert-Throws { ConvertTo-MsiVersion '1.2.65536' } 'range' 'Out-of-range MSI field is rejected'
@@ -78,6 +81,8 @@ Assert-Equal $true ($publishIndex -ge 0 -and $msiIndex -gt $publishIndex -and $a
 Assert-Equal $true ($wixProject.Contains('<Project Sdk="WixToolset.Sdk/5.0.1">')) 'WiX Toolset v5 is pinned'
 Assert-Equal $true ($workflow.Contains('./.github/scripts/Build-FrameRelayMsi.ps1')) 'Release workflow builds the MSI'
 Assert-Equal $true ($workflow.Contains('./.github/scripts/Test-FrameRelayMsi.ps1')) 'Release workflow validates MSI metadata and payload'
+Assert-Equal $true ($workflow.Contains('name: Build MSI upgrade test package')) 'Release workflow builds a second version for upgrade testing'
+Assert-Equal $true ($workflow.Contains('./.github/scripts/Test-FrameRelayMsiLifecycle.ps1')) 'Release workflow installs, launches, upgrades, and uninstalls MSI packages'
 Assert-Equal $true ($workflow.Contains("Where-Object { `$_.Extension -in @('.zip', '.exe', '.msi') }")) 'Checksum generation includes the MSI'
 Assert-Equal $true ($workflow.Contains("'`${{ steps.msi.outputs.path }}'")) 'GitHub Release uploads the MSI asset'
 Assert-Equal $true ($workflow.Contains("`$extraArgs += '--verify-tag'") -and $workflow.Contains("`$extraArgs += '--latest'") -and $workflow.Contains("`$extraArgs += '--prerelease'")) 'Existing stable and prerelease release flags remain'

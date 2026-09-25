@@ -36,6 +36,31 @@ function Get-FrameRelayMsiFileName {
     return "FrameRelay-win-x64-$Version.msi"
 }
 
+function Get-NextMsiVersion {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Version)
+
+    $numericVersion = ConvertTo-MsiVersion $Version
+    $parts = @($numericVersion.Split('.') | ForEach-Object { [int]$_ })
+    if ($parts[2] -lt 65535) {
+        $parts[2]++
+    }
+    elseif ($parts[1] -lt 255) {
+        $parts[1]++
+        $parts[2] = 0
+    }
+    elseif ($parts[0] -lt 255) {
+        $parts[0]++
+        $parts[1] = 0
+        $parts[2] = 0
+    }
+    else {
+        throw "MSI ProductVersion '$numericVersion' cannot be incremented within the Windows Installer range."
+    }
+
+    return ($parts -join '.')
+}
+
 function Invoke-FrameRelayMsiBuild {
     [CmdletBinding()]
     param(

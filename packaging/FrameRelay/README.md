@@ -1,6 +1,8 @@
 # FrameRelay Windows MSI
 
-The WiX Toolset SDK is pinned to 5.0.1 in `FrameRelay.wixproj`. Build the MSI from the self-contained Windows x64 publish directory by setting the `PublishDirectory` and numeric `ProductVersion` MSBuild properties. CI assigns the final release filename after the package builds.
+The WiX Toolset SDK is pinned to 5.0.1 in `FrameRelay.wixproj`. Build the MSI from the self-contained Windows x64 publish directory by setting the `PublishDirectory` and numeric `ProductVersion` MSBuild properties. The release workflow uses `Build-FrameRelayMsi.ps1` and names the artifact `FrameRelay-win-x64-<full-release-version>.msi`.
+
+Windows Installer accepts a numeric three-part `ProductVersion`. Stable release versions map directly; prerelease metadata is dropped from the numeric MSI version while the full version remains in the download name. For example, release `0.0.0-alpha.pr42.110` produces an MSI with ProductVersion `0.0.0`.
 
 The MSI installs the application under `%ProgramFiles%\FrameRelay` and creates a FrameRelay Start Menu shortcut. Windows Installer owns the installed application files, shortcut, and uninstall registration. It does not own or remove files under `%LOCALAPPDATA%\FrameRelay`, which keeps logs and per-user configuration across upgrade and uninstall.
 

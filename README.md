@@ -21,6 +21,16 @@ not rename them.
 
 For source builds, install the .NET 10 SDK.
 
+## Installing from GitHub Releases
+
+Download `FrameRelay-win-x64-<version>.msi` from a GitHub Release to install FrameRelay as a Windows application. The MSI installs under `%ProgramFiles%\FrameRelay` and registers an entry in Windows Installed apps / Programs and Features. Use that entry to upgrade or uninstall FrameRelay.
+
+The MSI does not own per-user settings, credentials, or logs. Data under `%LOCALAPPDATA%\FrameRelay` remains after upgrades and uninstall. The portable ZIP and single-file EXE are still available as separate release downloads.
+
+Windows Installer uses a numeric three-part product version. Stable MSI versions match the release version (for example, `1.2.3`). For prerelease releases, MSI metadata uses the first three numeric components; `0.0.0-alpha.pr42.110` therefore has MSI ProductVersion `0.0.0`. The MSI download filename keeps the full release version.
+
+Prerelease installers with the same three numeric version components can replace one another because Windows Installer cannot order their prerelease labels. The installer does not distinguish which same-core prerelease is newer.
+
 ## Build and test
 
 ```powershell

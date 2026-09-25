@@ -1,6 +1,7 @@
 param(
     [string]$FirstMsiPath = (Join-Path (Split-Path -Parent $PSScriptRoot) 'artifacts/release/FrameRelay-win-x64-0.0.0-alpha.pr42.110.msi'),
-    [string]$SecondMsiPath = (Join-Path (Split-Path -Parent $PSScriptRoot) 'artifacts/lifecycle/FrameRelay-win-x64-0.0.1.msi')
+    [string]$SecondMsiPath = (Join-Path (Split-Path -Parent $PSScriptRoot) 'artifacts/lifecycle/FrameRelay-win-x64-0.0.1.msi'),
+    [string]$SameVersionMsiPath = (Join-Path (Split-Path -Parent $PSScriptRoot) 'artifacts/lifecycle/FrameRelay-win-x64-0.0.0-alpha.pr42.110-upgrade-test.msi')
 )
 
 $ErrorActionPreference = 'Stop'
@@ -32,12 +33,18 @@ function Assert-Throws {
 
 $result = Test-FrameRelayMsiLifecycle -FirstMsiPath $FirstMsiPath -SecondMsiPath $SecondMsiPath -PreflightOnly
 if (-not $result.IsValidUpgrade -or $result.FirstVersion -ge $result.SecondVersion) {
-    throw 'Lifecycle preflight did not confirm an increasing same-product upgrade.'
+    throw 'Lifecycle preflight did not confirm the higher-version same-product upgrade.'
 }
 Write-Host "PASS: upgrade preflight $($result.FirstVersion) -> $($result.SecondVersion)"
 
+$sameVersionResult = Test-FrameRelayMsiLifecycle -FirstMsiPath $FirstMsiPath -SecondMsiPath $SameVersionMsiPath -PreflightOnly
+if (-not $sameVersionResult.IsValidUpgrade -or $sameVersionResult.FirstVersion -ne $sameVersionResult.SecondVersion) {
+    throw 'Lifecycle preflight did not accept same-version prerelease packages.'
+}
+Write-Host "PASS: same-version upgrade preflight $($sameVersionResult.FirstVersion) -> $($sameVersionResult.SecondVersion)"
+
 Assert-Throws {
     Test-FrameRelayMsiLifecycle -FirstMsiPath $SecondMsiPath -SecondMsiPath $FirstMsiPath -PreflightOnly
-} 'newer|higher|increase' 'A lower second MSI is rejected before installation'
+} 'older|newer|higher|increase' 'A lower second MSI is rejected before installation'
 
 Write-Host 'All MSI lifecycle contract tests passed.'

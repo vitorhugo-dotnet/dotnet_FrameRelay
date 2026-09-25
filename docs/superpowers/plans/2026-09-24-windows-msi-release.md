@@ -14,6 +14,7 @@
 
 - Build a per-machine x64 MSI from the self-contained `win-x64` output.
 - Keep product name `FrameRelay`, stable UpgradeCode/component identities, and derive ProductVersion from the resolved release version.
+- Treat equal MSI ProductVersions as upgradeable so successive prereleases that share one numeric core replace the installed copy; MSI cannot order same-core prerelease labels.
 - Install under `%ProgramFiles%\FrameRelay`; never author or remove `%LOCALAPPDATA%` data.
 - Keep existing ZIP and EXE artifacts and existing stable/prerelease release semantics.
 - Do not add FFmpeg or removed codec runtime artifacts.
@@ -22,7 +23,7 @@
 ## Review Focus
 
 - Prerelease strings such as `0.0.0-alpha.pr42.110` are not valid Windows Installer ProductVersion values; normalize deterministically to the three numeric MSI fields while retaining the original full release version in the asset filename and release notes.
-- MSI major upgrades require the same UpgradeCode and a strictly increasing numeric ProductVersion; CI must exercise this with two packages.
+- MSI major upgrades require the same UpgradeCode. CI must exercise replacement by an equal numeric ProductVersion because successive prereleases share a core; lower numeric versions must still be rejected.
 - Uninstall must leave `%LOCALAPPDATA%\FrameRelay` logs, credentials, and settings intact; create this data during the integration test and assert it survives.
 - Dynamic publish payloads can gain or lose files; verify all publish files, including the executable and .NET runtime payload, are represented in the MSI.
 - Installation must not create duplicate ARP entries, and Start Menu shortcut removal must not remove unrelated user files.
@@ -40,7 +41,7 @@
 - Consumes: `PublishDirectory` (absolute path to the existing self-contained publish output) and `ProductVersion` (numeric MSI version) MSBuild properties.
 - Produces: `artifacts/release/FrameRelay-win-x64-<full-release-version>.msi` when invoked by the build script in Task 2.
 
-- [ ] **Step 1: Define the project and package authoring.** Pin `WixToolset.Sdk/5.0.1`. Author a per-machine x64 `Package` with name `FrameRelay`, project publisher metadata, a fixed UpgradeCode, major-upgrade handling, and `MediaTemplate`. Install the publish directory contents under `ProgramFiles64Folder\FrameRelay`. Add a Start Menu shortcut whose component is removed by Windows Installer. Keep the shortcut icon reference omitted because the app repository has no `.ico` asset. Do not author LocalAppData directories or files.
+- [ ] **Step 1: Define the project and package authoring.** Pin `WixToolset.Sdk/5.0.1`. Author a per-machine x64 `Package` with name `FrameRelay`, project publisher metadata, a fixed UpgradeCode, major-upgrade handling that includes equal versions, and `MediaTemplate`. Suppress ICE61 only because it rejects the inclusive equal-version boundary. Install the publish directory contents under `ProgramFiles64Folder\FrameRelay`. Add a Start Menu shortcut whose component is removed by Windows Installer. Keep the shortcut icon reference omitted because the app repository has no `.ico` asset. Do not author LocalAppData directories or files.
 - [ ] **Step 2: Confirm all authored paths and identities.** Check in an explanatory README containing the stable UpgradeCode, build properties, install location, and the rule that a future product rename must retain the UpgradeCode. Confirm each authored component has a stable identity and uses a key path.
 - [ ] **Step 3: Build a local MSI from a representative publish directory.** Run `dotnet build packaging/FrameRelay/FrameRelay.wixproj -p:PublishDirectory=<absolute-publish-dir> -p:ProductVersion=1.2.3 -p:OutputPath=<absolute-temp-dir>`. Expected: WiX compiles the package and emits one `.msi` without missing-file or duplicate-component warnings.
 - [ ] **Step 4: Inspect generated MSI metadata.** Use Windows Installer database inspection in Task 3's verification script; confirm ProductName, Manufacturer, ProductVersion, UpgradeCode, x64 platform, install directory, shortcut, and application executable.
@@ -107,9 +108,9 @@
 
 - [ ] **Step 1: Write lifecycle test assertions.** Exercise script orchestration with disposable fixtures and assert the sequence is first install, app launch, second-version major upgrade, single ARP entry, app launch after upgrade, uninstall, app files absent, and seeded `%LOCALAPPDATA%\FrameRelay` files still present.
 - [ ] **Step 2: Run the lifecycle test and observe expected failures.** Run `pwsh -NoProfile -File tests/Test-FrameRelayMsiLifecycle.Tests.ps1`. Expected: FAIL because the lifecycle script does not exist.
-- [ ] **Step 3: Implement isolated MSI lifecycle validation.** Build a second package with a strictly higher ProductVersion and the same UpgradeCode. Install via quiet `msiexec` with verbose logs, start `SonicDesktopRelay.App.exe` and verify process startup, seed user data before the install, upgrade via the second MSI, query uninstall registration for exactly one FrameRelay product, uninstall via `msiexec`, and assert only MSI-owned install/shortcut files were removed while seeded user data remains. Use a unique runner-local test root and always uninstall/cleanup in `finally`.
+- [ ] **Step 3: Implement isolated MSI lifecycle validation.** Build a second package with the same numeric ProductVersion but a distinct full release version and the same UpgradeCode. Install via quiet `msiexec` with verbose logs, start `SonicDesktopRelay.App.exe` and verify process startup, seed user data before the install, upgrade via the second MSI, query uninstall registration for exactly one FrameRelay product, uninstall via `msiexec`, and assert only MSI-owned install/shortcut files were removed while seeded user data remains. Also reject a lower numeric version in preflight. Use a unique runner-local test root and always uninstall/cleanup in `finally`.
 - [ ] **Step 4: Run the lifecycle test locally on Windows.** Run `pwsh -NoProfile -File tests/Test-FrameRelayMsiLifecycle.Tests.ps1`. Expected: install, launch, upgrade, and uninstall all pass; user data survives.
-- [ ] **Step 5: Wire lifecycle validation into release CI.** Build a second MSI from the same publish output with a higher numeric ProductVersion, then run the lifecycle script before release asset creation. Do not upload the second test MSI.
+- [ ] **Step 5: Wire lifecycle validation into release CI.** Build a second MSI from the same publish output with a distinct prerelease filename but equal numeric ProductVersion, then run the lifecycle script before release asset creation. Do not upload the second test MSI.
 - [ ] **Step 6: Verify CI workflow parsing and the complete Windows job.** Run the complete existing .NET release tests plus all three MSI PowerShell scripts locally; CI must finish the install/upgrade/uninstall sequence before publishing assets.
 
 ### Task 6: Document MSI installation and artifact versioning

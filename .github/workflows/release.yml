@@ -165,7 +165,9 @@ jobs:
         run: |
           . ./.github/scripts/Build-FrameRelayMsi.ps1
           $releaseVersion = '${{ steps.release.outputs.version }}'
-          $upgradeVersion = Get-NextMsiVersion $releaseVersion
+          # MSI metadata has only three numeric version fields. Build a second package with
+          # the same core version to verify that successive prereleases replace one another.
+          $upgradeVersion = "$releaseVersion-upgrade-test"
           $publishDirectory = Join-Path $PWD 'artifacts/publish/win-x64'
           $outputDirectory = Join-Path $PWD 'artifacts/lifecycle'
           $upgradeMsi = Invoke-FrameRelayMsiBuild `
@@ -182,7 +184,8 @@ jobs:
           $secondMsi = '${{ steps.msi-upgrade.outputs.path }}'
           ./tests/Test-FrameRelayMsiLifecycle.Tests.ps1 `
             -FirstMsiPath $firstMsi `
-            -SecondMsiPath $secondMsi
+            -SecondMsiPath $secondMsi `
+            -SameVersionMsiPath $secondMsi
           ./.github/scripts/Test-FrameRelayMsiLifecycle.ps1 `
             -FirstMsiPath $firstMsi `
             -SecondMsiPath $secondMsi

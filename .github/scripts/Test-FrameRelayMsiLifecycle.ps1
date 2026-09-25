@@ -147,8 +147,8 @@ function Test-FrameRelayMsiLifecycle {
     if ($first.ProductCode -eq $second.ProductCode) {
         throw 'The two MSI packages must have different ProductCodes for a major upgrade.'
     }
-    if ($second.Version -le $first.Version) {
-        throw "The second MSI must be newer than the first; received $($first.Version) then $($second.Version)."
+    if ($second.Version -lt $first.Version) {
+        throw "The second MSI must not be older than the first; received $($first.Version) then $($second.Version)."
     }
 
     $preflight = [pscustomobject]@{

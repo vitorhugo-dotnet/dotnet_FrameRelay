@@ -1,6 +1,7 @@
 <Project Sdk="WixToolset.Sdk/5.0.1">
   <PropertyGroup>
     <OutputType>Package</OutputType>
+    <SuppressIces>ICE61</SuppressIces>
     <OutputName>FrameRelay</OutputName>
     <Platform Condition="'$(Platform)' == ''">x64</Platform>
     <ProductVersion Condition="'$(ProductVersion)' == ''">0.0.0</ProductVersion>

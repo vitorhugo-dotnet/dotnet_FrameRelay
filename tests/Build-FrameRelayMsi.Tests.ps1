@@ -74,14 +74,18 @@ $workflowPath = Join-Path (Split-Path -Parent $PSScriptRoot) '.github/workflows/
 $workflow = Get-Content -Raw -LiteralPath $workflowPath
 $wixProjectPath = Join-Path (Split-Path -Parent $PSScriptRoot) 'packaging/FrameRelay/FrameRelay.wixproj'
 $wixProject = Get-Content -Raw -LiteralPath $wixProjectPath
+$packageSource = Get-Content -Raw -LiteralPath (Join-Path (Split-Path -Parent $PSScriptRoot) 'packaging/FrameRelay/Package.wxs')
 $publishIndex = $workflow.IndexOf('name: Publish single-file EXE', [StringComparison]::Ordinal)
 $msiIndex = $workflow.IndexOf('name: Build and verify MSI', [StringComparison]::Ordinal)
 $assetIndex = $workflow.IndexOf('name: Create ZIP, EXE, and checksums', [StringComparison]::Ordinal)
 Assert-Equal $true ($publishIndex -ge 0 -and $msiIndex -gt $publishIndex -and $assetIndex -gt $msiIndex) 'MSI build runs after app publish and before release assets'
 Assert-Equal $true ($wixProject.Contains('<Project Sdk="WixToolset.Sdk/5.0.1">')) 'WiX Toolset v5 is pinned'
+Assert-Equal $true ($wixProject.Contains('<SuppressIces>ICE61</SuppressIces>')) 'Only ICE61 is suppressed for equal-version upgrade validation'
+Assert-Equal $true ($packageSource.Contains('AllowSameVersionUpgrades="yes"')) 'WiX treats same-core prereleases as major upgrades'
 Assert-Equal $true ($workflow.Contains('./.github/scripts/Build-FrameRelayMsi.ps1')) 'Release workflow builds the MSI'
 Assert-Equal $true ($workflow.Contains('./.github/scripts/Test-FrameRelayMsi.ps1')) 'Release workflow validates MSI metadata and payload'
 Assert-Equal $true ($workflow.Contains('name: Build MSI upgrade test package')) 'Release workflow builds a second version for upgrade testing'
+Assert-Equal $true ($workflow.Contains('$upgradeVersion = "$releaseVersion-upgrade-test"')) 'Release workflow builds a same-core package for prerelease upgrade testing'
 Assert-Equal $true ($workflow.Contains('./.github/scripts/Test-FrameRelayMsiLifecycle.ps1')) 'Release workflow installs, launches, upgrades, and uninstalls MSI packages'
 Assert-Equal $true ($workflow.Contains("Where-Object { `$_.Extension -in @('.zip', '.exe', '.msi') }")) 'Checksum generation includes the MSI'
 Assert-Equal $true ($workflow.Contains("'`${{ steps.msi.outputs.path }}'")) 'GitHub Release uploads the MSI asset'

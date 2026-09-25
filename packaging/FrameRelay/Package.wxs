@@ -5,7 +5,10 @@
       Version="$(ProductVersion)"
       UpgradeCode="{8A8D6B71-9AF1-4CB1-AC70-88BA688C734B}"
       Scope="perMachine">
-    <MajorUpgrade DowngradeErrorMessage="A newer version of FrameRelay is already installed." />
+    <!-- Equal core versions are required to replace successive prereleases. ICE61 rejects that inclusive boundary. -->
+    <MajorUpgrade
+        AllowSameVersionUpgrades="yes"
+        DowngradeErrorMessage="A newer version of FrameRelay is already installed." />
     <MediaTemplate EmbedCab="yes" />
 
     <StandardDirectory Id="ProgramFiles64Folder">

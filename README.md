@@ -29,6 +29,8 @@ The MSI does not own per-user settings, credentials, or logs. Data under `%LOCAL
 
 Windows Installer uses a numeric three-part product version. Stable MSI versions match the release version (for example, `1.2.3`). For prerelease releases, MSI metadata uses the first three numeric components; `0.0.0-alpha.pr42.110` therefore has MSI ProductVersion `0.0.0`. The MSI download filename keeps the full release version.
 
+Prerelease installers with the same three numeric version components can replace one another because Windows Installer cannot order their prerelease labels. The installer does not distinguish which same-core prerelease is newer.
+
 ## Build and test
 
 ```powershell

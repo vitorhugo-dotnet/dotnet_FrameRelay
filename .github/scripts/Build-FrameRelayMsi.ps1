@@ -60,6 +60,7 @@ function Invoke-FrameRelayMsiBuild {
     $projectPath = Join-Path $script:RepositoryRoot 'packaging/FrameRelay/FrameRelay.wixproj'
     $arguments = @(
         'build'
+        '-t:Rebuild'
         $projectPath
         "-p:PublishDirectory=$publishPath"
         "-p:ProductVersion=$msiVersion"

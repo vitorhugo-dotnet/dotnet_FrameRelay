@@ -42,6 +42,24 @@ try {
     Assert-Throws {
         Invoke-FrameRelayMsiBuild -PublishDirectory $temp -ReleaseVersion '1.2.3' -OutputDirectory $temp
     } 'SonicDesktopRelay\.App\.exe' 'Missing application executable fails before build'
+
+    Set-Content -LiteralPath (Join-Path $temp 'SonicDesktopRelay.App.exe') -Value 'fixture'
+    $script:dotnetArguments = @()
+    function global:dotnet {
+        $script:dotnetArguments = @($args)
+        $outputArgument = $script:dotnetArguments | Where-Object { $_ -like '-p:OutputPath=*' }
+        $buildOutput = $outputArgument.Substring('-p:OutputPath='.Length)
+        New-Item -ItemType Directory -Path $buildOutput -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $buildOutput 'FrameRelay.msi') -Value 'fixture MSI'
+        $global:LASTEXITCODE = 0
+    }
+
+    $msi = Invoke-FrameRelayMsiBuild -PublishDirectory $temp -ReleaseVersion '2.3.4' -OutputDirectory $temp
+    Assert-Equal 'FrameRelay-win-x64-2.3.4.msi' (Split-Path -Leaf $msi) 'Builder names package from full release version'
+    Assert-Equal 'fixture MSI' (Get-Content -Raw -LiteralPath $msi).Trim() 'Builder copies WiX output'
+    Assert-Equal $true ($script:dotnetArguments -contains '-t:Rebuild') 'Builder forces WiX to rebuild release-specific metadata'
+    Assert-Equal $true ($script:dotnetArguments -contains '-p:ProductVersion=2.3.4') 'Builder passes normalized product version to WiX'
+    Remove-Item Function:\dotnet -ErrorAction SilentlyContinue
 }
 finally {
     Remove-Item -LiteralPath $temp -Recurse -Force

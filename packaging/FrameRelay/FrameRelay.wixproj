@@ -1,0 +1,11 @@
+<Project Sdk="WixToolset.Sdk/5.0.1">
+  <PropertyGroup>
+    <OutputType>Package</OutputType>
+    <OutputName>FrameRelay</OutputName>
+    <Platform Condition="'$(Platform)' == ''">x64</Platform>
+    <ProductVersion Condition="'$(ProductVersion)' == ''">0.0.0</ProductVersion>
+    <PublishDirectory Condition="'$(PublishDirectory)' == ''">$(MSBuildProjectDirectory)\..\..\artifacts\publish\win-x64</PublishDirectory>
+    <OutputPath Condition="'$(OutputPath)' == ''">$(MSBuildProjectDirectory)\..\..\artifacts\build\wix\</OutputPath>
+    <DefineConstants>$(DefineConstants);ProductVersion=$(ProductVersion);PublishDirectory=$(PublishDirectory)</DefineConstants>
+  </PropertyGroup>
+</Project>

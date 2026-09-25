@@ -24,7 +24,8 @@ public sealed class RtcVideoPublishHost(
     private readonly ILogger<RtcVideoPublishHost> _logger =
         loggerFactory?.CreateLogger<RtcVideoPublishHost>() ?? NullLogger<RtcVideoPublishHost>.Instance;
     private readonly SemaphoreSlim _gate = new(1, 1);
-    private readonly PublisherCaptureSelection _captureSelection = new();
+    private readonly PublisherCaptureSelection _captureSelection = new(
+        loggerFactory?.CreateLogger("SonicDesktopRelay.Media.Windows.GraphicsCaptureItemSource"));
     private static readonly IReadOnlyDictionary<Guid, RtcTransportDiagnostics> EmptyTransportDiagnostics =
         new Dictionary<Guid, RtcTransportDiagnostics>();
 
@@ -387,8 +388,10 @@ internal sealed class PublisherCaptureSelection
     private readonly Func<WindowInfo, IAudioCaptureSource> _processAudio;
     private readonly Func<bool> _processLoopbackSupported;
 
-    public PublisherCaptureSelection()
-        : this(() => new GraphicsCaptureScreenSource(), () => new GraphicsCaptureWindowSource(),
+    public PublisherCaptureSelection(ILogger? captureLogger = null)
+        : this(
+            () => captureLogger is null ? new GraphicsCaptureScreenSource() : new GraphicsCaptureScreenSource(captureLogger),
+            () => captureLogger is null ? new GraphicsCaptureWindowSource() : new GraphicsCaptureWindowSource(captureLogger),
             () => new WasapiLoopbackAudioSource(), window => new ProcessLoopbackAudioSource(window),
             () => ProcessLoopbackAudioSource.IsSupported) { }
 

@@ -1,5 +1,6 @@
 using SonicDesktopRelay.Media;
 using SonicDesktopRelay.Media.Windows;
+using Windows.Graphics.Capture;
 using Xunit;
 
 namespace SonicDesktopRelay.Media.Windows.Tests;
@@ -13,7 +14,7 @@ public sealed class GraphicsCaptureScreenSourceTests
         if (!GraphicsCaptureScreenSource.IsSupported) return;
 
         var monitor = new MonitorEnumerator().List().Single(x => x.IsPrimary);
-        await using var source = new GraphicsCaptureScreenSource();
+        await using var source = new GraphicsCaptureScreenSource(new UnsupportedBorderlessPolicy());
         var frames = 0;
         VideoFrame? last = null;
         source.FrameCaptured += frame =>
@@ -40,7 +41,7 @@ public sealed class GraphicsCaptureScreenSourceTests
         if (!GraphicsCaptureScreenSource.IsSupported) return;
 
         var monitor = new MonitorEnumerator().List().Single(x => x.IsPrimary);
-        await using var source = new GraphicsCaptureScreenSource();
+        await using var source = new GraphicsCaptureScreenSource(new UnsupportedBorderlessPolicy());
         await source.StartAsync(monitor, VideoQuality.Default, CancellationToken.None);
         await Task.Delay(TimeSpan.FromMilliseconds(500));
 
@@ -50,5 +51,12 @@ public sealed class GraphicsCaptureScreenSourceTests
         await Task.Delay(TimeSpan.FromMilliseconds(500));
 
         Assert.Equal(0, after);
+    }
+
+    private sealed class UnsupportedBorderlessPolicy : IBorderlessCapturePolicy
+    {
+        public Task<BorderlessCaptureResult> TryEnableAsync(GraphicsCaptureSession session, CancellationToken ct) =>
+            Task.FromResult(new BorderlessCaptureResult(
+                IsEnabled: false, Outcome: "unsupported", Reason: "consent prompt disabled in integration test"));
     }
 }

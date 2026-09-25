@@ -1,4 +1,6 @@
 using System.Runtime.Versioning;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Vortice.Direct3D;
 using Vortice.Direct3D11;
 using Vortice.DXGI;
@@ -23,6 +25,7 @@ internal sealed class GraphicsCaptureItemSource : IScreenCaptureSource, IScreenC
     private const int PoolDepth = 2;
 
     private readonly object _gate = new();
+    private readonly SemaphoreSlim _lifecycleGate = new(1, 1);
 
     private ID3D11Device? _device;
     private ID3D11DeviceContext? _context;
@@ -42,12 +45,37 @@ internal sealed class GraphicsCaptureItemSource : IScreenCaptureSource, IScreenC
     private long _framesDelivered;
     private long _framesDropped;
     private readonly IGraphicsCaptureItemFactory _itemFactory;
+    private readonly IBorderlessCapturePolicy _borderlessPolicy;
+    private readonly ILogger _logger;
     private CaptureTarget? _target;
 
-    internal GraphicsCaptureItemSource() : this(new GraphicsCaptureItemFactory()) { }
+    internal GraphicsCaptureItemSource() : this(
+        new GraphicsCaptureItemFactory(),
+        new BorderlessCapturePolicy(new WinRtBorderlessCapturePlatform()),
+        NullLogger.Instance) { }
 
-    internal GraphicsCaptureItemSource(IGraphicsCaptureItemFactory itemFactory) =>
+    internal GraphicsCaptureItemSource(ILogger logger) : this(
+        new GraphicsCaptureItemFactory(),
+        new BorderlessCapturePolicy(new WinRtBorderlessCapturePlatform()),
+        logger) { }
+
+    internal GraphicsCaptureItemSource(IBorderlessCapturePolicy borderlessPolicy, ILogger? logger = null) : this(
+        new GraphicsCaptureItemFactory(), borderlessPolicy, logger ?? NullLogger.Instance) { }
+
+    internal GraphicsCaptureItemSource(IGraphicsCaptureItemFactory itemFactory) : this(
+        itemFactory,
+        new BorderlessCapturePolicy(new WinRtBorderlessCapturePlatform()),
+        NullLogger.Instance) { }
+
+    internal GraphicsCaptureItemSource(
+        IGraphicsCaptureItemFactory itemFactory,
+        IBorderlessCapturePolicy borderlessPolicy,
+        ILogger logger)
+    {
         _itemFactory = itemFactory ?? throw new ArgumentNullException(nameof(itemFactory));
+        _borderlessPolicy = borderlessPolicy ?? throw new ArgumentNullException(nameof(borderlessPolicy));
+        _logger = logger ?? NullLogger.Instance;
+    }
 
     /// <summary>
     /// False on Windows builds without the capture API and inside sessions that cannot use it
@@ -100,65 +128,73 @@ internal sealed class GraphicsCaptureItemSource : IScreenCaptureSource, IScreenC
     public Task StartAsync(MonitorInfo monitor, VideoQuality quality, CancellationToken ct) =>
         StartAsync(new CaptureTarget.Monitor(monitor), quality, ct);
 
-    public Task StartAsync(CaptureTarget target, VideoQuality quality, CancellationToken ct)
+    public async Task StartAsync(CaptureTarget target, VideoQuality quality, CancellationToken ct)
     {
-        ObjectDisposedException.ThrowIf(_disposed, this);
-
-        lock (_gate)
+        // Preserve the caller context while the system may display the access prompt.
+        await _lifecycleGate.WaitAsync(ct);
+        try
         {
-            if (_running) return Task.CompletedTask;
+            ObjectDisposedException.ThrowIf(_disposed, this);
 
-            if (!IsSupported)
-                throw new PlatformNotSupportedException(
-                    "Windows.Graphics.Capture is not available in this session.");
-
-            ct.ThrowIfCancellationRequested();
-
-            _item = target switch
+            lock (_gate)
             {
-                CaptureTarget.Monitor monitor => _itemFactory.CreateForMonitor(monitor.Info),
-                CaptureTarget.Window window => _itemFactory.CreateForWindow(window.Info),
-                _ => throw new ArgumentOutOfRangeException(nameof(target))
-            };
-            _target = target;
-            try
-            {
+                if (_running) return;
+
+                if (!IsSupported)
+                    throw new PlatformNotSupportedException(
+                        "Windows.Graphics.Capture is not available in this session.");
+
+                ct.ThrowIfCancellationRequested();
+
+                _item = target switch
+                {
+                    CaptureTarget.Monitor monitor => _itemFactory.CreateForMonitor(monitor.Info),
+                    CaptureTarget.Window window => _itemFactory.CreateForWindow(window.Info),
+                    _ => throw new ArgumentOutOfRangeException(nameof(target))
+                };
+                _target = target;
                 CreateDevice();
+                _poolSize = _item.Size;
+                _pool = Direct3D11CaptureFramePool.CreateFreeThreaded(
+                    _runtimeDevice, DirectXPixelFormat.B8G8R8A8UIntNormalized, PoolDepth, _poolSize);
+                _session = _pool.CreateCaptureSession(_item);
+
+                // A screen share without the pointer is markedly harder to follow.
+                _session.IsCursorCaptureEnabled = true;
+
+                _item.Closed += OnItemClosed;
+                _pool.FrameArrived += OnFrameArrived;
             }
-            catch
-            {
-                _item = null;
-                _target = null;
-                _context?.Dispose();
-                _context = null;
-                _device?.Dispose();
-                _device = null;
-                (_runtimeDevice as IDisposable)?.Dispose();
-                _runtimeDevice = null;
-                throw;
-            }
-            _poolSize = _item.Size;
-            _pool = Direct3D11CaptureFramePool.CreateFreeThreaded(
-                _runtimeDevice, DirectXPixelFormat.B8G8R8A8UIntNormalized, PoolDepth, _poolSize);
-            _session = _pool.CreateCaptureSession(_item);
 
-            // A screen share without the pointer is markedly harder to follow.
-            _session.IsCursorCaptureEnabled = true;
-
-            _item.Closed += OnItemClosed;
-            _pool.FrameArrived += OnFrameArrived;
-
-            _firstFrameTime = TimeSpan.MinValue;
-            _lastDelivered = TimeSpan.MinValue;
-            _minimumInterval = quality.FramesPerSecond > 0
-                ? TimeSpan.FromSeconds(1.0 / quality.FramesPerSecond)
-                : TimeSpan.Zero;
-            _running = true;
-
-            _session.StartCapture();
+            var result = await BorderlessCaptureStartupCoordinator.ConfigureAndStartAsync(
+                _borderlessPolicy,
+                _session!,
+                () =>
+                {
+                    lock (_gate)
+                    {
+                        ct.ThrowIfCancellationRequested();
+                        _firstFrameTime = TimeSpan.MinValue;
+                        _lastDelivered = TimeSpan.MinValue;
+                        _minimumInterval = quality.FramesPerSecond > 0
+                            ? TimeSpan.FromSeconds(1.0 / quality.FramesPerSecond)
+                            : TimeSpan.Zero;
+                        _running = true;
+                        _session!.StartCapture();
+                    }
+                },
+                ct).ConfigureAwait(false);
+            BorderlessCaptureDiagnostics.Log(_logger, target is CaptureTarget.Window ? "window" : "monitor", result);
         }
-
-        return Task.CompletedTask;
+        catch
+        {
+            await StopCoreAsync().ConfigureAwait(false);
+            throw;
+        }
+        finally
+        {
+            _lifecycleGate.Release();
+        }
     }
 
     public void SetFrameRate(int framesPerSecond)
@@ -173,7 +209,20 @@ internal sealed class GraphicsCaptureItemSource : IScreenCaptureSource, IScreenC
         }
     }
 
-    public Task StopAsync()
+    public async Task StopAsync()
+    {
+        await _lifecycleGate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            await StopCoreAsync().ConfigureAwait(false);
+        }
+        finally
+        {
+            _lifecycleGate.Release();
+        }
+    }
+
+    private Task StopCoreAsync()
     {
         GraphicsCaptureItem? item;
         Direct3D11CaptureFramePool? pool;

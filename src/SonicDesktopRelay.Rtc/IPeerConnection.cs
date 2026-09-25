@@ -36,5 +36,5 @@ public interface IPeerConnection : IAsyncDisposable
 
 public interface IPeerConnectionFactory
 {
-    IPeerConnection Create(Guid participantId);
+    IPeerConnection Create(Guid participantId, bool? forceRelay = null);
 }

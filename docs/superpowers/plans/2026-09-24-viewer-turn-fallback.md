@@ -6,7 +6,7 @@
 
 **Architecture:** Keep direct ICE as the first attempt. When the viewer's peer connection reaches terminal `failed` before it has ever reached `connected`, and the selected path is `Direct`, send a routed `webrtc.renegotiate` request. Replace only that viewer's peer connection on both endpoints with relay-only connections; tag every offer, answer, and ICE candidate with a `negotiationId` so stale messages cannot cross generations.
 
-**Tech Stack:** .NET 9, C#, SIPSorcery 10.0.16, existing `TimeProvider`/`FakeTimeProvider` test support, xUnit.
+**Tech Stack:** .NET 10, C#, SIPSorcery 10.0.16, existing `TimeProvider`/`FakeTimeProvider` test support, xUnit.
 
 **Spec:** `docs/superpowers/specs/2026-09-24-viewer-turn-fallback-design.md`
 
@@ -41,8 +41,9 @@
 - Test: `tests/SonicDesktopRelay.Rtc.Tests/SipSorceryViewerPeerConnectionTests.cs`
 
 **Interfaces:**
-- Change `IPeerConnectionFactory.Create(Guid participantId)` to `Create(Guid participantId, bool forceRelay)`.
-- Change `IViewerPeerConnectionFactory.Create()` to `Create(bool forceRelay)`.
+- Change `IPeerConnectionFactory.Create(Guid participantId)` to `Create(Guid participantId, bool? forceRelay)`.
+- Change `IViewerPeerConnectionFactory.Create()` to `Create(bool? forceRelay)`.
+- A null policy preserves the injected ICE settings; fallback requests explicitly pass `true`.
 - Add `event Action<bool>? ConnectionStateChanged` to `IViewerPeerConnection`; `true` means the peer reached `connected`, `false` means its terminal state is `failed`. Do not publish transient `disconnected` as terminal failure.
 
 - [ ] **Step 1: Add the failing factory-policy tests**
@@ -75,8 +76,9 @@ Expected: FAIL because the viewer factory has no `forceRelay` argument yet.
 Implement both SIPSorcery factories by copying each factory's injected `IceServerSettings` with the requested policy:
 
 ```csharp
-public IPeerConnection Create(Guid participantId, bool forceRelay) =>
-    new SipSorceryPeerConnection(participantId, ice with { ForceRelay = forceRelay });
+public IPeerConnection Create(Guid participantId, bool? forceRelay = null) =>
+    new SipSorceryPeerConnection(participantId,
+        forceRelay is { } relay ? ice with { ForceRelay = relay } : ice);
 ```
 
 Wire `SipSorceryViewerPeerConnection.onconnectionstatechange` to raise `ConnectionStateChanged(true)` only for `connected` and `ConnectionStateChanged(false)` only for `failed`. Update all fake implementations with explicit `Create(..., bool forceRelay)` and event accessors.
@@ -101,6 +103,7 @@ git commit -m "feat(rtc): support relay-only peer connection factories"
 - Modify: `src/SonicDesktopRelay.Rtc/VideoSubscriber.cs`
 - Test: `tests/SonicDesktopRelay.Rtc.Tests/VideoPublisherTests.cs`
 - Test: `tests/SonicDesktopRelay.Rtc.Tests/VideoSubscriberTests.cs`
+- Modify: `src/SonicDesktopRelay.Media/ScreenWatchPipeline.cs`
 
 **Interfaces:**
 - Publisher state stores one active `Guid negotiationId` per viewer.
@@ -207,6 +210,7 @@ git commit -m "feat(rtc): renegotiate failed viewers through TURN"
 - On retry, create a fresh receiver `negotiationId`, replace the peer with `peers.Create(forceRelay: true)`, clear candidates from the prior generation, then send the `webrtc.renegotiate` request to `PublisherId`.
 - Use the injected `TimeProvider`: 15 seconds from request until a matching relay offer; 30 seconds from applying that offer until `connected`.
 - Raise `NegotiationFailed` with the timed-out stage if either deadline expires or the relay peer fails. Never retry again for this subscriber.
+- Mark `ScreenWatchPipeline` as `Failed` when negotiation failure becomes terminal.
 
 - [ ] **Step 1: Add failing tests for eligibility and one-shot behavior**
 

@@ -156,11 +156,16 @@ public sealed class SipSorceryViewerPeerConnection : IViewerPeerConnection
             {
                 RefreshTransportDiagnostics();
                 RequestRecoveryKeyFrame("initial-connection");
+                ConnectionStateChanged?.Invoke(true);
             }
+            else if (state == RTCPeerConnectionState.failed)
+                ConnectionStateChanged?.Invoke(false);
         };
     }
 
     public event Action<string, string?, int?>? IceCandidateGathered;
+
+    public event Action<bool>? ConnectionStateChanged;
 
     public event Action<EncodedVideoSample>? VideoSampleReceived;
 
@@ -444,5 +449,6 @@ public sealed class SipSorceryViewerPeerConnection : IViewerPeerConnection
 
 public sealed class SipSorceryViewerPeerConnectionFactory(IceServerSettings ice) : IViewerPeerConnectionFactory
 {
-    public IViewerPeerConnection Create() => new SipSorceryViewerPeerConnection(ice);
+    public IViewerPeerConnection Create(bool? forceRelay = null) =>
+        new SipSorceryViewerPeerConnection(forceRelay is { } relay ? ice with { ForceRelay = relay } : ice);
 }

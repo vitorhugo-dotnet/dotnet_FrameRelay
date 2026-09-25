@@ -463,6 +463,29 @@ public sealed class SessionRuntimeTests
     }
 
     [Fact]
+    public async Task Renegotiation_is_forwarded_only_to_the_sharing_host()
+    {
+        var api = new FakeSessionApi();
+        var publisher = new FakeVideoPublishHost();
+        var connection = new FakeConnection();
+        var runtime = new SessionRuntime(api, () => connection, publisher);
+        await runtime.StartSharingAsync(Monitor, 3, CancellationToken.None);
+
+        connection.Emit(SignalingMessageTypes.WebRtcRenegotiate);
+
+        Assert.Contains(SignalingMessageTypes.WebRtcRenegotiate, publisher.Signalled);
+
+        await runtime.StopAsync(CancellationToken.None);
+        var watchHost = new FakeVideoWatchHost();
+        connection = new FakeConnection();
+        runtime = new SessionRuntime(api, () => connection, watchHost: watchHost);
+        await runtime.StartWatchingAsync("AB12CD", CancellationToken.None);
+        connection.Emit(SignalingMessageTypes.WebRtcRenegotiate);
+
+        Assert.DoesNotContain(SignalingMessageTypes.WebRtcRenegotiate, watchHost.Signalled);
+    }
+
+    [Fact]
     public async Task Receiver_stats_are_forwarded_only_to_the_sharing_host()
     {
         var api = new FakeSessionApi();

@@ -32,6 +32,11 @@ public sealed class VideoSubscriber(
     private bool _remoteDescriptionReady;
     private bool _keyFrameHooked;
     private bool _disposed;
+    private Guid? _negotiationId;
+    private Guid? _expectedFallbackId;
+    private bool _everConnected;
+    private bool _fallbackStarted;
+    private CancellationTokenSource? _fallbackCancellation;
 
     public VideoSubscriber(ScreenWatchPipeline pipeline, IViewerPeerConnectionFactory peers,
         ISignalingConnection signaling, TimeProvider? time = null)
@@ -103,14 +108,15 @@ public sealed class VideoSubscriber(
                 if (ReadString(envelope, "sdp") is not { } offerSdp) return;
                 await LearnPublisherAsync(from, ct);
                 if (PublisherId != from) return;
-                await AnswerAsync(from, offerSdp, ct);
+                var offerGeneration = ReadGuid(envelope, "negotiationId");
+                await AnswerAsync(from, offerSdp, offerGeneration, ct);
                 return;
 
             case SignalingMessageTypes.WebRtcIceCandidate:
                 if (ReadString(envelope, "candidate") is not { } candidate) return;
                 await ReceiveIceCandidateAsync(
                     from,
-                    new PendingIceCandidate(candidate, ReadString(envelope, "sdpMid"), ReadIndex(envelope)),
+                    new PendingIceCandidate(candidate, ReadString(envelope, "sdpMid"), ReadIndex(envelope), ReadGuid(envelope, "negotiationId")),
                     ct);
                 return;
         }
@@ -146,6 +152,8 @@ public sealed class VideoSubscriber(
         {
             if (_disposed) return;
             if (PublisherId is { } publisher && publisher != from) return;
+            if (_expectedFallbackId is { } expected && candidate.NegotiationId != expected) return;
+            if (_expectedFallbackId is null && _negotiationId is { } current && candidate.NegotiationId is { } received && received != current) return;
 
             if (PublisherId == from && _peer is { } peer && _remoteDescriptionReady)
             {
@@ -180,7 +188,7 @@ public sealed class VideoSubscriber(
         queue.Enqueue(candidate);
     }
 
-    private async Task AnswerAsync(Guid publisher, string offerSdp, CancellationToken ct)
+    private async Task AnswerAsync(Guid publisher, string offerSdp, Guid? negotiationId, CancellationToken ct)
     {
         IViewerPeerConnection peer;
 
@@ -189,6 +197,15 @@ public sealed class VideoSubscriber(
         {
             if (_disposed) return;
             if (PublisherId != publisher) return;
+            if (_expectedFallbackId is { } expected && negotiationId != expected) return;
+            if (_expectedFallbackId is null && _negotiationId is { } active && negotiationId is { } received && received != active) return;
+            if (_fallbackStarted && negotiationId == _expectedFallbackId)
+            {
+                _fallbackCancellation?.Cancel();
+                _fallbackCancellation?.Dispose();
+                _fallbackCancellation = new CancellationTokenSource();
+            }
+            _negotiationId = negotiationId;
 
             // A later offer is a renegotiation and must land on the same peer. While the new
             // remote description is being applied, trickled ICE stays queued rather than
@@ -219,6 +236,11 @@ public sealed class VideoSubscriber(
             return;
         }
 
+        if (_fallbackStarted && !_everConnected && negotiationId == _expectedFallbackId)
+        {
+            _ = WatchFallbackConnectionTimeoutAsync(_fallbackCancellation!.Token, peer);
+        }
+
         try
         {
             await DrainPendingCandidatesAsync(publisher, peer, ct);
@@ -237,7 +259,7 @@ public sealed class VideoSubscriber(
         try
         {
             await signaling.SendAsync(SignalingMessageTypes.WebRtcAnswer, publisher,
-                new { type = "answer", sdp = answer }, ct);
+                new { type = "answer", sdp = answer, negotiationId }, ct);
             EmitDiagnostic("viewer.answer.send.ok", to: publisher);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -288,6 +310,7 @@ public sealed class VideoSubscriber(
                 _gate.Release();
             }
 
+            if (next.NegotiationId is { } candidateGeneration && candidateGeneration != _negotiationId) continue;
             await peer.AddIceCandidateAsync(
                 next.Candidate,
                 next.SdpMid,
@@ -318,14 +341,23 @@ public sealed class VideoSubscriber(
             _gate.Release();
         }
 
-        if (dispose) await peer.DisposeAsync();
+        if (dispose)
+        {
+            _fallbackCancellation?.Cancel();
+            _fallbackCancellation?.Dispose();
+            _fallbackCancellation = null;
+            if (_fallbackStarted) EmitDiagnostic("viewer.relay_fallback.failed");
+            pipeline.MarkFailed($"WebRTC negotiation failed at {stage}: {reason}");
+            await peer.DisposeAsync();
+        }
         NegotiationFailed?.Invoke($"WebRTC negotiation failed at {stage}: {reason}");
     }
 
     private IViewerPeerConnection CreatePeer()
     {
         _lastPeerDiagnostic = null;
-        var peer = peers.Create();
+        var peer = peers.Create(_fallbackStarted ? true : null);
+        var peerGeneration = _negotiationId;
 
         peer.Diagnostic += entry =>
         {
@@ -338,6 +370,7 @@ public sealed class VideoSubscriber(
             TransportDiagnostics = diagnostics;
             TransportDiagnosticsChanged?.Invoke(diagnostics);
         };
+        peer.ConnectionStateChanged += connected => _ = OnConnectionStateChangedAsync(peer, connected);
         if (peer.TransportDiagnostics is { } existingTransport)
         {
             TransportDiagnostics = existingTransport;
@@ -349,7 +382,7 @@ public sealed class VideoSubscriber(
             if (PublisherId is not { } publisher) return;
             EmitDiagnostic("viewer.ice_candidate.send", to: publisher);
             _ = signaling.SendAsync(SignalingMessageTypes.WebRtcIceCandidate, publisher,
-                new { candidate, sdpMid = mid, sdpMLineIndex = index }, CancellationToken.None);
+                new { candidate, sdpMid = mid, sdpMLineIndex = index, negotiationId = peerGeneration }, CancellationToken.None);
         };
 
         peer.VideoSampleReceived += pipeline.Submit;
@@ -363,6 +396,93 @@ public sealed class VideoSubscriber(
         }
 
         return peer;
+    }
+
+    private async Task OnConnectionStateChangedAsync(IViewerPeerConnection peer, bool connected)
+    {
+        if (!ReferenceEquals(_peer, peer)) return;
+        if (connected)
+        {
+            await _gate.WaitAsync();
+            try
+            {
+                if (_disposed || !ReferenceEquals(_peer, peer)) return;
+                _everConnected = true;
+                _fallbackCancellation?.Cancel();
+                if (_fallbackStarted) EmitDiagnostic("viewer.relay_fallback.completed");
+            }
+            finally { _gate.Release(); }
+            return;
+        }
+
+        if (_everConnected || _fallbackStarted)
+        {
+            if (_fallbackStarted) await FailNegotiationAsync(peer, "relayConnectionFailed", "relay peer failed");
+            return;
+        }
+        if (!string.Equals(TransportDiagnostics?.Path, "Direct", StringComparison.OrdinalIgnoreCase)) return;
+        if (PublisherId is not { } publisher) return;
+
+        IViewerPeerConnection? relayPeer = null;
+        await _gate.WaitAsync();
+        try
+        {
+            if (_disposed || _fallbackStarted || !ReferenceEquals(_peer, peer) || _everConnected) return;
+            _fallbackStarted = true;
+            _expectedFallbackId = Guid.NewGuid();
+            _negotiationId = _expectedFallbackId;
+            _remoteDescriptionReady = false;
+            _pendingCandidates.Clear();
+            _fallbackCancellation = new CancellationTokenSource();
+            EmitDiagnostic("viewer.relay_fallback.started", to: publisher);
+            relayPeer = CreatePeer();
+            _peer = relayPeer;
+        }
+        finally { _gate.Release(); }
+
+        if (relayPeer is null) return;
+        await peer.DisposeAsync();
+        var id = _expectedFallbackId!.Value;
+        await _gate.WaitAsync();
+        try
+        {
+            if (_disposed || !ReferenceEquals(_peer, relayPeer)) return;
+        }
+        finally { _gate.Release(); }
+
+        try
+        {
+            await signaling.SendAsync(SignalingMessageTypes.WebRtcRenegotiate, publisher,
+                new { reason = "direct_connection_failed", negotiationId = id, iceTransportPolicy = "relay" }, CancellationToken.None);
+        }
+        catch (Exception e)
+        {
+            await FailNegotiationAsync(relayPeer, "sendRenegotiationRequest", e.Message);
+            return;
+        }
+        _ = WatchFallbackOfferTimeoutAsync(_fallbackCancellation!.Token);
+    }
+
+    private async Task WatchFallbackOfferTimeoutAsync(CancellationToken ct)
+    {
+        try
+        {
+            await Task.Delay(TimeSpan.FromSeconds(15), _time, ct);
+            EmitDiagnostic("viewer.relay_fallback.offer_timeout");
+            if (_peer is { } peer) await FailNegotiationAsync(peer, "relayOfferTimeout", "timed out waiting for offer");
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    private async Task WatchFallbackConnectionTimeoutAsync(CancellationToken ct, IViewerPeerConnection peer)
+    {
+        try
+        {
+            await Task.Delay(TimeSpan.FromSeconds(30), _time, ct);
+            EmitDiagnostic("viewer.relay_fallback.connection_timeout");
+            await FailNegotiationAsync(peer, "relayConnectionTimeout", "relay connection timed out");
+        }
+        catch (OperationCanceledException) { }
     }
 
     private void EmitDiagnostic(
@@ -409,6 +529,9 @@ public sealed class VideoSubscriber(
             TransportDiagnostics = null;
             _remoteDescriptionReady = false;
             _pendingCandidates.Clear();
+            _fallbackCancellation?.Cancel();
+            _fallbackCancellation?.Dispose();
+            _fallbackCancellation = null;
         }
         finally
         {
@@ -417,7 +540,6 @@ public sealed class VideoSubscriber(
 
         if (_keyFrameHooked) pipeline.KeyFrameNeeded -= OnKeyFrameNeeded;
         if (peer is not null) await peer.DisposeAsync();
-        _gate.Dispose();
     }
 
     private static string? ReadString(SignalingEnvelope envelope, string name) =>
@@ -428,6 +550,15 @@ public sealed class VideoSubscriber(
             ? element.GetString()
             : null;
 
+    private static Guid? ReadGuid(SignalingEnvelope envelope, string name) =>
+        envelope.Payload is { } payload
+        && payload.ValueKind == JsonValueKind.Object
+        && payload.TryGetProperty(name, out var element)
+        && element.ValueKind == JsonValueKind.String
+        && Guid.TryParse(element.GetString(), out var id)
+            ? id
+            : null;
+
     private static int? ReadIndex(SignalingEnvelope envelope) =>
         envelope.Payload is { } payload
         && payload.ValueKind == JsonValueKind.Object
@@ -436,5 +567,5 @@ public sealed class VideoSubscriber(
             ? element.GetInt32()
             : null;
 
-    private sealed record PendingIceCandidate(string Candidate, string? SdpMid, int? SdpMLineIndex);
+    private sealed record PendingIceCandidate(string Candidate, string? SdpMid, int? SdpMLineIndex, Guid? NegotiationId);
 }

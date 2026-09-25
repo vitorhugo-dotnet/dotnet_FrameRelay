@@ -66,3 +66,19 @@ finally {
 }
 
 Write-Host 'All MSI build contract tests passed.'
+
+$workflowPath = Join-Path (Split-Path -Parent $PSScriptRoot) '.github/workflows/release.yml'
+$workflow = Get-Content -Raw -LiteralPath $workflowPath
+$wixProjectPath = Join-Path (Split-Path -Parent $PSScriptRoot) 'packaging/FrameRelay/FrameRelay.wixproj'
+$wixProject = Get-Content -Raw -LiteralPath $wixProjectPath
+$publishIndex = $workflow.IndexOf('name: Publish single-file EXE', [StringComparison]::Ordinal)
+$msiIndex = $workflow.IndexOf('name: Build and verify MSI', [StringComparison]::Ordinal)
+$assetIndex = $workflow.IndexOf('name: Create ZIP, EXE, and checksums', [StringComparison]::Ordinal)
+Assert-Equal $true ($publishIndex -ge 0 -and $msiIndex -gt $publishIndex -and $assetIndex -gt $msiIndex) 'MSI build runs after app publish and before release assets'
+Assert-Equal $true ($wixProject.Contains('<Project Sdk="WixToolset.Sdk/5.0.1">')) 'WiX Toolset v5 is pinned'
+Assert-Equal $true ($workflow.Contains('./.github/scripts/Build-FrameRelayMsi.ps1')) 'Release workflow builds the MSI'
+Assert-Equal $true ($workflow.Contains('./.github/scripts/Test-FrameRelayMsi.ps1')) 'Release workflow validates MSI metadata and payload'
+Assert-Equal $true ($workflow.Contains("Where-Object { `$_.Extension -in @('.zip', '.exe', '.msi') }")) 'Checksum generation includes the MSI'
+Assert-Equal $true ($workflow.Contains("'`${{ steps.msi.outputs.path }}'")) 'GitHub Release uploads the MSI asset'
+Assert-Equal $true ($workflow.Contains("`$extraArgs += '--verify-tag'") -and $workflow.Contains("`$extraArgs += '--latest'") -and $workflow.Contains("`$extraArgs += '--prerelease'")) 'Existing stable and prerelease release flags remain'
+Write-Host 'All MSI release workflow contract tests passed.'

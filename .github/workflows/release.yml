@@ -59,9 +59,11 @@ jobs:
       - name: Build solution
         run: dotnet build $env:SOLUTION_PATH --configuration $env:CONFIGURATION --no-restore
 
-      - name: Run release publishing helper tests
+      - name: Run release tooling contract tests
         shell: pwsh
-        run: ./tests/Publish-GitHubRelease.Tests.ps1
+        run: |
+          ./tests/Publish-GitHubRelease.Tests.ps1
+          ./tests/Build-FrameRelayMsi.Tests.ps1
 
       - name: Run .NET tests
         run: >-
@@ -131,6 +133,31 @@ jobs:
           -p:EnableCompressionInSingleFile=true -p:DebugType=embedded
           --output artifacts/publish/single-file
 
+      - name: Build and verify MSI
+        id: msi
+        shell: pwsh
+        run: |
+          $version = '${{ steps.release.outputs.version }}'
+          $numericVersion = [regex]::Match($version, '^\d+\.\d+\.\d+').Value
+          if ([string]::IsNullOrWhiteSpace($numericVersion)) {
+            throw "Release version '$version' has no numeric Windows Installer version."
+          }
+
+          $publishDirectory = Join-Path $PWD 'artifacts/publish/win-x64'
+          $distDirectory = Join-Path $PWD 'artifacts/release'
+          & ./.github/scripts/Build-FrameRelayMsi.ps1 `
+            -PublishDirectory $publishDirectory `
+            -ReleaseVersion $version `
+            -OutputDirectory $distDirectory
+
+          $msiPath = Join-Path $distDirectory "FrameRelay-win-x64-$version.msi"
+          & ./.github/scripts/Test-FrameRelayMsi.ps1 `
+            -MsiPath $msiPath `
+            -PublishDirectory $publishDirectory `
+            -ExpectedProductVersion $numericVersion
+
+          "path=$msiPath" >> $env:GITHUB_OUTPUT
+
       - name: Verify legacy codec artifacts are absent
         shell: pwsh
         run: |
@@ -170,9 +197,6 @@ jobs:
 
           Write-Host 'Portable and single-file outputs contain only the native Windows media path.'
 
-      # As in ci.yml: no MSI or setup bundle until phase 4 adds packaging/*.wxs. Pin WiX to
-      # v5 when it arrives — v6+ requires accepting the Open Source Maintenance Fee EULA,
-      # which fails an unattended CI install.
       - name: Create ZIP, EXE, and checksums
         id: assets
         shell: pwsh
@@ -198,7 +222,7 @@ jobs:
           Copy-Item -Path (Join-Path $PWD "artifacts/publish/single-file/$env:APP_EXE_NAME") -Destination $exePath
 
           Get-ChildItem -Path $distDirectory -File |
-            Where-Object { $_.Extension -in @('.zip', '.exe') } |
+            Where-Object { $_.Extension -in @('.zip', '.exe', '.msi') } |
             ForEach-Object {
               $hash = Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256
               "$($hash.Hash)  $($_.Name)"
@@ -206,6 +230,7 @@ jobs:
 
           "zip=$zipPath" >> $env:GITHUB_OUTPUT
           "exe=$exePath" >> $env:GITHUB_OUTPUT
+          "msi=${{ steps.msi.outputs.path }}" >> $env:GITHUB_OUTPUT
           "checksums=$checksumsPath" >> $env:GITHUB_OUTPUT
 
       - name: Create GitHub Release
@@ -249,6 +274,7 @@ jobs:
           $assets = @(
             '${{ steps.assets.outputs.zip }}'
             '${{ steps.assets.outputs.exe }}'
+            '${{ steps.msi.outputs.path }}'
             '${{ steps.assets.outputs.checksums }}'
           )
 

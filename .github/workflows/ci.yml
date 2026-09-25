@@ -399,10 +399,8 @@ jobs:
 
           Write-Host 'Portable and single-file outputs contain only the native Windows media path.'
 
-      # No MSI or setup bundle yet: packaging/*.wxs arrives with phase 4 of the design
-      # (docs/superpowers/specs/2026-08-23-sonicdesktoprelay-design.md). When it does, add a
-      # WiX step here pinned to v5 — v6+ requires accepting the Open Source Maintenance Fee
-      # EULA, which fails an unattended CI install.
+      # MSI packaging and lifecycle checks run in the release workflow after resolving its
+      # release version. This CI job continues to validate the portable ZIP and single-file EXE.
       - name: Assemble release assets and checksums
         shell: pwsh
         run: |

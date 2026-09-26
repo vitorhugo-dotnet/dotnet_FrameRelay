@@ -469,6 +469,8 @@ public sealed class Shell : INotifyPropertyChanged
             var intent = await composition.LaunchIntents.RedeemAsync(token, ct);
             if (!ReferenceEquals(composition, _composition))
                 throw new InvalidOperationException("Backend changed while opening the link.");
+            if (runtime.Snapshot.Phase is not (SessionPhase.Idle or SessionPhase.Failed))
+                throw new InvalidOperationException("A session started while opening the link. Request a new launch link after stopping it.");
             if (intent.Kind == "share")
             {
                 _pendingShareIntent = intent.Id;
@@ -478,7 +480,7 @@ public sealed class Shell : INotifyPropertyChanged
             else
             {
                 ViewModel.CurrentPage = Page.Watch;
-                await WatchAsync(intent.WatchTarget, ct);
+                await WatchCoreAsync(intent.WatchTarget, ct);
             }
         }
         catch (Exception error) when (error is ApiException or HttpRequestException or InvalidOperationException or OperationCanceledException)
@@ -490,6 +492,12 @@ public sealed class Shell : INotifyPropertyChanged
     }
 
     public async Task WatchAsync(string code, CancellationToken ct)
+    {
+        if (_activatingLaunch) return;
+        await WatchCoreAsync(code, ct);
+    }
+
+    private async Task WatchCoreAsync(string code, CancellationToken ct)
     {
         _pendingShareIntent = null;
         Raise(nameof(LaunchNotice));

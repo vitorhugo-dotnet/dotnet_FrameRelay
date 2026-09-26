@@ -517,7 +517,7 @@ public sealed class VideoPublisherTests
 
         public event Action<string, string?, int?>? IceCandidateGathered;
         public event Action<KeyFrameRequestReason>? KeyFrameRequested;
-        public event Action<double>? PacketLossReported;
+        public event Action<RtcpReceptionReport>? ReceptionReportReceived;
         public event Action<RtcTransportDiagnostics>? TransportDiagnosticsChanged;
 
         public RtcTransportDiagnostics? TransportDiagnostics { get; private set; }
@@ -559,7 +559,8 @@ public sealed class VideoPublisherTests
 
         public void RequestKeyFrame() => KeyFrameRequested?.Invoke(KeyFrameRequestReason.RtcpPli);
 
-        public void ReportPacketLoss(double loss) => PacketLossReported?.Invoke(loss);
+        public void ReportPacketLoss(double loss) => ReceptionReportReceived?.Invoke(
+            new RtcpReceptionReport(RtcMediaKind.Video, 22, loss));
 
         public void ReportTransport(RtcTransportDiagnostics diagnostics)
         {

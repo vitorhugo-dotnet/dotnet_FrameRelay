@@ -48,6 +48,9 @@ public sealed class VideoPublisher(
 
     public event Action<Guid, RtcTransportDiagnostics>? TransportDiagnosticsChanged;
 
+    /// <summary>Audio-track RTCP reception reports for audio diagnostics; never sent to video quality policy.</summary>
+    public event Action<Guid, RtcpReceptionReport>? AudioRtcpReportReceived;
+
     public async Task AddViewerAsync(Guid participantId, CancellationToken ct)
     {
         if (_peers.ContainsKey(participantId)) return;
@@ -70,9 +73,12 @@ public sealed class VideoPublisher(
             _ = signaling.SendAsync(SignalingMessageTypes.WebRtcIceCandidate, participantId,
                 new { candidate, sdpMid = mid, sdpMLineIndex = index }, CancellationToken.None);
         peer.KeyFrameRequested += pipeline.RequestKeyFrame;
-        peer.PacketLossReported += loss =>
+        peer.ReceptionReportReceived += report =>
         {
-            pipeline.ReportReception(participantId, loss);
+            if (report.MediaKind == RtcMediaKind.Video)
+                pipeline.ReportReception(participantId, report.FractionLost);
+            else if (report.MediaKind == RtcMediaKind.Audio)
+                AudioRtcpReportReceived?.Invoke(participantId, report);
         };
         peer.TransportDiagnosticsChanged += diagnostics =>
         {

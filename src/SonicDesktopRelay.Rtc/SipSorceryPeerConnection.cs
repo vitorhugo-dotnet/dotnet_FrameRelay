@@ -14,6 +14,8 @@ public sealed class SipSorceryPeerConnection : IPeerConnection
     private const int H264PayloadId = 96;
 
     private readonly RTCPeerConnection _connection;
+    private readonly uint _audioSsrc;
+    private readonly uint _videoSsrc;
     private readonly object _gate = new();
     private RtcTransportDiagnostics? _transportDiagnostics;
     private bool _negotiated;
@@ -38,6 +40,7 @@ public sealed class SipSorceryPeerConnection : IPeerConnection
         var audioTrack = new MediaStreamTrack(
             AudioCommonlyUsedFormats.OpusWebRTC,
             MediaStreamStatusEnum.SendOnly);
+        _audioSsrc = audioTrack.Ssrc;
         _connection.addTrack(audioTrack);
 
         // packetization-mode=1 is what every browser and native decoder expects for H.264 over
@@ -46,6 +49,7 @@ public sealed class SipSorceryPeerConnection : IPeerConnection
         var videoTrack = new MediaStreamTrack(
             new VideoFormat(VideoCodecsEnum.H264, H264PayloadId, 90_000, "packetization-mode=1"),
             MediaStreamStatusEnum.SendOnly);
+        _videoSsrc = videoTrack.Ssrc;
         _connection.addTrack(videoTrack);
 
         _connection.onicecandidate += candidate =>
@@ -56,8 +60,8 @@ public sealed class SipSorceryPeerConnection : IPeerConnection
 
         _connection.OnReceiveReport += (_, mediaType, report) =>
         {
-            if (mediaType != SDPMediaTypesEnum.video || report is null) return;
-            OnRtcpReport(report);
+            if (report is null) return;
+            OnRtcpReport(mediaType, report);
         };
 
         _connection.oniceconnectionstatechange += state =>
@@ -82,7 +86,7 @@ public sealed class SipSorceryPeerConnection : IPeerConnection
 
     public event Action<KeyFrameRequestReason>? KeyFrameRequested;
 
-    public event Action<double>? PacketLossReported;
+    public event Action<RtcpReceptionReport>? ReceptionReportReceived;
 
     public event Action<RtcTransportDiagnostics>? TransportDiagnosticsChanged;
 
@@ -189,20 +193,33 @@ public sealed class SipSorceryPeerConnection : IPeerConnection
         TransportDiagnosticsChanged?.Invoke(next);
     }
 
-    private void OnRtcpReport(RTCPCompoundPacket report)
+    private void OnRtcpReport(SDPMediaTypesEnum reportMediaType, RTCPCompoundPacket report)
     {
         var feedbackType = report.Feedback?.Header?.PayloadFeedbackMessageType;
-        if (feedbackType == PSFBFeedbackTypesEnum.PLI)
+        if (reportMediaType == SDPMediaTypesEnum.video && feedbackType == PSFBFeedbackTypesEnum.PLI)
             KeyFrameRequested?.Invoke(KeyFrameRequestReason.RtcpPli);
-        else if (feedbackType == PSFBFeedbackTypesEnum.FIR)
+        else if (reportMediaType == SDPMediaTypesEnum.video && feedbackType == PSFBFeedbackTypesEnum.FIR)
             KeyFrameRequested?.Invoke(KeyFrameRequestReason.RtcpFir);
 
         var samples = report.ReceiverReport?.ReceptionReports
                       ?? report.SenderReport?.ReceptionReports;
         if (samples is null || samples.Count == 0) return;
 
-        var worst = samples.Max(x => x.FractionLost);
-        PacketLossReported?.Invoke(worst / 256.0);
+        foreach (var sample in samples)
+        {
+            var mediaKind = ClassifyReceptionReportMediaKind(reportMediaType, sample.SSRC, _audioSsrc, _videoSsrc);
+            ReceptionReportReceived?.Invoke(new RtcpReceptionReport(mediaKind, sample.SSRC, sample.FractionLost / 256.0));
+        }
+    }
+
+    internal static RtcMediaKind ClassifyReceptionReportMediaKind(
+        SDPMediaTypesEnum reportMediaType, uint reportSsrc, uint audioSsrc, uint videoSsrc)
+    {
+        if (reportMediaType == SDPMediaTypesEnum.audio && reportSsrc == audioSsrc)
+            return RtcMediaKind.Audio;
+        if (reportMediaType == SDPMediaTypesEnum.video && reportSsrc == videoSsrc)
+            return RtcMediaKind.Video;
+        return RtcMediaKind.Unknown;
     }
 
     public ValueTask DisposeAsync()

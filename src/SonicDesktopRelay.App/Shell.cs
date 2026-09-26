@@ -39,7 +39,9 @@ public sealed class Shell : INotifyPropertyChanged
     private MonitorInfo? _selectedMonitor;
     private ShareQualityOption? _selectedShareQuality;
     private ShareFrameRateOption? _selectedShareFrameRate;
-    private bool _isVideoFullScreen;
+    private ViewerDisplayMode _videoDisplayMode;
+    private double _viewerVolume = 100;
+    private bool _viewerMuted;
     private long _uiFramesDelivered;
     private long _lastUiFrameUtcTicks;
 
@@ -175,19 +177,54 @@ public sealed class Shell : INotifyPropertyChanged
     }
 
     /// <summary>
-    /// True while the picture fills the window and the navigation rail is out of the way.
-    /// F11 toggles it, Esc leaves it.
+    /// The viewer layout mode; Fit leaves the native window state alone.
     /// </summary>
-    public bool IsVideoFullScreen
+    public ViewerDisplayMode VideoDisplayMode
     {
-        get => _isVideoFullScreen;
+        get => _videoDisplayMode;
         set
         {
-            if (_isVideoFullScreen == value) return;
-            _isVideoFullScreen = value;
+            if (_videoDisplayMode == value) return;
+            _videoDisplayMode = value;
             Raise();
+            Raise(nameof(IsVideoFullScreen));
+            Raise(nameof(IsVideoExpanded));
+            Raise(nameof(WatchPagePadding));
+            Raise(nameof(ViewerRailWidth));
         }
     }
+
+    public bool IsVideoFullScreen => VideoDisplayMode == ViewerDisplayMode.FullScreen;
+    public bool IsVideoExpanded => VideoDisplayMode != ViewerDisplayMode.Normal;
+    public Avalonia.Thickness WatchPagePadding => IsVideoExpanded ? new(0) : new(24);
+    public Avalonia.Controls.GridLength ViewerRailWidth => new(IsVideoExpanded ? 0 : 180);
+
+    public double ViewerVolume
+    {
+        get => _viewerVolume;
+        set
+        {
+            var volume = double.IsFinite(value) ? Math.Clamp(value, 0, 100) : 100;
+            if (_viewerVolume == volume) return;
+            _viewerVolume = volume;
+            Raise();
+            ApplyViewerAudio();
+        }
+    }
+
+    public bool ViewerMuted
+    {
+        get => _viewerMuted;
+        set
+        {
+            if (_viewerMuted == value) return;
+            _viewerMuted = value;
+            Raise();
+            ApplyViewerAudio();
+        }
+    }
+
+    private void ApplyViewerAudio() => _composition?.WatchHost.SetPlaybackVolume(ViewerVolume, ViewerMuted);
 
     public IReadOnlyList<ShareQualityOption> ShareQualities { get; } =
     [
@@ -392,6 +429,7 @@ public sealed class Shell : INotifyPropertyChanged
 
     public async Task StopAsync(CancellationToken ct)
     {
+        VideoDisplayMode = ViewerDisplayMode.Normal;
         var runtime = _composition?.Runtime;
         if (runtime is null) return;
         await GuardAsync(() => runtime.StopAsync(ct));
@@ -409,6 +447,7 @@ public sealed class Shell : INotifyPropertyChanged
         if (_composition is null)
         {
             _composition = new AppComposition(settings, _deviceName);
+            ApplyViewerAudio();
             ApplyIgnoreDiscordAudio(IgnoreDiscordAudio);
             _composition.Runtime.Changed += OnSnapshot;
             _composition.Runtime.SignalingDiagnosticAdded += OnSignalingDiagnostic;

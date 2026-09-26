@@ -4,10 +4,10 @@
              xmlns:controls="clr-namespace:SonicDesktopRelay.App.Controls"
              x:Class="SonicDesktopRelay.App.Views.WatchView"
              x:DataType="app:Shell">
-    <DockPanel Margin="{StaticResource PagePadding}">
+    <DockPanel Name="WatchLayout" Margin="{Binding WatchPagePadding}">
         <StackPanel DockPanel.Dock="Top"
                     Spacing="{StaticResource SpaceMd}"
-                    IsVisible="{Binding !IsVideoFullScreen}">
+                    IsVisible="{Binding !IsVideoExpanded}">
             <TextBlock Text="Watch"
                        FontSize="{StaticResource FontSizeLg}"
                        Foreground="{StaticResource TextPrimaryBrush}" />
@@ -42,13 +42,34 @@
                        FontSize="{StaticResource FontSizeSm}"
                        Foreground="{StaticResource DangerBrush}" />
 
-            <TextBlock Text="F11 fills the screen with the picture; Esc comes back."
+            <TextBlock Text="Fit fills this window. F11 toggles fullscreen; Esc returns to normal."
                        TextWrapping="Wrap"
                        FontSize="{StaticResource FontSizeSm}"
                        Foreground="{StaticResource TextSecondaryBrush}"
                        Margin="0,0,0,8" />
         </StackPanel>
 
-        <controls:VideoSurface Name="Surface" MinHeight="180" />
+        <Grid PointerMoved="OnVideoPointerMoved">
+            <controls:VideoSurface Name="Surface" />
+            <Border Name="ViewerControls" VerticalAlignment="Bottom"
+                    HorizontalAlignment="Stretch" Background="#DD151515" Padding="4" Margin="8"
+                    PointerEntered="OnControlsEntered" PointerExited="OnControlsExited">
+                <ScrollViewer MaxHeight="192" HorizontalScrollBarVisibility="Disabled"
+                              VerticalScrollBarVisibility="Auto">
+                    <WrapPanel Orientation="Horizontal">
+                        <Button Content="Normal" Click="OnNormal" Margin="4" />
+                        <Button Content="Fit to screen" Click="OnFit" Margin="4" />
+                        <Button Content="Fullscreen" Click="OnFullScreen" Margin="4" />
+                        <ToggleButton Content="Mute" IsChecked="{Binding ViewerMuted, Mode=TwoWay}" Margin="4" />
+                        <TextBlock Text="Volume" VerticalAlignment="Center" Margin="4" />
+                        <Slider Width="120" Minimum="0" Maximum="100" Margin="4"
+                                Value="{Binding ViewerVolume, Mode=TwoWay}" />
+                        <TextBlock Text="{Binding ViewerVolume, StringFormat='{}{0:0}%'}"
+                                   Width="40" VerticalAlignment="Center" Margin="4" />
+                        <Button Content="Stop" IsEnabled="{Binding ViewModel.CanStop}" Click="OnStop" Margin="4" />
+                    </WrapPanel>
+                </ScrollViewer>
+            </Border>
+        </Grid>
     </DockPanel>
 </UserControl>

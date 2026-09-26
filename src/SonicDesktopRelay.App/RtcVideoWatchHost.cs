@@ -37,6 +37,15 @@ public sealed class RtcVideoWatchHost(
     private VideoSubscriber? _subscriber;
     private ITimer? _watchdog;
     private string? _audioPipelineFailure;
+    private double _playbackVolume = 100;
+    private bool _playbackMuted;
+
+    public void SetPlaybackVolume(double volumePercent, bool muted)
+    {
+        _playbackVolume = volumePercent;
+        _playbackMuted = muted;
+        _audioPipeline?.SetPlaybackVolume(volumePercent, muted);
+    }
 
     public string? DecoderName { get; private set; }
 
@@ -131,6 +140,7 @@ public sealed class RtcVideoWatchHost(
             var candidateAudioPipeline = new AudioWatchPipeline(
                 new OpusAudioCodec(channels: 2),
                 sink);
+            candidateAudioPipeline.SetPlaybackVolume(_playbackVolume, _playbackMuted);
             candidateAudioPipeline.Failed += OnAudioPipelineFailed;
 
             try
@@ -146,6 +156,7 @@ public sealed class RtcVideoWatchHost(
                 {
                     audioPipeline = candidateAudioPipeline;
                     _audioPipeline = candidateAudioPipeline;
+                    candidateAudioPipeline.SetPlaybackVolume(_playbackVolume, _playbackMuted);
                 }
             }
             catch (Exception e) when (e is not OperationCanceledException)

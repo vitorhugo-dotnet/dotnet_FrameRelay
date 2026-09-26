@@ -11,9 +11,13 @@
         Width="900" Height="560"
         Background="{StaticResource SurfaceBrush}"
         Title="SonicDesktopRelay">
-    <Grid ColumnDefinitions="180,*">
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="{Binding ViewerRailWidth}" />
+            <ColumnDefinition Width="*" />
+        </Grid.ColumnDefinitions>
         <Border Grid.Column="0"
-                IsVisible="{Binding !IsVideoFullScreen}"
+                IsVisible="{Binding !IsVideoExpanded}"
                 Background="{StaticResource RailBrush}"
                 BorderBrush="{StaticResource BorderBrush}"
                 BorderThickness="0,0,1,0"

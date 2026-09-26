@@ -29,6 +29,12 @@ public sealed class SessionApiClient(HttpClient http)
         return await ApiResponse.ReadAsync<ParticipantsResponse>(response, ct);
     }
 
+    public async Task<SessionResponse> JoinByIdAsync(Guid sessionId, CancellationToken ct)
+    {
+        using var response = await http.PostAsync($"/api/sessions/{sessionId}/join", content: null, ct);
+        return await ApiResponse.ReadAsync<SessionResponse>(response, ct);
+    }
+
     public async Task EndAsync(Guid sessionId, CancellationToken ct)
     {
         var response = await http.PostAsync($"/api/sessions/{sessionId}/end", content: null, ct);

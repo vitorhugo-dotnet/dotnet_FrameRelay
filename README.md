@@ -13,6 +13,21 @@ not rename them.
 
 For source builds, install the .NET 10 SDK.
 
+## Discord desktop launch links
+
+Running the Windows executable registers `framerelay://launch?token=...` for the current user
+under `HKCU\Software\Classes\framerelay`, with no administrator access. Run the executable from
+its permanent install location once; moving it requires running it again. Launching through
+`dotnet app.dll` does not register a handler. A protocol link opens a new process; this unpackaged
+app has no single-instance handoff. Configure the backend address before opening a link.
+
+The link is redeemed once with the desktop's DeviceBearer credentials. A share request opens
+the regular monitor and quality controls and waits for **Start sharing** before capturing;
+the session is then bound to Discord. If binding fails or the intent expires, capture stops and
+the user should request another link. A watch request opens the normal Watch session flow.
+Tokens are never written to application logs. Verify protocol activation, monitor consent and
+real Discord launches manually on Windows after installing the updated backend and bot.
+
 ## Build and test
 
 ```powershell

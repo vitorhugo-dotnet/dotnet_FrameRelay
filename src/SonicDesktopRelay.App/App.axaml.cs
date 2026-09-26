@@ -35,6 +35,10 @@ public partial class App : Application
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
             desktop.MainWindow = new Views.MainWindow();
+            var tokens = (desktop.Args ?? []).Select(SonicDesktopRelay.Core.LaunchUri.ParseToken)
+                .Where(token => token is not null).ToArray();
+            if (tokens.Length == 1 && desktop.MainWindow.DataContext is Shell shell)
+                desktop.MainWindow.Opened += async (_, _) => await shell.ActivateLaunchAsync(tokens[0]!, CancellationToken.None);
         }
 
         base.OnFrameworkInitializationCompleted();

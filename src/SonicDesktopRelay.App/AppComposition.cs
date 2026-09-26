@@ -34,6 +34,7 @@ public sealed class AppComposition
         {
             BaseAddress = settings.BaseAddress
         };
+        LaunchIntents = new LaunchIntentApiClient(sessionHttp);
 
         // Both media roles need the very connection the runtime is using — offers, answers and
         // ICE all travel over the same socket — so the factory hands out the decorated current
@@ -71,6 +72,8 @@ public sealed class AppComposition
     public DeviceIdentityService Identity { get; }
 
     public SessionRuntime Runtime { get; }
+
+    public LaunchIntentApiClient LaunchIntents { get; }
 
     public RtcVideoPublishHost PublishHost { get; }
 
@@ -121,7 +124,9 @@ internal sealed class SessionApiAdapter(SessionApiClient client) : ISessionApi
     {
         try
         {
-            return (await client.JoinAsync(code, ct)).Id;
+            return (Guid.TryParse(code, out var id)
+                ? await client.JoinByIdAsync(id, ct)
+                : await client.JoinAsync(code, ct)).Id;
         }
         catch (ApiException e)
         {

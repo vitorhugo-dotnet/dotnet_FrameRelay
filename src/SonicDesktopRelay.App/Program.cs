@@ -43,6 +43,11 @@ internal static class Program
 
         try
         {
+            try { ProtocolActivation.RegisterCurrentUser(); }
+            catch (Exception error) when (error is UnauthorizedAccessException or System.Security.SecurityException or IOException)
+            {
+                logger.LogWarning("Could not register the current-user FrameRelay protocol handler.");
+            }
             BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
         }
         catch (Exception exception)

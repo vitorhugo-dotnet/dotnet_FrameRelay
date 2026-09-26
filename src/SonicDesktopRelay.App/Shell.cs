@@ -6,6 +6,7 @@ using Avalonia.Threading;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using SonicDesktopRelay.Core;
+using SonicDesktopRelay.ApiClient;
 using SonicDesktopRelay.Media;
 using SonicDesktopRelay.Media.Windows;
 using SonicDesktopRelay.Presentation;
@@ -44,6 +45,12 @@ public sealed class Shell : INotifyPropertyChanged
     private bool _viewerMuted;
     private long _uiFramesDelivered;
     private long _lastUiFrameUtcTicks;
+    private Guid? _pendingShareIntent;
+    private bool _activatingLaunch;
+
+    public string? LaunchNotice => _pendingShareIntent is not null
+        ? "Discord requested a share. Choose your monitor and quality, then click Start sharing to confirm."
+        : null;
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
@@ -115,6 +122,8 @@ public sealed class Shell : INotifyPropertyChanged
             }
 
             // A changed address invalidates the clients built against the old one.
+            _pendingShareIntent = null;
+            Raise(nameof(LaunchNotice));
             _composition = null;
             Raise();
             Raise(nameof(IsBackendAddressValid));
@@ -401,6 +410,7 @@ public sealed class Shell : INotifyPropertyChanged
 
     public async Task ShareAsync(CancellationToken ct)
     {
+        if (_activatingLaunch) return;
         var runtime = TryGetRuntime();
         if (runtime is null) return;
 
@@ -417,11 +427,72 @@ public sealed class Shell : INotifyPropertyChanged
         }
 
         var profile = new VideoPublishProfile(quality.MaxHeight, frameRate.FramesPerSecond);
+        var composition = _composition!;
+        var launchIntent = _pendingShareIntent;
         await GuardAsync(() => runtime.StartSharingAsync(monitor, profile, DefaultMaxViewers, ct));
+        if (launchIntent is { } intentId && runtime.Snapshot.Phase == SessionPhase.Sharing
+            && runtime.Snapshot.SessionId is { } sessionId)
+        {
+            _pendingShareIntent = null;
+            Raise(nameof(LaunchNotice));
+            try
+            {
+                if (!ReferenceEquals(composition, _composition))
+                    throw new InvalidOperationException("Backend changed while starting the share.");
+                await composition.LaunchIntents.BindAsync(intentId, sessionId, ct);
+            }
+            catch (Exception error) when (error is ApiException or HttpRequestException or InvalidOperationException or OperationCanceledException)
+            {
+                // A consumed/expired launch must not leave an unannounced capture running.
+                await GuardAsync(() => runtime.StopAsync(CancellationToken.None));
+                ShellError = "Could not connect this share to Discord. The link may have expired; request a new share link.";
+            }
+        }
+    }
+
+    public async Task ActivateLaunchAsync(string token, CancellationToken ct)
+    {
+        if (_activatingLaunch || _pendingShareIntent is not null
+            || ViewModel.Snapshot.Phase is not (SessionPhase.Idle or SessionPhase.Failed))
+        {
+            ShellError = "Stop the current session before opening a launch link.";
+            return;
+        }
+        if (LaunchUri.ParseToken("framerelay://launch?token=" + token) is null) return;
+        var runtime = TryGetRuntime();
+        if (runtime is null) return;
+        _activatingLaunch = true;
+        ShellError = null;
+        var composition = _composition!;
+        try
+        {
+            var intent = await composition.LaunchIntents.RedeemAsync(token, ct);
+            if (!ReferenceEquals(composition, _composition))
+                throw new InvalidOperationException("Backend changed while opening the link.");
+            if (intent.Kind == "share")
+            {
+                _pendingShareIntent = intent.Id;
+                ViewModel.CurrentPage = Page.Share;
+                Raise(nameof(LaunchNotice));
+            }
+            else
+            {
+                ViewModel.CurrentPage = Page.Watch;
+                await WatchAsync(intent.WatchTarget, ct);
+            }
+        }
+        catch (Exception error) when (error is ApiException or HttpRequestException or InvalidOperationException or OperationCanceledException)
+        {
+            // Never log HTTP exception details for a capability redemption.
+            ShellError = "Could not open this launch link. It may be expired or already used; request a new link.";
+        }
+        finally { _activatingLaunch = false; }
     }
 
     public async Task WatchAsync(string code, CancellationToken ct)
     {
+        _pendingShareIntent = null;
+        Raise(nameof(LaunchNotice));
         var runtime = TryGetRuntime();
         if (runtime is null) return;
         await GuardAsync(() => runtime.StartWatchingAsync(code, ct));
@@ -429,6 +500,8 @@ public sealed class Shell : INotifyPropertyChanged
 
     public async Task StopAsync(CancellationToken ct)
     {
+        _pendingShareIntent = null;
+        Raise(nameof(LaunchNotice));
         VideoDisplayMode = ViewerDisplayMode.Normal;
         var runtime = _composition?.Runtime;
         if (runtime is null) return;

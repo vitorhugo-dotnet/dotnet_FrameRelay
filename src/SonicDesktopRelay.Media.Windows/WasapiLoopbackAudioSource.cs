@@ -24,6 +24,10 @@ public interface IWasapiLoopbackRecorder : IAsyncDisposable
 public interface IWasapiLoopbackRecorderFactory
 {
     IWasapiLoopbackRecorder Create(int sampleRate, int channels, int bitsPerSample, int bufferMilliseconds);
+
+    Task<IWasapiLoopbackRecorder> CreateExcludingAsync(uint processId, int sampleRate, int channels,
+        int bitsPerSample, int bufferMilliseconds)
+        => throw new PlatformNotSupportedException("This recorder cannot exclude a process tree.");
 }
 
 /// <summary>
@@ -41,6 +45,7 @@ public sealed class WasapiLoopbackAudioSource : IAudioCaptureSource
     public const int BufferMilliseconds = 20;
 
     private readonly IWasapiLoopbackRecorderFactory _factory;
+    private readonly Func<bool>? _validateCaptureChunk;
     private readonly PcmFrameAccumulator _accumulator = new(
         OutputSampleRate,
         OutputChannels,
@@ -58,12 +63,15 @@ public sealed class WasapiLoopbackAudioSource : IAudioCaptureSource
     {
     }
 
-    public WasapiLoopbackAudioSource(IWasapiLoopbackRecorderFactory factory)
+    public WasapiLoopbackAudioSource(IWasapiLoopbackRecorderFactory factory, Func<bool>? validateCaptureChunk = null)
     {
         _factory = factory ?? throw new ArgumentNullException(nameof(factory));
+        _validateCaptureChunk = validateCaptureChunk;
     }
 
     public event Action<AudioFrame>? AudioCaptured;
+
+    public event Action? CaptureDegraded;
 
     public string? ActiveEndpointId { get; private set; }
 
@@ -162,6 +170,12 @@ public sealed class WasapiLoopbackAudioSource : IAudioCaptureSource
         lock (_gate)
         {
             if (!_acceptAudio || _disposed) return;
+            if (_validateCaptureChunk is not null && !_validateCaptureChunk())
+            {
+                // Reject the entire chunk and all partial PCM from the preceding interval.
+                _accumulator.Reset();
+                return;
+            }
             frames = _accumulator.Append(data);
         }
 
@@ -188,6 +202,8 @@ public sealed class WasapiLoopbackAudioSource : IAudioCaptureSource
             DegradedReason ??= $"WASAPI loopback stopped: {error.Message}";
             _accumulator.Reset();
         }
+
+        CaptureDegraded?.Invoke();
     }
 
     public async ValueTask DisposeAsync()
@@ -203,6 +219,22 @@ public sealed class NAudioWasapiLoopbackRecorderFactory : IWasapiLoopbackRecorde
 {
     public IWasapiLoopbackRecorder Create(int sampleRate, int channels, int bitsPerSample, int bufferMilliseconds)
         => new NAudioWasapiLoopbackRecorder(sampleRate, channels, bitsPerSample, bufferMilliseconds);
+
+    public async Task<IWasapiLoopbackRecorder> CreateExcludingAsync(uint processId, int sampleRate,
+        int channels, int bitsPerSample, int bufferMilliseconds)
+    {
+        if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 20348))
+            throw new PlatformNotSupportedException("Discord audio exclusion requires Windows build 20348 or later.");
+        var recorder = await new WasapiRecorderBuilder()
+            .WithSharedMode()
+            .WithEventSync()
+            .WithProcessLoopback(processId, NAudio.CoreAudioApi.ProcessLoopbackMode.ExcludeTargetProcessTree)
+            .WithBufferLength(bufferMilliseconds)
+            .WithFormat(new WaveFormat(sampleRate, bitsPerSample, channels))
+            .WithMmcssThreadPriority("Audio")
+            .BuildAsync();
+        return new NAudioWasapiLoopbackRecorder(recorder, processId);
+    }
 }
 
 [SupportedOSPlatform("windows10.0.19041.0")]
@@ -210,6 +242,15 @@ internal sealed class NAudioWasapiLoopbackRecorder : IWasapiLoopbackRecorder
 {
     private readonly WasapiRecorder _recorder;
     private bool _disposed;
+
+    internal NAudioWasapiLoopbackRecorder(WasapiRecorder recorder, uint excludedProcessId)
+    {
+        _recorder = recorder;
+        EndpointId = $"process-loopback-exclude-{excludedProcessId}";
+        EndpointName = $"System mix excluding Discord desktop tree ({excludedProcessId})";
+        _recorder.DataAvailable += OnDataAvailable;
+        _recorder.RecordingStopped += OnRecordingStopped;
+    }
 
     public NAudioWasapiLoopbackRecorder(int sampleRate, int channels, int bitsPerSample, int bufferMilliseconds)
     {

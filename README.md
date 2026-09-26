@@ -160,3 +160,7 @@ UI-delivered, or rendered-frame counters stop.
 - [Screen publishing and watching](docs/screen-publishing.md)
 - [Native media validation](docs/native-media-validation.md)
 - [Third-party notices](THIRD-PARTY-NOTICES.md)
+
+## Discord launch links
+
+FrameRelay registers `framerelay://open/share/{token}` and `framerelay://open/watch/{token}` for the current Windows user. Launches are forwarded to the running app; share links wait for the user to choose a capture target and start sharing. Tokens are redeemed with the device identity and are not written to application logs.

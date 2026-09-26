@@ -91,6 +91,18 @@
                 </StackPanel>
             </UniformGrid>
 
+            <Border Classes="card">
+                <StackPanel Spacing="{StaticResource SpaceSm}">
+                    <TextBlock Text="Discord audio" FontSize="{StaticResource FontSizeLg}"
+                               FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" />
+                    <CheckBox Content="Ignore Discord audio while sharing"
+                              IsChecked="{Binding IgnoreDiscordAudio, Mode=TwoWay}" />
+                    <TextBlock Text="Monitor sharing excludes Discord audio. Application-window sharing captures only that app's audio."
+                               TextWrapping="Wrap" FontSize="{StaticResource FontSizeSm}"
+                               Foreground="{StaticResource TextSecondaryBrush}" />
+                </StackPanel>
+            </Border>
+
             <UniformGrid Classes="settingsColumns">
                 <StackPanel Classes="leftColumn" Spacing="{StaticResource SpaceMd}">
                     <Border Classes="card unavailable" IsEnabled="False" Focusable="False">

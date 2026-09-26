@@ -52,7 +52,7 @@
 
     <Grid ColumnDefinitions="Auto,*">
         <Border x:Name="navigationRail" Grid.Column="0"
-                IsVisible="{Binding !IsVideoFullScreen}"
+                IsVisible="{Binding !IsVideoExpanded}"
                 Background="{DynamicResource RailBrush}"
                 BorderBrush="{DynamicResource BorderBrush}"
                 BorderThickness="0,0,1,0"

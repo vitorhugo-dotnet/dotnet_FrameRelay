@@ -21,6 +21,7 @@ public sealed record ShareQualityOption(string Label, int MaxHeight);
 public sealed record ShareFrameRateOption(string Label, int FramesPerSecond);
 
 public enum ShareSourceKind { Monitor, Window }
+public enum ViewerDisplayMode { Normal, Fit, FullScreen }
 
 /// <summary>
 /// What the window binds to: the plan's <see cref="MainWindowViewModel"/> for everything the
@@ -34,6 +35,7 @@ public sealed class Shell : INotifyPropertyChanged, IAsyncDisposable
     private const int DefaultMaxViewers = 3;
 
     private readonly FileBackendAddressStore _backendAddressStore;
+    private readonly FileUserPreferencesStore _userPreferencesStore;
     private readonly IMonitorEnumerator _monitorEnumerator;
     private readonly IWindowEnumerator _windowEnumerator;
     private readonly ILogger<Shell> _logger;
@@ -42,6 +44,7 @@ public sealed class Shell : INotifyPropertyChanged, IAsyncDisposable
     private bool _startingPublicShare;
     private AppComposition? _composition;
     private string _backendAddress;
+    private bool _ignoreDiscordAudio;
     private string _deviceName = Environment.MachineName;
     private string? _shellError;
     private MonitorInfo? _selectedMonitor;
@@ -49,7 +52,7 @@ public sealed class Shell : INotifyPropertyChanged, IAsyncDisposable
     private ShareSourceKind _shareSourceKind = ShareSourceKind.Monitor;
     private ShareQualityOption? _selectedShareQuality;
     private ShareFrameRateOption? _selectedShareFrameRate;
-    private bool _isVideoFullScreen;
+    private ViewerDisplayMode _videoDisplayMode;
     private double _playbackVolume = 100;
     private double _lastNonZeroPlaybackVolume = 100;
     private bool _isPlaybackMuted;
@@ -93,7 +96,9 @@ public sealed class Shell : INotifyPropertyChanged, IAsyncDisposable
         _preview.FrameCaptured += frame => PreviewFrameCaptured?.Invoke(frame);
         _preview.StatusChanged += () => Raise(nameof(PreviewStatus));
         _backendAddressStore = new FileBackendAddressStore(FileBackendAddressStore.DefaultPath);
+        _userPreferencesStore = new FileUserPreferencesStore(FileUserPreferencesStore.DefaultPath);
         _backendAddress = _backendAddressStore.Read();
+        _ignoreDiscordAudio = _userPreferencesStore.ReadIgnoreDiscordAudio();
         SelectedShareQuality = ShareQualities[0];
         SelectedShareFrameRate = ShareFrameRates[1];
         ViewModel.PropertyChanged += OnViewModelPropertyChanged;
@@ -180,27 +185,63 @@ public sealed class Shell : INotifyPropertyChanged, IAsyncDisposable
     }
 
     /// <summary>
-    /// True while the picture fills the window and the navigation rail is out of the way.
-    /// F11 toggles it, Esc leaves it.
+    /// The viewer layout mode. Fit leaves the native window state alone.
     /// </summary>
-    public bool IsVideoFullScreen
+    public ViewerDisplayMode VideoDisplayMode
     {
-        get => _isVideoFullScreen;
-        private set
+        get => _videoDisplayMode;
+        set
         {
-            if (_isVideoFullScreen == value) return;
-            _isVideoFullScreen = value;
+            if (_videoDisplayMode == value) return;
+            _videoDisplayMode = value;
             Raise();
+            Raise(nameof(IsVideoFullScreen));
+            Raise(nameof(IsVideoExpanded));
+        }
+    }
+
+    public bool IsVideoFullScreen => VideoDisplayMode == ViewerDisplayMode.FullScreen;
+    public bool IsVideoExpanded => VideoDisplayMode != ViewerDisplayMode.Normal;
+
+    public bool IgnoreDiscordAudio
+    {
+        get => _ignoreDiscordAudio;
+        set
+        {
+            if (_ignoreDiscordAudio == value) return;
+            _ignoreDiscordAudio = value;
+            try { _userPreferencesStore.WriteIgnoreDiscordAudio(value); }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            {
+                ShellError = "Could not save the Discord audio preference.";
+            }
+            Raise();
+            if (_composition is { } composition) _ = ApplyDiscordAudioPreferenceAsync(composition, value);
+        }
+    }
+
+    private async Task ApplyDiscordAudioPreferenceAsync(AppComposition composition, bool value)
+    {
+        try { await composition.PublishHost.SetIgnoreDiscordAudioAsync(value); }
+        catch (Exception error) when (error is InvalidOperationException or ObjectDisposedException)
+        {
+            _logger.LogWarning("Could not update Discord audio capture preference. type={ExceptionType}", error.GetType().Name);
         }
     }
 
     public void EnterVideoFullScreen()
     {
         if (ViewModel.CurrentPage == Page.Watch && ViewModel.Snapshot.Phase == SessionPhase.Watching)
-            IsVideoFullScreen = true;
+            VideoDisplayMode = ViewerDisplayMode.FullScreen;
     }
 
-    public void ExitVideoFullScreen() => IsVideoFullScreen = false;
+    public void EnterVideoFit()
+    {
+        if (ViewModel.CurrentPage == Page.Watch && ViewModel.Snapshot.Phase == SessionPhase.Watching)
+            VideoDisplayMode = ViewerDisplayMode.Fit;
+    }
+
+    public void ExitVideoFullScreen() => VideoDisplayMode = ViewerDisplayMode.Normal;
 
     public void ToggleVideoFullScreen()
     {
@@ -709,6 +750,7 @@ public sealed class Shell : INotifyPropertyChanged, IAsyncDisposable
         if (_composition is null)
         {
             _composition = new AppComposition(settings, _deviceName);
+            _ = ApplyDiscordAudioPreferenceAsync(_composition, IgnoreDiscordAudio);
             ApplyPlaybackControls();
             _composition.Runtime.Changed += OnSnapshot;
             _composition.Runtime.SignalingDiagnosticAdded += OnSignalingDiagnostic;

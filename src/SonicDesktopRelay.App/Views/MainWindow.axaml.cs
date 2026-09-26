@@ -56,7 +56,7 @@ public partial class MainWindow : Window
     {
         if (DataContext is not Shell shell) return;
 
-        if (e.Key == Key.Escape && shell.IsVideoFullScreen)
+        if (e.Key == Key.Escape && shell.IsVideoExpanded)
         {
             shell.ExitVideoFullScreen();
             e.Handled = true;

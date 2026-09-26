@@ -38,6 +38,9 @@ public sealed class RtcVideoPublishHost(
     private ITimer? _diagnosticsTimer;
     private string? _audioPipelineFailure;
     private CaptureTarget? _activeCaptureTarget;
+    private DiscordExcludingAudioSource? _discordExcludingAudio;
+    private MutedAudioCaptureSource? _discordWindowAudio;
+    private bool _ignoreDiscordAudio;
 
     public string? EncoderName { get; private set; }
 
@@ -111,11 +114,36 @@ public sealed class RtcVideoPublishHost(
     public string? AudioEncoderName => _audioPipeline?.EncoderName;
 
     public string? AudioCaptureEndpoint => (_audioSource as WasapiLoopbackAudioSource)?.ActiveEndpointName
-                                          ?? (_audioSource as ProcessLoopbackAudioSource)?.TargetProcessName;
+                                          ?? (_audioSource as ProcessLoopbackAudioSource)?.TargetProcessName
+                                          ?? _discordExcludingAudio?.ActiveEndpointName
+                                          ?? ((_audioSource as MutedAudioCaptureSource)?.Inner switch
+                                          {
+                                              ProcessLoopbackAudioSource process => process.TargetProcessName,
+                                              _ => null
+                                          });
 
     public string? AudioDegradedReason => _audioPipelineFailure
         ?? (_audioSource as WasapiLoopbackAudioSource)?.DegradedReason
-        ?? (_audioSource as ProcessLoopbackAudioSource)?.DegradedReason;
+        ?? (_audioSource as ProcessLoopbackAudioSource)?.DegradedReason
+        ?? _discordExcludingAudio?.DegradedReason
+        ?? ((_audioSource as MutedAudioCaptureSource)?.Inner switch
+        {
+            ProcessLoopbackAudioSource process => process.DegradedReason,
+            _ => null
+        });
+
+    public async Task SetIgnoreDiscordAudioAsync(bool value)
+    {
+        await _gate.WaitAsync();
+        try
+        {
+            _ignoreDiscordAudio = value;
+            if (_discordExcludingAudio is { } systemAudio)
+                await systemAudio.SetIgnoreDiscordAudioAsync(value);
+            _discordWindowAudio?.SetMuted(value);
+        }
+        finally { _gate.Release(); }
+    }
 
     /// <summary>Why the required video media stack could not start, when it could not.</summary>
     public string? StartFailure { get; private set; }
@@ -178,7 +206,23 @@ public sealed class RtcVideoPublishHost(
             await pipeline.StartAsync(target, ct);
 
             AudioPublishPipeline? audioPipeline = null;
-            IAudioCaptureSource? audioSource = _captureSelection.CreateAudio(target);
+            IAudioCaptureSource? audioSource;
+            if (target is CaptureTarget.Monitor)
+            {
+                _discordExcludingAudio = new DiscordExcludingAudioSource();
+                _discordExcludingAudio.RequestIgnoreDiscordAudio(_ignoreDiscordAudio);
+                audioSource = _discordExcludingAudio;
+            }
+            else
+            {
+                audioSource = _captureSelection.CreateAudio(target);
+                if (target is CaptureTarget.Window windowTarget && audioSource is not null
+                    && IsDiscordProcessName(windowTarget.Info.ProcessName))
+                {
+                    _discordWindowAudio = new MutedAudioCaptureSource(audioSource, _ignoreDiscordAudio);
+                    audioSource = _discordWindowAudio;
+                }
+            }
             _audioSource = audioSource;
             if (audioSource is null)
                 _audioPipelineFailure = "Per-process audio capture requires Windows build 20348 or later.";
@@ -360,6 +404,8 @@ public sealed class RtcVideoPublishHost(
         }
 
         _audioSource = null;
+        _discordExcludingAudio = null;
+        _discordWindowAudio = null;
 
         if (_capture is { } captureSource)
         {
@@ -377,6 +423,51 @@ public sealed class RtcVideoPublishHost(
             _pipeline = null;
             _encoder = null;
         }
+    }
+
+    private static bool IsDiscordProcessName(string name) =>
+        name.Equals("Discord", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("Discord.exe", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("DiscordPTB", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("DiscordPTB.exe", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("DiscordCanary", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("DiscordCanary.exe", StringComparison.OrdinalIgnoreCase);
+}
+
+internal sealed class MutedAudioCaptureSource(IAudioCaptureSource inner, bool muted) : IAudioCaptureSource
+{
+    private bool _muted = muted;
+    public IAudioCaptureSource Inner => inner;
+    public event Action<AudioFrame>? AudioCaptured;
+
+    public void SetMuted(bool value) => Volatile.Write(ref _muted, value);
+
+    public async Task StartAsync(CancellationToken ct)
+    {
+        inner.AudioCaptured += OnAudioCaptured;
+        try { await inner.StartAsync(ct); }
+        catch
+        {
+            inner.AudioCaptured -= OnAudioCaptured;
+            throw;
+        }
+    }
+
+    public async Task StopAsync()
+    {
+        inner.AudioCaptured -= OnAudioCaptured;
+        await inner.StopAsync();
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        inner.AudioCaptured -= OnAudioCaptured;
+        await inner.DisposeAsync();
+    }
+
+    private void OnAudioCaptured(AudioFrame frame)
+    {
+        if (!Volatile.Read(ref _muted)) AudioCaptured?.Invoke(frame);
     }
 }
 

@@ -24,6 +24,7 @@ public sealed class RtcVideoPublishHost(
     private readonly ILogger<RtcVideoPublishHost> _logger =
         loggerFactory?.CreateLogger<RtcVideoPublishHost>() ?? NullLogger<RtcVideoPublishHost>.Instance;
     private readonly SemaphoreSlim _gate = new(1, 1);
+    private readonly Lock _audioPreferenceGate = new();
     private static readonly IReadOnlyDictionary<Guid, RtcTransportDiagnostics> EmptyTransportDiagnostics =
         new Dictionary<Guid, RtcTransportDiagnostics>();
 
@@ -31,7 +32,8 @@ public sealed class RtcVideoPublishHost(
     private MediaFoundationH264Encoder? _encoder;
     private GraphicsCaptureScreenSource? _capture;
     private AudioPublishPipeline? _audioPipeline;
-    private WasapiLoopbackAudioSource? _audioSource;
+    private DiscordExcludingAudioSource? _audioSource;
+    private bool _ignoreDiscordAudio;
     private VideoPublisher? _publisher;
     private string? _audioPipelineFailure;
 
@@ -140,8 +142,13 @@ public sealed class RtcVideoPublishHost(
             await pipeline.StartAsync(monitor, ct);
 
             AudioPublishPipeline? audioPipeline = null;
-            var audioSource = new WasapiLoopbackAudioSource();
-            _audioSource = audioSource;
+            var audioSource = new DiscordExcludingAudioSource();
+            lock (_audioPreferenceGate)
+            {
+                _audioSource = audioSource;
+                audioSource.RequestIgnoreDiscordAudio(_ignoreDiscordAudio);
+            }
+            audioSource.DiagnosticsChanged += OnAudioCaptureDiagnosticsChanged;
 
             var candidateAudioPipeline = new AudioPublishPipeline(
                 audioSource,
@@ -160,6 +167,7 @@ public sealed class RtcVideoPublishHost(
                 // System audio is optional to the survival of the screen share. A missing/removed
                 // endpoint or Opus failure is surfaced in Diagnostics while video keeps publishing.
                 _audioPipelineFailure = audioSource.DegradedReason ?? e.Message;
+                audioSource.DiagnosticsChanged -= OnAudioCaptureDiagnosticsChanged;
                 candidateAudioPipeline.Failed -= OnAudioPipelineFailed;
                 await candidateAudioPipeline.DisposeAsync();
             }
@@ -200,6 +208,26 @@ public sealed class RtcVideoPublishHost(
         }
     }
 
+    public async Task SetIgnoreDiscordAudioAsync(bool value)
+    {
+        // Publish the request and silence the current source while startup/stop may still
+        // own the lifecycle gate. Source installation uses the same lock, so startup cannot
+        // install an unfiltered source after a concurrent enable request.
+        lock (_audioPreferenceGate)
+        {
+            _ignoreDiscordAudio = value;
+            _audioSource?.RequestIgnoreDiscordAudio(value);
+        }
+        await _gate.WaitAsync();
+        try
+        {
+            // Refresh the latest request; queued toggles must not restore an older preference.
+            if (_audioSource is not null) await _audioSource.RefreshAsync();
+            VideoDiagnosticsChanged?.Invoke();
+        }
+        finally { _gate.Release(); }
+    }
+
     public async Task StopAsync()
     {
         await _gate.WaitAsync();
@@ -231,6 +259,8 @@ public sealed class RtcVideoPublishHost(
     private void OnAudioPipelineFailed(Exception error)
         => _audioPipelineFailure ??= error.Message;
 
+    private void OnAudioCaptureDiagnosticsChanged() => VideoDiagnosticsChanged?.Invoke();
+
     private void OnTransportDiagnosticsChanged(Guid participantId, RtcTransportDiagnostics diagnostics)
     {
         _logger.LogInformation(
@@ -254,6 +284,7 @@ public sealed class RtcVideoPublishHost(
 
     private async Task DisposeStackAsync()
     {
+        if (_audioSource is not null) _audioSource.DiagnosticsChanged -= OnAudioCaptureDiagnosticsChanged;
         if (_publisher is not null)
         {
             _publisher.TransportDiagnosticsChanged -= OnTransportDiagnosticsChanged;
@@ -268,7 +299,7 @@ public sealed class RtcVideoPublishHost(
             _audioPipeline = null;
         }
 
-        _audioSource = null;
+        lock (_audioPreferenceGate) _audioSource = null;
         _capture = null;
 
         if (_pipeline is not null)

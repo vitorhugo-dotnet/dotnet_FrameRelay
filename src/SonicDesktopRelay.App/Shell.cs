@@ -64,6 +64,7 @@ public sealed class Shell : INotifyPropertyChanged
         _backendAddress = _backendAddressStore.Read();
         _userPreferencesStore = new FileUserPreferencesStore(FileUserPreferencesStore.DefaultPath);
         _ignoreDiscordAudio = _userPreferencesStore.ReadIgnoreDiscordAudio();
+        IgnoreDiscordAudioChanged += ApplyIgnoreDiscordAudio;
         SelectedShareQuality = ShareQualities[0];
         SelectedShareFrameRate = ShareFrameRates[1];
         RefreshMonitors();
@@ -408,6 +409,7 @@ public sealed class Shell : INotifyPropertyChanged
         if (_composition is null)
         {
             _composition = new AppComposition(settings, _deviceName);
+            ApplyIgnoreDiscordAudio(IgnoreDiscordAudio);
             _composition.Runtime.Changed += OnSnapshot;
             _composition.Runtime.SignalingDiagnosticAdded += OnSignalingDiagnostic;
             _composition.PublishHost.VideoDiagnosticsChanged += OnVideoDiagnosticsChanged;
@@ -418,6 +420,18 @@ public sealed class Shell : INotifyPropertyChanged
         }
 
         return _composition.Runtime;
+    }
+
+    private async void ApplyIgnoreDiscordAudio(bool value)
+    {
+        var host = _composition?.PublishHost;
+        if (host is null) return;
+        try { await host.SetIgnoreDiscordAudioAsync(value); }
+        catch (Exception error)
+        {
+            _logger.LogWarning(error, "Could not apply Discord audio preference.");
+            ShellError = $"Could not apply audio preference: {error.Message}";
+        }
     }
 
     private async Task GuardAsync(Func<Task> action)

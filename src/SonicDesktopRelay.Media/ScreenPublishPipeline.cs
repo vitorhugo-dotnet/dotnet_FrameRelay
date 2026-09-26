@@ -191,7 +191,10 @@ public sealed class ScreenPublishPipeline : IAsyncDisposable
     /// single healthy peer cannot prove that all degraded peers recovered. The selected quality
     /// remains session-global because capture and encoding are intentionally shared.
     /// </summary>
-    public void ReportReception(Guid sourceId, double reportedLoss)
+    public void ReportReception(Guid sourceId, double reportedLoss) =>
+        ApplyReception(sourceId, reportedLoss, "video-rtcp", "video-rtcp-loss");
+
+    private void ApplyReception(Guid sourceId, double reportedLoss, string evidenceSource, string lossReason)
     {
         var loss = Math.Clamp(reportedLoss, 0, 1);
         var now = _time.GetUtcNow();
@@ -215,9 +218,18 @@ public sealed class ScreenPublishPipeline : IAsyncDisposable
 
             if (telemetryFresh)
             {
-                loss = Math.Max(loss, evidence.TelemetryLoss);
-                if (evidence.LowFpsSustained)
-                    loss = Math.Max(loss, PoorReceptionLossRatio);
+                if (evidence.TelemetryLoss > loss)
+                {
+                    loss = evidence.TelemetryLoss;
+                    evidenceSource = "video.receiver_stats";
+                    lossReason = evidence.TelemetryLossReason;
+                }
+                if (evidence.LowFpsSustained && loss <= PoorReceptionLossRatio)
+                {
+                    loss = PoorReceptionLossRatio;
+                    evidenceSource = "video.receiver_stats";
+                    lossReason = "low-decoded-fps";
+                }
             }
 
             if (loss >= PoorReceptionLossRatio)
@@ -228,11 +240,12 @@ public sealed class ScreenPublishPipeline : IAsyncDisposable
                 poorReports = evidence.ConsecutivePoorReports;
 
                 _logger.LogInformation(
-                    "video.quality.degradation.considered reason={Reason} receptionSource={ReceptionSource} " +
+                    "video.quality.degradation.considered reason={Reason} evidenceSource={EvidenceSource} receptionSource={ReceptionSource} " +
                     "reportedLoss={ReportedLoss:F4} consecutivePoorReports={ConsecutivePoorReports} " +
                     "poorDurationMs={PoorDurationMs:F0} cooldownRemainingMs={CooldownRemainingMs:F0} " +
                     "maxHeight={MaxHeight} bitrate={Bitrate}",
-                    "rtcp-loss",
+                    lossReason,
+                    evidenceSource,
                     sourceId,
                     loss,
                     poorReports,
@@ -253,7 +266,7 @@ public sealed class ScreenPublishPipeline : IAsyncDisposable
                         Quality = reduced;
                         _lastQualityChangeAt = now;
                         changeEvent = "video.quality.changed";
-                        reason = "sustained-rtcp-loss";
+                        reason = lossReason;
                         ResetAllReceptionEvidence();
                     }
                     else
@@ -284,11 +297,12 @@ public sealed class ScreenPublishPipeline : IAsyncDisposable
                     stableReports = evidence.ConsecutiveStableReports;
 
                     _logger.LogInformation(
-                        "video.quality.recovery.considered reason={Reason} receptionSource={ReceptionSource} " +
+                        "video.quality.recovery.considered reason={Reason} evidenceSource={EvidenceSource} receptionSource={ReceptionSource} " +
                         "reportedLoss={ReportedLoss:F4} consecutiveStableReports={ConsecutiveStableReports} " +
                         "stableDurationMs={StableDurationMs:F0} cooldownRemainingMs={CooldownRemainingMs:F0} " +
                         "maxHeight={MaxHeight} bitrate={Bitrate}",
-                        "stable-rtcp-reception",
+                        "stable-video-reception",
+                        evidenceSource,
                         sourceId,
                         loss,
                         stableReports,
@@ -308,7 +322,7 @@ public sealed class ScreenPublishPipeline : IAsyncDisposable
                             Quality = improved;
                             _lastQualityChangeAt = now;
                             changeEvent = "video.quality.recovered";
-                            reason = "stable-rtcp-reception";
+                            reason = "stable-video-reception";
                             ResetAllReceptionEvidence();
                         }
                     }
@@ -332,17 +346,20 @@ public sealed class ScreenPublishPipeline : IAsyncDisposable
             _capture.SetFrameRate(newQuality.FramesPerSecond);
 
         _logger.LogWarning(
-            "{QualityEvent} reason={Reason} receptionSource={ReceptionSource} reportedLoss={ReportedLoss:F4} " +
+            "{QualityEvent} reason={Reason} evidenceSource={EvidenceSource} receptionSource={ReceptionSource} reportedLoss={ReportedLoss:F4} " +
             "oldResolution={OldResolution} newResolution={NewResolution} " +
-            "oldBitrate={OldBitrate} newBitrate={NewBitrate} " +
+            "oldFps={OldFps} newFps={NewFps} oldBitrate={OldBitrate} newBitrate={NewBitrate} " +
             "consecutivePoorReports={ConsecutivePoorReports} consecutiveStableReports={ConsecutiveStableReports} " +
             "cooldownMs={CooldownMs:F0}",
             changeEvent,
             reason,
+            evidenceSource,
             sourceId,
             loss,
             oldResolution,
             newResolution,
+            oldQuality.FramesPerSecond,
+            newQuality.FramesPerSecond,
             oldQuality.TargetBitsPerSecond,
             newQuality.TargetBitsPerSecond,
             poorReports,
@@ -362,6 +379,8 @@ public sealed class ScreenPublishPipeline : IAsyncDisposable
         var packetLoss = packetTotal == 0 ? 0 : stats.RtpPacketsLost / (double)packetTotal;
         var incompleteRatio = unitTotal == 0 ? 0 : stats.IncompleteAccessUnits / (double)unitTotal;
         var loss = Math.Max(packetLoss, incompleteRatio);
+        var lossReason = incompleteRatio > packetLoss
+            ? "receiver-video-access-unit-loss" : "receiver-video-packet-loss";
         var decodedFps = stats.IntervalMilliseconds <= 0 ? 0
             : stats.DecodedFrames * 1000d / stats.IntervalMilliseconds;
         var lowFps = decodedFps < stats.TargetFramesPerSecond * 0.85;
@@ -394,13 +413,15 @@ public sealed class ScreenPublishPipeline : IAsyncDisposable
             evidence.TelemetrySeen = true;
             evidence.TelemetryAt = now;
             evidence.TelemetryLoss = loss;
+            evidence.TelemetryLossReason = lossReason;
             evidence.DecodedFramesPerSecond = decodedFps;
             evidence.TargetFramesPerSecond = stats.TargetFramesPerSecond;
         }
         var evidenceLoss = sustainedLowFps
             ? Math.Max(loss, PoorReceptionLossRatio)
             : loss;
-        ReportReception(sourceId, evidenceLoss);
+        ApplyReception(sourceId, evidenceLoss, "video.receiver_stats",
+            sustainedLowFps && loss < PoorReceptionLossRatio ? "low-decoded-fps" : lossReason);
     }
 
     public void RemoveReceptionSource(Guid sourceId)
@@ -584,6 +605,7 @@ public sealed class ScreenPublishPipeline : IAsyncDisposable
         public bool TelemetrySeen { get; set; }
         public DateTimeOffset? TelemetryAt { get; set; }
         public double TelemetryLoss { get; set; }
+        public string TelemetryLossReason { get; set; } = "receiver-video-packet-loss";
         public double DecodedFramesPerSecond { get; set; }
         public double TargetFramesPerSecond { get; set; }
         public DateTimeOffset? LowFpsSince { get; set; }

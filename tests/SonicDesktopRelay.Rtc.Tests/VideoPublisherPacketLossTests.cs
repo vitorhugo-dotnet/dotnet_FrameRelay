@@ -128,6 +128,43 @@ public sealed class VideoPublisherPacketLossTests
         Assert.Equal(3, audioReports.Count);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Audio_and_unknown_loss_cannot_block_recovery_from_either_video_source(bool receiverStats)
+    {
+        var time = new FakeTimeProvider(DateTimeOffset.UnixEpoch);
+        var pipeline = new ScreenPublishPipeline(new FakeCapture(), new FakeEncoder(), time: time);
+        var peers = new FakePeerFactory();
+        await using var publisher = new VideoPublisher(pipeline, peers, new FakeSignaling(), time: time);
+        var viewer = Guid.NewGuid();
+        await publisher.AddViewerAsync(viewer, CancellationToken.None);
+        var peer = peers.Created!;
+        for (var i = 0; i < 3; i++)
+        {
+            peer.ReportPacketLoss(0.1);
+            if (i < 2) time.Advance(TimeSpan.FromSeconds(2.5));
+        }
+        Assert.Equal(3_000_000, pipeline.Quality.TargetBitsPerSecond);
+
+        for (var i = 0; i < 4; i++)
+        {
+            peer.ReportReception(new RtcpReceptionReport(RtcMediaKind.Audio, 11, 0.9));
+            peer.ReportReception(new RtcpReceptionReport(RtcMediaKind.Unknown, 33, 0.9));
+            if (receiverStats)
+            {
+                using var document = System.Text.Json.JsonDocument.Parse(
+                    "{\"version\":1,\"intervalMilliseconds\":2000,\"rtpPacketsReceived\":100,\"rtpPacketsLost\":0,\"accessUnitsReceived\":60,\"incompleteAccessUnits\":0,\"decodedFrames\":60,\"targetFramesPerSecond\":30}");
+                await publisher.HandleAsync(new SignalingEnvelope(SignalingMessageTypes.VideoReceiverStats,
+                    null, null, viewer, null, null, document.RootElement.Clone()), CancellationToken.None);
+            }
+            else
+                peer.ReportPacketLoss(0);
+            if (i < 3) time.Advance(TimeSpan.FromSeconds(10));
+        }
+        Assert.Equal(VideoQuality.Default, pipeline.Quality);
+    }
+
     private sealed class FakeCapture : IScreenCaptureSource
     {
         public MonitorInfo Monitor { get; private set; }

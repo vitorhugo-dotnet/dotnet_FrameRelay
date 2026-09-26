@@ -34,6 +34,18 @@
                        Foreground="{StaticResource TextSecondaryBrush}" />
         </StackPanel>
 
+        <StackPanel Spacing="{StaticResource SpaceXs}">
+            <CheckBox Content="Ignore Discord audio"
+                      IsChecked="{Binding IgnoreDiscordAudio, Mode=TwoWay}"
+                      IsEnabled="{Binding IsDiscordAudioExclusionAvailable}" />
+            <TextBlock Text="{Binding DiscordAudioExclusionUnavailableExplanation}"
+                       IsVisible="{Binding !IsDiscordAudioExclusionAvailable}"
+                       TextWrapping="Wrap"
+                       MaxWidth="420"
+                       FontSize="{StaticResource FontSizeSm}"
+                       Foreground="{StaticResource TextSecondaryBrush}" />
+        </StackPanel>
+
         <TextBlock Text="This device registers itself the first time it reaches the backend. There is no sign-in."
                    TextWrapping="Wrap"
                    FontSize="{StaticResource FontSizeSm}"

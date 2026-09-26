@@ -29,9 +29,11 @@ public sealed class Shell : INotifyPropertyChanged
     private const int DefaultMaxViewers = 3;
 
     private readonly FileBackendAddressStore _backendAddressStore;
+    private readonly FileUserPreferencesStore _userPreferencesStore;
     private readonly ILogger<Shell> _logger;
     private AppComposition? _composition;
     private string _backendAddress;
+    private bool _ignoreDiscordAudio;
     private string _deviceName = Environment.MachineName;
     private string? _shellError;
     private MonitorInfo? _selectedMonitor;
@@ -49,6 +51,9 @@ public sealed class Shell : INotifyPropertyChanged
     /// </summary>
     public event Action<VideoFrame>? FrameDecoded;
 
+    /// <summary>Raised when the local Discord audio exclusion preference changes.</summary>
+    public event Action<bool>? IgnoreDiscordAudioChanged;
+
     public MainWindowViewModel ViewModel { get; } = new();
 
     public Shell()
@@ -57,6 +62,8 @@ public sealed class Shell : INotifyPropertyChanged
                   ?? NullLogger<Shell>.Instance;
         _backendAddressStore = new FileBackendAddressStore(FileBackendAddressStore.DefaultPath);
         _backendAddress = _backendAddressStore.Read();
+        _userPreferencesStore = new FileUserPreferencesStore(FileUserPreferencesStore.DefaultPath);
+        _ignoreDiscordAudio = _userPreferencesStore.ReadIgnoreDiscordAudio();
         SelectedShareQuality = ShareQualities[0];
         SelectedShareFrameRate = ShareFrameRates[1];
         RefreshMonitors();
@@ -112,6 +119,32 @@ public sealed class Shell : INotifyPropertyChanged
     }
 
     public bool IsBackendAddressValid => BackendSettings.TryParse(_backendAddress) is not null;
+
+    public bool IgnoreDiscordAudio
+    {
+        get => _ignoreDiscordAudio;
+        set
+        {
+            if (_ignoreDiscordAudio == value) return;
+            _ignoreDiscordAudio = value;
+            try
+            {
+                _userPreferencesStore.WriteIgnoreDiscordAudio(value);
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                ShellError = $"Could not save audio preference: {e.Message}";
+            }
+
+            Raise();
+            IgnoreDiscordAudioChanged?.Invoke(value);
+        }
+    }
+
+    public bool IsDiscordAudioExclusionAvailable => OperatingSystem.IsWindowsVersionAtLeast(10, 0, 20348);
+
+    public string DiscordAudioExclusionUnavailableExplanation =>
+        "Discord audio exclusion requires Windows 10 build 20348 or later.";
 
     public string DeviceName
     {

@@ -1,0 +1,48 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package
+      Name="FrameRelay"
+      Manufacturer="vitorhugo-dotnet"
+      Version="$(ProductVersion)"
+      UpgradeCode="{8A8D6B71-9AF1-4CB1-AC70-88BA688C734B}"
+      Scope="perMachine">
+    <!-- Equal core versions are required to replace successive prereleases. ICE61 rejects that inclusive boundary. -->
+    <MajorUpgrade
+        AllowSameVersionUpgrades="yes"
+        DowngradeErrorMessage="A newer version of FrameRelay is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="FrameRelay" />
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="FrameRelayStartMenuFolder" Name="FrameRelay">
+        <Component Id="StartMenuShortcut" Guid="{31B65AE9-8101-4E7E-A77F-E1713A95A91A}">
+          <Shortcut
+              Id="FrameRelayStartMenuShortcut"
+              Name="FrameRelay"
+              Target="[INSTALLFOLDER]SonicDesktopRelay.App.exe"
+              WorkingDirectory="INSTALLFOLDER" />
+          <RemoveFolder Id="RemoveFrameRelayStartMenuFolder" On="uninstall" />
+          <RegistryValue
+              Root="HKCU"
+              Key="Software\FrameRelay"
+              Name="Installed"
+              Type="integer"
+              Value="1"
+              KeyPath="yes" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
+    <Feature Id="MainFeature" Title="FrameRelay" Level="1">
+      <ComponentGroupRef Id="PublishPayload" />
+      <ComponentRef Id="StartMenuShortcut" />
+    </Feature>
+  </Package>
+
+  <Fragment>
+    <ComponentGroup Id="PublishPayload">
+      <Files Include="$(PublishDirectory)\**" Directory="INSTALLFOLDER" />
+    </ComponentGroup>
+  </Fragment>
+
+</Wix>

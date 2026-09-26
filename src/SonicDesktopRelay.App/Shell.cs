@@ -1,12 +1,14 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.Net;
+using System.Net.Http;
 using System.Runtime.CompilerServices;
 using System.Runtime.Versioning;
 using Avalonia.Threading;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
-using SonicDesktopRelay.Core;
 using SonicDesktopRelay.ApiClient;
+using SonicDesktopRelay.Core;
 using SonicDesktopRelay.Media;
 using SonicDesktopRelay.Media.Windows;
 using SonicDesktopRelay.Presentation;
@@ -18,6 +20,9 @@ public sealed record ShareQualityOption(string Label, int MaxHeight);
 
 public sealed record ShareFrameRateOption(string Label, int FramesPerSecond);
 
+public enum ShareSourceKind { Monitor, Window }
+public enum ViewerDisplayMode { Normal, Fit, FullScreen }
+
 /// <summary>
 /// What the window binds to: the plan's <see cref="MainWindowViewModel"/> for everything the
 /// UI may know about a session, plus the few things only the shell owns — the configured
@@ -25,32 +30,35 @@ public sealed record ShareFrameRateOption(string Label, int FramesPerSecond);
 /// built lazily because the backend address can be wrong until someone fixes it in Settings.
 /// </summary>
 [SupportedOSPlatform("windows10.0.19041.0")]
-public sealed class Shell : INotifyPropertyChanged
+public sealed class Shell : INotifyPropertyChanged, IAsyncDisposable
 {
     private const int DefaultMaxViewers = 3;
 
     private readonly FileBackendAddressStore _backendAddressStore;
     private readonly FileUserPreferencesStore _userPreferencesStore;
+    private readonly IMonitorEnumerator _monitorEnumerator;
+    private readonly IWindowEnumerator _windowEnumerator;
     private readonly ILogger<Shell> _logger;
+    private readonly SharePreviewController _preview;
+    private bool _shareViewAttached;
+    private bool _startingPublicShare;
     private AppComposition? _composition;
     private string _backendAddress;
     private bool _ignoreDiscordAudio;
     private string _deviceName = Environment.MachineName;
     private string? _shellError;
     private MonitorInfo? _selectedMonitor;
+    private WindowInfo? _selectedWindow;
+    private ShareSourceKind _shareSourceKind = ShareSourceKind.Monitor;
     private ShareQualityOption? _selectedShareQuality;
     private ShareFrameRateOption? _selectedShareFrameRate;
     private ViewerDisplayMode _videoDisplayMode;
-    private double _viewerVolume = 100;
-    private bool _viewerMuted;
+    private double _playbackVolume = 100;
+    private double _lastNonZeroPlaybackVolume = 100;
+    private bool _isPlaybackMuted;
+    private Guid? _pendingShareIntentId;
     private long _uiFramesDelivered;
     private long _lastUiFrameUtcTicks;
-    private Guid? _pendingShareIntent;
-    private bool _activatingLaunch;
-
-    public string? LaunchNotice => _pendingShareIntent is not null
-        ? "Discord requested a share. Choose your monitor and quality, then click Start sharing to confirm."
-        : null;
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
@@ -59,24 +67,43 @@ public sealed class Shell : INotifyPropertyChanged
     /// shell only carries the frame across the thread boundary, exactly as it does snapshots.
     /// </summary>
     public event Action<VideoFrame>? FrameDecoded;
-
-    /// <summary>Raised when the local Discord audio exclusion preference changes.</summary>
-    public event Action<bool>? IgnoreDiscordAudioChanged;
+    public event Action<VideoFrame>? PreviewFrameCaptured;
+    public string PreviewStatus => _startingPublicShare || !ViewModel.CanShare
+        ? "Preview paused while sharing."
+        : _preview.PreviewStatus;
 
     public MainWindowViewModel ViewModel { get; } = new();
 
+    public string AppVersion => typeof(Shell).Assembly.GetName().Version?.ToString(3) ?? "0.0.0";
+
     public Shell()
+        : this(new MonitorEnumerator(), new WindowEnumerator()) { }
+
+    public Shell(IMonitorEnumerator monitorEnumerator, IWindowEnumerator windowEnumerator)
+        : this(monitorEnumerator, windowEnumerator, new PublisherCaptureSelection().CreateVideo,
+            action => Dispatcher.UIThread.Post(action)) { }
+
+    internal Shell(IMonitorEnumerator monitorEnumerator, IWindowEnumerator windowEnumerator,
+        Func<CaptureTarget, IScreenCaptureSource> previewSourceFactory,
+        Action<Action>? postToUi = null)
     {
+        _monitorEnumerator = monitorEnumerator ?? throw new ArgumentNullException(nameof(monitorEnumerator));
+        _windowEnumerator = windowEnumerator ?? throw new ArgumentNullException(nameof(windowEnumerator));
         _logger = FrameRelayLogging.Current?.LoggerFactory.CreateLogger<Shell>()
                   ?? NullLogger<Shell>.Instance;
+        _preview = new SharePreviewController(previewSourceFactory,
+            postToUi ?? (action => action()));
+        _preview.FrameCaptured += frame => PreviewFrameCaptured?.Invoke(frame);
+        _preview.StatusChanged += () => Raise(nameof(PreviewStatus));
         _backendAddressStore = new FileBackendAddressStore(FileBackendAddressStore.DefaultPath);
-        _backendAddress = _backendAddressStore.Read();
         _userPreferencesStore = new FileUserPreferencesStore(FileUserPreferencesStore.DefaultPath);
+        _backendAddress = _backendAddressStore.Read();
         _ignoreDiscordAudio = _userPreferencesStore.ReadIgnoreDiscordAudio();
-        IgnoreDiscordAudioChanged += ApplyIgnoreDiscordAudio;
         SelectedShareQuality = ShareQualities[0];
         SelectedShareFrameRate = ShareFrameRates[1];
+        ViewModel.PropertyChanged += OnViewModelPropertyChanged;
         RefreshMonitors();
+        RefreshWindows();
     }
 
     public string LogDirectory =>
@@ -122,8 +149,6 @@ public sealed class Shell : INotifyPropertyChanged
             }
 
             // A changed address invalidates the clients built against the old one.
-            _pendingShareIntent = null;
-            Raise(nameof(LaunchNotice));
             _composition = null;
             Raise();
             Raise(nameof(IsBackendAddressValid));
@@ -131,32 +156,6 @@ public sealed class Shell : INotifyPropertyChanged
     }
 
     public bool IsBackendAddressValid => BackendSettings.TryParse(_backendAddress) is not null;
-
-    public bool IgnoreDiscordAudio
-    {
-        get => _ignoreDiscordAudio;
-        set
-        {
-            if (_ignoreDiscordAudio == value) return;
-            _ignoreDiscordAudio = value;
-            try
-            {
-                _userPreferencesStore.WriteIgnoreDiscordAudio(value);
-            }
-            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
-            {
-                ShellError = $"Could not save audio preference: {e.Message}";
-            }
-
-            Raise();
-            IgnoreDiscordAudioChanged?.Invoke(value);
-        }
-    }
-
-    public bool IsDiscordAudioExclusionAvailable => OperatingSystem.IsWindowsVersionAtLeast(10, 0, 20348);
-
-    public string DiscordAudioExclusionUnavailableExplanation =>
-        "Discord audio exclusion requires Windows 10 build 20348 or later.";
 
     public string DeviceName
     {
@@ -186,7 +185,7 @@ public sealed class Shell : INotifyPropertyChanged
     }
 
     /// <summary>
-    /// The viewer layout mode; Fit leaves the native window state alone.
+    /// The viewer layout mode. Fit leaves the native window state alone.
     /// </summary>
     public ViewerDisplayMode VideoDisplayMode
     {
@@ -198,42 +197,126 @@ public sealed class Shell : INotifyPropertyChanged
             Raise();
             Raise(nameof(IsVideoFullScreen));
             Raise(nameof(IsVideoExpanded));
-            Raise(nameof(WatchPagePadding));
-            Raise(nameof(ViewerRailWidth));
         }
     }
 
     public bool IsVideoFullScreen => VideoDisplayMode == ViewerDisplayMode.FullScreen;
     public bool IsVideoExpanded => VideoDisplayMode != ViewerDisplayMode.Normal;
-    public Avalonia.Thickness WatchPagePadding => IsVideoExpanded ? new(0) : new(24);
-    public Avalonia.Controls.GridLength ViewerRailWidth => new(IsVideoExpanded ? 0 : 180);
 
-    public double ViewerVolume
+    public bool IgnoreDiscordAudio
     {
-        get => _viewerVolume;
+        get => _ignoreDiscordAudio;
         set
         {
-            var volume = double.IsFinite(value) ? Math.Clamp(value, 0, 100) : 100;
-            if (_viewerVolume == volume) return;
-            _viewerVolume = volume;
+            if (_ignoreDiscordAudio == value) return;
+            _ignoreDiscordAudio = value;
+            try { _userPreferencesStore.WriteIgnoreDiscordAudio(value); }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            {
+                ShellError = "Could not save the Discord audio preference.";
+            }
             Raise();
-            ApplyViewerAudio();
+            if (_composition is { } composition) _ = ApplyDiscordAudioPreferenceAsync(composition, value);
         }
     }
 
-    public bool ViewerMuted
+    private async Task ApplyDiscordAudioPreferenceAsync(AppComposition composition, bool value)
     {
-        get => _viewerMuted;
-        set
+        try { await composition.PublishHost.SetIgnoreDiscordAudioAsync(value); }
+        catch (Exception error) when (error is InvalidOperationException or ObjectDisposedException)
         {
-            if (_viewerMuted == value) return;
-            _viewerMuted = value;
-            Raise();
-            ApplyViewerAudio();
+            _logger.LogWarning("Could not update Discord audio capture preference. type={ExceptionType}", error.GetType().Name);
         }
     }
 
-    private void ApplyViewerAudio() => _composition?.WatchHost.SetPlaybackVolume(ViewerVolume, ViewerMuted);
+    public void EnterVideoFullScreen()
+    {
+        if (ViewModel.CurrentPage == Page.Watch && ViewModel.Snapshot.Phase == SessionPhase.Watching)
+            VideoDisplayMode = ViewerDisplayMode.FullScreen;
+    }
+
+    public void EnterVideoFit()
+    {
+        if (ViewModel.CurrentPage == Page.Watch && ViewModel.Snapshot.Phase == SessionPhase.Watching)
+            VideoDisplayMode = ViewerDisplayMode.Fit;
+    }
+
+    public void ExitVideoFullScreen() => VideoDisplayMode = ViewerDisplayMode.Normal;
+
+    public void ToggleVideoFullScreen()
+    {
+        if (IsVideoFullScreen) ExitVideoFullScreen();
+        else EnterVideoFullScreen();
+    }
+
+    private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(MainWindowViewModel.CurrentPage))
+            _ = UpdatePreviewAsync();
+        if ((e.PropertyName == nameof(MainWindowViewModel.CurrentPage)
+             && ViewModel.CurrentPage != Page.Watch)
+            || (e.PropertyName == nameof(MainWindowViewModel.Snapshot)
+                && ViewModel.Snapshot.Phase != SessionPhase.Watching))
+            ExitVideoFullScreen();
+    }
+
+    internal Task SetShareViewAttachedAsync(bool attached)
+    {
+        _shareViewAttached = attached;
+        return UpdatePreviewAsync();
+    }
+
+    internal Task WhenPreviewIdleAsync() => _preview.WhenIdleAsync();
+
+    private bool ShouldPreview => _shareViewAttached && !_startingPublicShare
+        && ViewModel.CurrentPage == Page.Share && ViewModel.CanShare;
+
+    private Task UpdatePreviewAsync() =>
+        _preview.SetTargetAsync(ShouldPreview ? SelectedCaptureTarget : null);
+
+    public async ValueTask DisposeAsync()
+    {
+        ViewModel.PropertyChanged -= OnViewModelPropertyChanged;
+        await _preview.DisposeAsync();
+    }
+
+    /// <summary>Watch playback level on the 0–100 scale shown by both watch controls.</summary>
+    public double PlaybackVolume
+    {
+        get => _playbackVolume;
+        set
+        {
+            var volume = double.IsNaN(value) ? 0 : Math.Clamp(value, 0, 100);
+            if (_playbackVolume == volume) return;
+            _playbackVolume = volume;
+            if (volume > 0) _lastNonZeroPlaybackVolume = volume;
+            var wasMuted = _isPlaybackMuted;
+            _isPlaybackMuted = volume == 0;
+            ApplyPlaybackControls();
+            Raise();
+            if (wasMuted != _isPlaybackMuted) Raise(nameof(IsPlaybackMuted));
+        }
+    }
+
+    public bool IsPlaybackMuted => _isPlaybackMuted;
+
+    public void TogglePlaybackMute()
+    {
+        _isPlaybackMuted = !_isPlaybackMuted;
+        if (!_isPlaybackMuted && _playbackVolume == 0)
+        {
+            _playbackVolume = _lastNonZeroPlaybackVolume;
+            Raise(nameof(PlaybackVolume));
+        }
+        ApplyPlaybackControls();
+        Raise(nameof(IsPlaybackMuted));
+    }
+
+    private void ApplyPlaybackControls()
+    {
+        if (_composition is not { } composition) return;
+        composition.WatchHost.SetPlaybackControls((float)(_playbackVolume / 100), _isPlaybackMuted);
+    }
 
     public IReadOnlyList<ShareQualityOption> ShareQualities { get; } =
     [
@@ -275,6 +358,77 @@ public sealed class Shell : INotifyPropertyChanged
     /// <summary>The monitors this machine can share, newest enumeration each time it is read.</summary>
     public ObservableCollection<MonitorInfo> Monitors { get; } = [];
 
+    public ObservableCollection<WindowInfo> Windows { get; } = [];
+
+    public IReadOnlyList<ShareSourceKind> ShareSourceKinds { get; } = [ShareSourceKind.Monitor, ShareSourceKind.Window];
+
+    public ShareSourceKind ShareSourceKind
+    {
+        get => _shareSourceKind;
+        set
+        {
+            if (_shareSourceKind == value) return;
+            _shareSourceKind = value;
+            Raise();
+            Raise(nameof(IsMonitorSourceSelected));
+            Raise(nameof(IsWindowSourceSelected));
+            Raise(nameof(SelectedCaptureTarget));
+            Raise(nameof(CanShareSelectedTarget));
+            Raise(nameof(CanStartShare));
+            Raise(nameof(WindowAudioStatus));
+            Raise(nameof(ShareAudioStatus));
+        }
+    }
+
+    public bool IsMonitorSourceSelected
+    {
+        get => ShareSourceKind == ShareSourceKind.Monitor;
+        set { if (value) ShareSourceKind = ShareSourceKind.Monitor; }
+    }
+
+    public bool IsWindowSourceSelected
+    {
+        get => ShareSourceKind == ShareSourceKind.Window;
+        set { if (value) ShareSourceKind = ShareSourceKind.Window; }
+    }
+
+    public CaptureTarget? SelectedCaptureTarget => ShareSourceKind switch
+    {
+        ShareSourceKind.Monitor when SelectedMonitor is { } monitor => new CaptureTarget.Monitor(monitor),
+        ShareSourceKind.Window when SelectedWindow is { } window => new CaptureTarget.Window(window),
+        _ => null
+    };
+
+    public bool CanShareSelectedTarget => SelectedCaptureTarget is not null;
+
+    public bool CanStartShare => ViewModel.CanShare && CanShareSelectedTarget;
+
+    public string WindowAudioStatus => !IsWindowSourceSelected
+        ? string.Empty
+        : ProcessLoopbackAudioSource.IsSupported
+            ? "Audio: this window and its child processes"
+            : "Audio unavailable: Windows build 20348 or later is required.";
+
+    /// <summary>Compact capture mode and health shown beside the sharing session.</summary>
+    public string ShareAudioStatus
+    {
+        get
+        {
+            var mode = IsWindowSourceSelected
+                ? "Window audio and child processes"
+                : "System audio from the default output";
+            var degraded = _composition?.PublishHost.AudioDegradedReason;
+            if (ViewModel.Snapshot.Phase == SessionPhase.Sharing
+                && !string.IsNullOrWhiteSpace(degraded)) return $"{mode} — degraded: {degraded}";
+            if (IsWindowSourceSelected && !ProcessLoopbackAudioSource.IsSupported)
+                return "Window audio unavailable: Windows build 20348 or later is required.";
+            if (ViewModel.Snapshot.Phase != SessionPhase.Sharing) return mode;
+            return _composition?.PublishHost.AudioEncoderName is not null
+                ? $"{mode} — active"
+                : $"{mode} — starting";
+        }
+    }
+
     public MonitorInfo? SelectedMonitor
     {
         get => _selectedMonitor;
@@ -283,6 +437,23 @@ public sealed class Shell : INotifyPropertyChanged
             if (Nullable.Equals(_selectedMonitor, value)) return;
             _selectedMonitor = value;
             Raise();
+            Raise(nameof(SelectedCaptureTarget));
+            Raise(nameof(CanShareSelectedTarget));
+            Raise(nameof(CanStartShare));
+        }
+    }
+
+    public WindowInfo? SelectedWindow
+    {
+        get => _selectedWindow;
+        set
+        {
+            if (Equals(_selectedWindow, value)) return;
+            _selectedWindow = value;
+            Raise();
+            Raise(nameof(SelectedCaptureTarget));
+            Raise(nameof(CanShareSelectedTarget));
+            Raise(nameof(CanStartShare));
         }
     }
 
@@ -400,25 +571,44 @@ public sealed class Shell : INotifyPropertyChanged
     /// <summary>Refreshes <see cref="Monitors"/> from the OS and keeps a sensible selection.</summary>
     public void RefreshMonitors()
     {
-        var monitors = new MonitorEnumerator().List();
+        var monitors = _monitorEnumerator.List();
         Monitors.Clear();
         foreach (var monitor in monitors) Monitors.Add(monitor);
 
         if (SelectedMonitor is { } selected && monitors.Any(x => x.Id == selected.Id)) return;
-        SelectedMonitor = monitors.FirstOrDefault(x => x.IsPrimary, monitors.FirstOrDefault());
+        SelectedMonitor = monitors.Where(x => x.IsPrimary).Select(x => (MonitorInfo?)x).FirstOrDefault()
+                          ?? monitors.Select(x => (MonitorInfo?)x).FirstOrDefault();
+    }
+
+    public void RefreshWindows()
+    {
+        var windows = _windowEnumerator.List();
+        Windows.Clear();
+        foreach (var window in windows) Windows.Add(window);
+        if (SelectedWindow is { } selected)
+        {
+            var retained = windows.FirstOrDefault(x => SameWindowIdentity(x, selected));
+            if (retained is not null)
+            {
+                SelectedWindow = retained;
+                return;
+            }
+        }
+        SelectedWindow = windows.FirstOrDefault();
     }
 
     public async Task ShareAsync(CancellationToken ct)
     {
-        if (_activatingLaunch) return;
-        var runtime = TryGetRuntime();
-        if (runtime is null) return;
-
-        if (SelectedMonitor is not { } monitor)
+        if (SelectedCaptureTarget is not { } target)
         {
-            ShellError = "No monitor is available to share.";
+            ShellError = ShareSourceKind == ShareSourceKind.Monitor
+                ? "No monitor is available to share."
+                : "Select an available application window to share.";
             return;
         }
+
+        var runtime = TryGetRuntime();
+        if (runtime is null) return;
 
         if (SelectedShareQuality is not { } quality || SelectedShareFrameRate is not { } frameRate)
         {
@@ -427,80 +617,114 @@ public sealed class Shell : INotifyPropertyChanged
         }
 
         var profile = new VideoPublishProfile(quality.MaxHeight, frameRate.FramesPerSecond);
-        var composition = _composition!;
-        var launchIntent = _pendingShareIntent;
-        await GuardAsync(() => runtime.StartSharingAsync(monitor, profile, DefaultMaxViewers, ct));
-        if (launchIntent is { } intentId && runtime.Snapshot.Phase == SessionPhase.Sharing
-            && runtime.Snapshot.SessionId is { } sessionId)
+        _startingPublicShare = true;
+        Raise(nameof(PreviewStatus));
+        await _preview.SetTargetAsync(null);
+        try
         {
-            _pendingShareIntent = null;
-            Raise(nameof(LaunchNotice));
-            try
+            await GuardAsync(() => runtime.StartSharingAsync(target, profile, DefaultMaxViewers, ct));
+            if (_pendingShareIntentId is { } intentId
+                && runtime.Snapshot.Phase == SessionPhase.Sharing
+                && runtime.Snapshot.SessionId is { } sessionId)
             {
-                if (!ReferenceEquals(composition, _composition))
-                    throw new InvalidOperationException("Backend changed while starting the share.");
-                await composition.LaunchIntents.BindAsync(intentId, sessionId, ct);
+                try
+                {
+                    await CompleteShareWithRetryAsync(intentId, sessionId, ct);
+                    _pendingShareIntentId = null;
+                }
+                catch (ApiException exception)
+                {
+                    _pendingShareIntentId = null;
+                    _logger.LogWarning("Could not complete share launch intent. intent={IntentId} code={ErrorCode}",
+                        intentId, exception.ErrorCode);
+                    ShellError = "The share started, but Discord could not be notified. The session remains available in FrameRelay.";
+                }
+                catch (Exception exception) when (exception is HttpRequestException or TaskCanceledException)
+                {
+                    if (ct.IsCancellationRequested) throw;
+                    _pendingShareIntentId = null;
+                    _logger.LogWarning("Could not complete share launch intent. intent={IntentId} type={ExceptionType}",
+                        intentId, exception.GetType().Name);
+                    ShellError = "The share started, but Discord could not be notified. The session remains available in FrameRelay.";
+                }
             }
-            catch (Exception error) when (error is ApiException or HttpRequestException or InvalidOperationException or OperationCanceledException)
-            {
-                // A consumed/expired launch must not leave an unannounced capture running.
-                await GuardAsync(() => runtime.StopAsync(CancellationToken.None));
-                ShellError = "Could not connect this share to Discord. The link may have expired; request a new share link.";
-            }
+        }
+        finally
+        {
+            _startingPublicShare = false;
+            Raise(nameof(PreviewStatus));
+            await UpdatePreviewAsync();
         }
     }
 
-    public async Task ActivateLaunchAsync(string token, CancellationToken ct)
+    private async Task CompleteShareWithRetryAsync(Guid intentId, Guid sessionId, CancellationToken ct)
     {
-        if (_activatingLaunch || _pendingShareIntent is not null
-            || ViewModel.Snapshot.Phase is not (SessionPhase.Idle or SessionPhase.Failed))
+        var delays = new[] { TimeSpan.Zero, TimeSpan.FromMilliseconds(500), TimeSpan.FromSeconds(1) };
+        for (var attempt = 0; attempt < delays.Length; attempt++)
         {
-            ShellError = "Stop the current session before opening a launch link.";
-            return;
+            if (delays[attempt] > TimeSpan.Zero) await Task.Delay(delays[attempt], ct);
+            try
+            {
+                await _composition!.LaunchIntents.CompleteShareAsync(intentId, sessionId, ct);
+                return;
+            }
+            catch (ApiException exception) when (attempt < delays.Length - 1
+                && (exception.StatusCode == HttpStatusCode.TooManyRequests
+                    || (int)exception.StatusCode >= 500))
+            {
+                // A lost successful response is safe to retry because RelayControl completion is idempotent.
+            }
+            catch (HttpRequestException) when (attempt < delays.Length - 1)
+            {
+                // Retry transient network failures while leaving media streaming active.
+            }
+            catch (TaskCanceledException) when (!ct.IsCancellationRequested && attempt < delays.Length - 1)
+            {
+                // The API client timed out before confirming the launch intent.
+            }
         }
-        if (LaunchUri.ParseToken("framerelay://launch?token=" + token) is null) return;
+        throw new InvalidOperationException("Share launch confirmation attempts were exhausted.");
+    }
+
+    public async Task ActivateLaunchAsync(LaunchActivation activation, CancellationToken ct)
+    {
         var runtime = TryGetRuntime();
-        if (runtime is null) return;
-        _activatingLaunch = true;
+        if (runtime is null || _composition is null) return;
         ShellError = null;
-        var composition = _composition!;
         try
         {
-            var intent = await composition.LaunchIntents.RedeemAsync(token, ct);
-            if (!ReferenceEquals(composition, _composition))
-                throw new InvalidOperationException("Backend changed while opening the link.");
-            if (runtime.Snapshot.Phase is not (SessionPhase.Idle or SessionPhase.Failed))
-                throw new InvalidOperationException("A session started while opening the link. Request a new launch link after stopping it.");
-            if (intent.Kind == "share")
+            if (activation.Kind == LaunchActivationKind.Share)
             {
-                _pendingShareIntent = intent.Id;
+                var intent = await _composition.LaunchIntents.ConsumeShareAsync(activation.Token, ct);
+                _pendingShareIntentId = intent.Id;
                 ViewModel.CurrentPage = Page.Share;
-                Raise(nameof(LaunchNotice));
+                if (SelectedCaptureTarget is not null) await ShareAsync(ct);
+                return;
             }
-            else
-            {
-                ViewModel.CurrentPage = Page.Watch;
-                await WatchCoreAsync(intent.WatchTarget, ct);
-            }
+
+            var sessionId = await _composition.LaunchIntents.ResolveWatchAsync(activation.Token, ct);
+            ViewModel.CurrentPage = Page.Watch;
+            await GuardAsync(() => runtime.StartWatchingSessionAsync(sessionId, ct));
         }
-        catch (Exception error) when (error is ApiException or HttpRequestException or InvalidOperationException or OperationCanceledException)
+        catch (ApiException exception)
         {
-            // Never log HTTP exception details for a capability redemption.
-            ShellError = "Could not open this launch link. It may be expired or already used; request a new link.";
+            _logger.LogWarning("Launch activation was refused. kind={Kind} code={ErrorCode} status={StatusCode}",
+                activation.Kind, exception.ErrorCode, exception.StatusCode);
+            ShellError = exception.ErrorCode switch
+            {
+                "invalid_or_expired_intent" => "This FrameRelay launch link has expired or was already used.",
+                "invalid_or_expired_watch_link" or "session_unavailable" => "This FrameRelay share has ended or the link has expired.",
+                _ => "FrameRelay could not open that launch link. Try again from Discord."
+            };
         }
-        finally { _activatingLaunch = false; }
     }
+
+    private static bool SameWindowIdentity(WindowInfo left, WindowInfo right) =>
+        left.Handle == right.Handle && left.ProcessId == right.ProcessId
+                                   && left.ProcessStartTimeUtc == right.ProcessStartTimeUtc;
 
     public async Task WatchAsync(string code, CancellationToken ct)
     {
-        if (_activatingLaunch) return;
-        await WatchCoreAsync(code, ct);
-    }
-
-    private async Task WatchCoreAsync(string code, CancellationToken ct)
-    {
-        _pendingShareIntent = null;
-        Raise(nameof(LaunchNotice));
         var runtime = TryGetRuntime();
         if (runtime is null) return;
         await GuardAsync(() => runtime.StartWatchingAsync(code, ct));
@@ -508,12 +732,10 @@ public sealed class Shell : INotifyPropertyChanged
 
     public async Task StopAsync(CancellationToken ct)
     {
-        _pendingShareIntent = null;
-        Raise(nameof(LaunchNotice));
-        VideoDisplayMode = ViewerDisplayMode.Normal;
+        ExitVideoFullScreen();
         var runtime = _composition?.Runtime;
-        if (runtime is null) return;
-        await GuardAsync(() => runtime.StopAsync(ct));
+        if (runtime is not null) await GuardAsync(() => runtime.StopAsync(ct));
+        await UpdatePreviewAsync();
     }
 
     private SessionRuntime? TryGetRuntime()
@@ -528,8 +750,8 @@ public sealed class Shell : INotifyPropertyChanged
         if (_composition is null)
         {
             _composition = new AppComposition(settings, _deviceName);
-            ApplyViewerAudio();
-            ApplyIgnoreDiscordAudio(IgnoreDiscordAudio);
+            _ = ApplyDiscordAudioPreferenceAsync(_composition, IgnoreDiscordAudio);
+            ApplyPlaybackControls();
             _composition.Runtime.Changed += OnSnapshot;
             _composition.Runtime.SignalingDiagnosticAdded += OnSignalingDiagnostic;
             _composition.PublishHost.VideoDiagnosticsChanged += OnVideoDiagnosticsChanged;
@@ -540,18 +762,6 @@ public sealed class Shell : INotifyPropertyChanged
         }
 
         return _composition.Runtime;
-    }
-
-    private async void ApplyIgnoreDiscordAudio(bool value)
-    {
-        var host = _composition?.PublishHost;
-        if (host is null) return;
-        try { await host.SetIgnoreDiscordAudioAsync(value); }
-        catch (Exception error)
-        {
-            _logger.LogWarning(error, "Could not apply Discord audio preference.");
-            ShellError = $"Could not apply audio preference: {error.Message}";
-        }
     }
 
     private async Task GuardAsync(Func<Task> action)
@@ -620,18 +830,22 @@ public sealed class Shell : INotifyPropertyChanged
     // and the observable collection are the UI thread's alone.
     private void OnSnapshot(SessionSnapshot snapshot)
     {
-        _logger.LogInformation(
-            "Session snapshot. phase={Phase} signaling={Signaling} session={SessionId} viewers={ViewerCount} watching={Watching}",
-            snapshot.Phase,
-            snapshot.Signaling,
-            snapshot.SessionId,
-            snapshot.ViewerCount,
-            snapshot.Watching);
-
         Dispatcher.UIThread.Post(() =>
         {
+            var previous = ViewModel.Snapshot;
             ViewModel.Apply(snapshot);
+            if (snapshot.Phase != previous.Phase)
+            {
+                Raise(nameof(PreviewStatus));
+                _ = UpdatePreviewAsync();
+            }
+            Raise(nameof(CanStartShare));
             Raise(nameof(MediaStatusText));
+            Raise(nameof(ShareAudioStatus));
+            if (Equals(snapshot with { Metrics = null }, previous with { Metrics = null })) return;
+            _logger.LogInformation(
+                "Session snapshot. phase={Phase} signaling={Signaling} session={SessionId} viewers={ViewerCount} watching={Watching}",
+                snapshot.Phase, snapshot.Signaling, snapshot.SessionId, snapshot.ViewerCount, snapshot.Watching);
             Diagnostics.Insert(0,
                 $"{DateTimeOffset.Now:HH:mm:ss}  {snapshot.Phase}  signaling={snapshot.Signaling}  " +
                 $"session={snapshot.SessionId?.ToString() ?? "-"}  viewers={snapshot.ViewerCount}");
@@ -663,8 +877,25 @@ public sealed class Shell : INotifyPropertyChanged
         });
     }
 
-    private void OnVideoDiagnosticsChanged() =>
-        Dispatcher.UIThread.Post(() => Raise(nameof(MediaStatusText)));
+    private void OnVideoDiagnosticsChanged()
+    {
+        var composition = _composition;
+        if (composition is null) return;
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (!ReferenceEquals(_composition, composition)) return;
+            var runtime = composition.Runtime;
+            var metrics = runtime.Snapshot.Phase switch
+            {
+                SessionPhase.Sharing => composition.PublishHost.CurrentMetrics,
+                SessionPhase.Watching => composition.WatchHost.CurrentMetrics,
+                _ => null
+            };
+            if (metrics is not null) runtime.UpdateMetrics(metrics);
+            Raise(nameof(MediaStatusText));
+            Raise(nameof(ShareAudioStatus));
+        });
+    }
 
     private void OnWebRtcDiagnostic(ViewerNegotiationDiagnosticEntry entry)
     {
@@ -708,6 +939,9 @@ public sealed class Shell : INotifyPropertyChanged
         });
     }
 
-    private void Raise([CallerMemberName] string? property = null) =>
+    private void Raise([CallerMemberName] string? property = null)
+    {
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(property));
+        if (property == nameof(SelectedCaptureTarget)) _ = UpdatePreviewAsync();
+    }
 }

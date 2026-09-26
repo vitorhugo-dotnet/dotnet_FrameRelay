@@ -29,29 +29,43 @@ public sealed class RtcVideoWatchHost(
     private static readonly TimeSpan StallCheckInterval = TimeSpan.FromSeconds(1);
 
     private readonly SemaphoreSlim _gate = new(1, 1);
+    private readonly Lock _playbackGate = new();
 
     private ScreenWatchPipeline? _pipeline;
     private MediaFoundationH264Decoder? _decoder;
     private AudioWatchPipeline? _audioPipeline;
     private WasapiAudioSink? _audioSink;
+    private float _playbackVolume = 1f;
+    private float _lastNonZeroPlaybackVolume = 1f;
+    private bool _isPlaybackMuted;
     private VideoSubscriber? _subscriber;
     private ITimer? _watchdog;
     private string? _audioPipelineFailure;
-    private double _playbackVolume = 100;
-    private bool _playbackMuted;
-
-    public void SetPlaybackVolume(double volumePercent, bool muted)
-    {
-        _playbackVolume = volumePercent;
-        _playbackMuted = muted;
-        _audioPipeline?.SetPlaybackVolume(volumePercent, muted);
-    }
 
     public string? DecoderName { get; private set; }
 
     public NativeVideoDiagnostics? VideoDiagnostics => _decoder?.Diagnostics;
 
     public RtcTransportDiagnostics? TransportDiagnostics => _subscriber?.TransportDiagnostics;
+
+    /// <summary>Latest completed WebRTC feedback interval, projected for the UI without consuming it.</summary>
+    public SessionMediaMetrics? CurrentMetrics
+    {
+        get
+        {
+            if (_pipeline is not { } pipeline) return null;
+            var video = VideoDiagnostics;
+            var stats = pipeline.LatestStatsSnapshot;
+            return new SessionMediaMetrics(
+                Width: video?.Width is > 0 ? video.Width : null,
+                Height: video?.Height is > 0 ? video.Height : null,
+                VideoBitrateBitsPerSecond: stats?.VideoBitrateBitsPerSecond,
+                VideoFramesPerSecond: stats is { IntervalMilliseconds: > 0 }
+                    ? stats.DecodedFrames * 1000d / stats.IntervalMilliseconds : null,
+                Codec: DecoderName,
+                Transport: TransportDiagnostics?.ToString());
+        }
+    }
 
     public string? VideoDecoderFailure => _pipeline?.LastFailure ?? _decoder?.LastFailure;
 
@@ -79,6 +93,53 @@ public sealed class RtcVideoWatchHost(
     public string? AudioSinkName => _audioPipeline?.SinkName ?? _audioSink?.Name;
 
     public string? AudioDegradedReason => _audioPipelineFailure ?? _audioSink?.DegradedReason;
+
+    public float PlaybackVolume
+    {
+        get { lock (_playbackGate) return _playbackVolume; }
+        set
+        {
+            lock (_playbackGate)
+            {
+                _playbackVolume = float.IsNaN(value) ? 0f : Math.Clamp(value, 0f, 1f);
+                if (_playbackVolume > 0f) _lastNonZeroPlaybackVolume = _playbackVolume;
+                _isPlaybackMuted = _playbackVolume == 0f;
+                ApplyPlaybackControls();
+            }
+        }
+    }
+
+    public bool IsPlaybackMuted
+    {
+        get { lock (_playbackGate) return _isPlaybackMuted; }
+        set
+        {
+            lock (_playbackGate)
+            {
+                _isPlaybackMuted = value;
+                if (!value && _playbackVolume == 0f) _playbackVolume = _lastNonZeroPlaybackVolume;
+                ApplyPlaybackControls();
+            }
+        }
+    }
+
+    /// <summary>Applies a UI snapshot in one step so muting cannot briefly restore audio.</summary>
+    public void SetPlaybackControls(float volume, bool isMuted)
+    {
+        lock (_playbackGate)
+        {
+            _playbackVolume = float.IsNaN(volume) ? 0f : Math.Clamp(volume, 0f, 1f);
+            if (_playbackVolume > 0f) _lastNonZeroPlaybackVolume = _playbackVolume;
+            _isPlaybackMuted = isMuted || _playbackVolume == 0f;
+            ApplyPlaybackControls();
+        }
+    }
+
+    private void ApplyPlaybackControls()
+    {
+        if (_audioSink is not { } sink) return;
+        sink.SetPlaybackControls(_playbackVolume, _isPlaybackMuted);
+    }
 
     /// <summary>Why the required video media stack could not start, when it could not.</summary>
     public string? StartFailure { get; private set; }
@@ -136,11 +197,14 @@ public sealed class RtcVideoWatchHost(
 
             AudioWatchPipeline? audioPipeline = null;
             var sink = new WasapiAudioSink();
-            _audioSink = sink;
+            lock (_playbackGate)
+            {
+                _audioSink = sink;
+                ApplyPlaybackControls();
+            }
             var candidateAudioPipeline = new AudioWatchPipeline(
                 new OpusAudioCodec(channels: 2),
                 sink);
-            candidateAudioPipeline.SetPlaybackVolume(_playbackVolume, _playbackMuted);
             candidateAudioPipeline.Failed += OnAudioPipelineFailed;
 
             try
@@ -151,12 +215,12 @@ public sealed class RtcVideoWatchHost(
                     _audioPipelineFailure = sink.DegradedReason;
                     candidateAudioPipeline.Failed -= OnAudioPipelineFailed;
                     await candidateAudioPipeline.DisposeAsync();
+                    lock (_playbackGate) _audioSink = null;
                 }
                 else
                 {
                     audioPipeline = candidateAudioPipeline;
                     _audioPipeline = candidateAudioPipeline;
-                    candidateAudioPipeline.SetPlaybackVolume(_playbackVolume, _playbackMuted);
                 }
             }
             catch (Exception e) when (e is not OperationCanceledException)
@@ -164,6 +228,7 @@ public sealed class RtcVideoWatchHost(
                 _audioPipelineFailure = sink.DegradedReason ?? e.Message;
                 candidateAudioPipeline.Failed -= OnAudioPipelineFailed;
                 await candidateAudioPipeline.DisposeAsync();
+                lock (_playbackGate) _audioSink = null;
             }
 
             var subscriber = new VideoSubscriber(
@@ -315,7 +380,7 @@ public sealed class RtcVideoWatchHost(
             _audioPipeline = null;
         }
 
-        _audioSink = null;
+        lock (_playbackGate) _audioSink = null;
 
         if (_pipeline is not null)
         {

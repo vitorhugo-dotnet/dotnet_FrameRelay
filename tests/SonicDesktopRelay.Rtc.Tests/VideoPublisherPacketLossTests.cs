@@ -196,7 +196,7 @@ public sealed class VideoPublisherPacketLossTests
     {
         public FakePeer? Created { get; private set; }
 
-        public IPeerConnection Create(Guid participantId) => Created = new FakePeer(participantId);
+        public IPeerConnection Create(Guid participantId, bool? forceRelay = null) => Created = new FakePeer(participantId);
     }
 
     private sealed class FakePeer(Guid participantId) : IPeerConnection

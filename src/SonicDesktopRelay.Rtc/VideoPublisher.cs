@@ -20,6 +20,10 @@ public sealed class VideoPublisher(
     private readonly ConcurrentDictionary<Guid, IPeerConnection> _peers = new();
     private readonly ConcurrentDictionary<Guid, VideoSampleSendQueue> _videoQueues = new();
     private readonly ConcurrentDictionary<Guid, RtcTransportDiagnostics> _transportDiagnostics = new();
+    private readonly ConcurrentDictionary<Guid, Guid> _negotiationIds = new();
+    private readonly ConcurrentDictionary<Guid, Guid> _fallbackIds = new();
+    private readonly ConcurrentDictionary<Guid, byte> _fallbackUsed = new();
+    private readonly ConcurrentDictionary<Guid, SemaphoreSlim> _peerGates = new();
     private readonly object _receiverStatsGate = new();
     private readonly TimeProvider _time = time ?? TimeProvider.System;
     private long _lastVideoSendDurationTicks;
@@ -53,66 +57,59 @@ public sealed class VideoPublisher(
 
     public async Task AddViewerAsync(Guid participantId, CancellationToken ct)
     {
-        if (_peers.ContainsKey(participantId)) return;
-
-        var peer = peers.Create(participantId);
-        if (!_peers.TryAdd(participantId, peer))
+        var peerGate = _peerGates.GetOrAdd(participantId, _ => new SemaphoreSlim(1, 1));
+        await peerGate.WaitAsync(ct);
+        try
         {
-            await peer.DisposeAsync();
-            return;
+            if (_peers.ContainsKey(participantId)) return;
+
+            var peer = peers.Create(participantId);
+            if (!_peers.TryAdd(participantId, peer))
+            {
+                await peer.DisposeAsync();
+                return;
+            }
+
+            var negotiationId = Guid.NewGuid();
+            _negotiationIds[participantId] = negotiationId;
+            AttachPeer(participantId, peer, negotiationId);
+
+            EnsureSubscribed();
+
+            // publisher.ready first, then the offer — the order dotnet_SonicRelay/docs/protocol.md
+            // specifies. It is how a viewer learns which participant is the publisher, from the
+            // server-authenticated `from` rather than from anything a peer claims about itself.
+            // Skipping it happens to work with our own viewer, which also accepts the first offer,
+            // but it would silently break any client written against the documented contract.
+            await signaling.SendAsync(SignalingMessageTypes.PublisherReady, participantId, new { }, ct);
+
+            var offer = await peer.CreateOfferAsync(ct);
+            await signaling.SendAsync(SignalingMessageTypes.WebRtcOffer, participantId,
+                new { type = "offer", sdp = offer, negotiationId }, ct);
         }
-
-        var queue = new VideoSampleSendQueue(
-            peer,
-            duration => Interlocked.Exchange(ref _lastVideoSendDurationTicks, duration.Ticks),
-            () => pipeline.RequestKeyFrame(KeyFrameRequestReason.PacketLoss),
-            _time);
-        _videoQueues[participantId] = queue;
-
-        peer.IceCandidateGathered += (candidate, mid, index) =>
-            _ = signaling.SendAsync(SignalingMessageTypes.WebRtcIceCandidate, participantId,
-                new { candidate, sdpMid = mid, sdpMLineIndex = index }, CancellationToken.None);
-        peer.KeyFrameRequested += pipeline.RequestKeyFrame;
-        peer.ReceptionReportReceived += report =>
-        {
-            if (report.MediaKind == RtcMediaKind.Video)
-                pipeline.ReportReception(participantId, report.FractionLost);
-            else if (report.MediaKind == RtcMediaKind.Audio)
-                AudioRtcpReportReceived?.Invoke(participantId, report);
-        };
-        peer.TransportDiagnosticsChanged += diagnostics =>
-        {
-            if (!_peers.ContainsKey(participantId)) return;
-            _transportDiagnostics[participantId] = diagnostics;
-            TransportDiagnosticsChanged?.Invoke(participantId, diagnostics);
-        };
-
-        EnsureSubscribed();
-
-        // publisher.ready first, then the offer — the order dotnet_SonicRelay/docs/protocol.md
-        // specifies. It is how a viewer learns which participant is the publisher, from the
-        // server-authenticated `from` rather than from anything a peer claims about itself.
-        // Skipping it happens to work with our own viewer, which also accepts the first offer,
-        // but it would silently break any client written against the documented contract.
-        await signaling.SendAsync(SignalingMessageTypes.PublisherReady, participantId, new { }, ct);
-
-        var offer = await peer.CreateOfferAsync(ct);
-        await signaling.SendAsync(SignalingMessageTypes.WebRtcOffer, participantId,
-            new { type = "offer", sdp = offer }, ct);
+        finally { peerGate.Release(); }
     }
 
     public async Task RemoveViewerAsync(Guid participantId)
     {
-        IPeerConnection? peer;
-        lock (_receiverStatsGate)
+        var peerGate = _peerGates.GetOrAdd(participantId, _ => new SemaphoreSlim(1, 1));
+        await peerGate.WaitAsync();
+        try
         {
-            _peers.TryRemove(participantId, out peer);
-            pipeline.RemoveReceptionSource(participantId);
+            IPeerConnection? peer;
+            lock (_receiverStatsGate)
+            {
+                _peers.TryRemove(participantId, out peer);
+                pipeline.RemoveReceptionSource(participantId);
+            }
+            _transportDiagnostics.TryRemove(participantId, out _);
+            _negotiationIds.TryRemove(participantId, out _);
+            _fallbackIds.TryRemove(participantId, out _);
+            if (_videoQueues.TryRemove(participantId, out var queue))
+                await queue.DisposeAsync();
+            if (peer is not null) await peer.DisposeAsync();
         }
-        _transportDiagnostics.TryRemove(participantId, out _);
-        if (_videoQueues.TryRemove(participantId, out var queue))
-            await queue.DisposeAsync();
-        if (peer is not null) await peer.DisposeAsync();
+        finally { peerGate.Release(); }
     }
 
     public async Task HandleAsync(SignalingEnvelope envelope, CancellationToken ct)
@@ -124,12 +121,14 @@ public sealed class VideoPublisher(
         switch (envelope.Type)
         {
             case SignalingMessageTypes.WebRtcAnswer:
-                if (payload.TryGetProperty("sdp", out var sdp) && sdp.GetString() is { } sdpText)
+                if (MatchesGeneration(from, payload)
+                    && payload.TryGetProperty("sdp", out var sdp) && sdp.GetString() is { } sdpText)
                     await peer.ApplyAnswerAsync(sdpText, ct);
                 break;
 
             case SignalingMessageTypes.WebRtcIceCandidate:
-                if (payload.TryGetProperty("candidate", out var candidate)
+                if (MatchesGeneration(from, payload)
+                    && payload.TryGetProperty("candidate", out var candidate)
                     && candidate.GetString() is { } candidateText)
                 {
                     await peer.AddIceCandidateAsync(
@@ -144,6 +143,10 @@ public sealed class VideoPublisher(
 
                 break;
 
+            case SignalingMessageTypes.WebRtcRenegotiate:
+                await RetryViewerThroughRelayAsync(from, payload, ct);
+                break;
+
             case SignalingMessageTypes.VideoReceiverStats:
                 if (!TryReadReceiverStats(payload, out var stats)) break;
                 lock (_receiverStatsGate)
@@ -153,6 +156,73 @@ public sealed class VideoPublisher(
                 }
                 break;
         }
+    }
+
+    private bool MatchesGeneration(Guid participantId, JsonElement payload)
+    {
+        if (!_negotiationIds.TryGetValue(participantId, out var current)) return false;
+        if (payload.TryGetProperty("negotiationId", out var idElement)
+            && idElement.ValueKind == JsonValueKind.String
+            && Guid.TryParse(idElement.GetString(), out var id))
+            return id == current;
+        return !_fallbackIds.ContainsKey(participantId);
+    }
+
+    private void AttachPeer(Guid participantId, IPeerConnection peer, Guid negotiationId)
+    {
+        var queue = new VideoSampleSendQueue(
+            peer,
+            duration => Interlocked.Exchange(ref _lastVideoSendDurationTicks, duration.Ticks),
+            () => pipeline.RequestKeyFrame(KeyFrameRequestReason.PacketLoss),
+            _time);
+        _videoQueues[participantId] = queue;
+        peer.IceCandidateGathered += (candidate, mid, index) =>
+            _ = signaling.SendAsync(SignalingMessageTypes.WebRtcIceCandidate, participantId,
+                new { candidate, sdpMid = mid, sdpMLineIndex = index, negotiationId }, CancellationToken.None);
+        peer.KeyFrameRequested += pipeline.RequestKeyFrame;
+        peer.ReceptionReportReceived += report =>
+        {
+            if (report.MediaKind == RtcMediaKind.Video)
+                pipeline.ReportReception(participantId, report.FractionLost);
+            else if (report.MediaKind == RtcMediaKind.Audio)
+                AudioRtcpReportReceived?.Invoke(participantId, report);
+        };
+        peer.TransportDiagnosticsChanged += diagnostics =>
+        {
+            if (!_peers.TryGetValue(participantId, out var current) || !ReferenceEquals(current, peer)) return;
+            _transportDiagnostics[participantId] = diagnostics;
+            TransportDiagnosticsChanged?.Invoke(participantId, diagnostics);
+        };
+    }
+
+    private async Task RetryViewerThroughRelayAsync(Guid participantId, JsonElement payload, CancellationToken ct)
+    {
+        if (payload.ValueKind != JsonValueKind.Object
+            || !payload.TryGetProperty("reason", out var reason) || reason.ValueKind != JsonValueKind.String || reason.GetString() != "direct_connection_failed"
+            || !payload.TryGetProperty("iceTransportPolicy", out var policy) || policy.ValueKind != JsonValueKind.String || policy.GetString() != "relay"
+            || !payload.TryGetProperty("negotiationId", out var idElement)
+            || idElement.ValueKind != JsonValueKind.String
+            || !Guid.TryParse(idElement.GetString(), out var requestedId)) return;
+
+        var gate = _peerGates.GetOrAdd(participantId, _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(ct);
+        try
+        {
+            if (!_peers.TryGetValue(participantId, out var oldPeer)) return;
+            if (!_fallbackUsed.TryAdd(participantId, 0)) return;
+            _fallbackIds[participantId] = requestedId;
+
+            var relayPeer = peers.Create(participantId, forceRelay: true);
+            _negotiationIds[participantId] = requestedId;
+            _peers[participantId] = relayPeer;
+            if (_videoQueues.TryRemove(participantId, out var oldQueue)) await oldQueue.DisposeAsync();
+            AttachPeer(participantId, relayPeer, requestedId);
+            await oldPeer.DisposeAsync();
+            var offer = await relayPeer.CreateOfferAsync(ct);
+            await signaling.SendAsync(SignalingMessageTypes.WebRtcOffer, participantId,
+                new { type = "offer", sdp = offer, negotiationId = requestedId }, ct);
+        }
+        finally { gate.Release(); }
     }
 
     private static bool TryReadReceiverStats(JsonElement payload, out VideoReceiverStats stats)

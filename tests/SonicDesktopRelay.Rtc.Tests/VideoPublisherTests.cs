@@ -355,6 +355,58 @@ public sealed class VideoPublisherTests
         Assert.Equal(1, harness.Publisher.PeerCount);
     }
 
+    [Fact]
+    public async Task Renegotiation_replaces_only_the_requesting_viewer_with_a_relay_peer()
+    {
+        var harness = await Harness.StartedAsync();
+        await harness.Publisher.AddViewerAsync(ViewerA, CancellationToken.None);
+        await harness.Publisher.AddViewerAsync(ViewerB, CancellationToken.None);
+        var oldOffer = Assert.Single(harness.Signaling.Sent, x => x.Type == SignalingMessageTypes.WebRtcOffer && Equals(x.To, ViewerA));
+        var oldGeneration = System.Text.Json.JsonSerializer.SerializeToElement(oldOffer.Payload).GetProperty("negotiationId").GetGuid();
+        var retryId = Guid.NewGuid();
+        var request = Frame(SignalingMessageTypes.WebRtcRenegotiate, ViewerA,
+            System.Text.Json.JsonSerializer.Serialize(new
+            {
+                reason = "direct_connection_failed",
+                negotiationId = retryId,
+                iceTransportPolicy = "relay"
+            }));
+
+        await harness.Publisher.HandleAsync(request, CancellationToken.None);
+
+        Assert.Equal(3, harness.Peers.Created.Count);
+        Assert.Equal([false, false, true], harness.Peers.ForceRelayRequests);
+        Assert.True(harness.Peers.Created[0].Disposed);
+        Assert.False(harness.Peers.Created[1].Disposed);
+        var offer = Assert.Single(harness.Signaling.Sent, x =>
+            x.Type == SignalingMessageTypes.WebRtcOffer && Equals(x.To, ViewerA)
+            && System.Text.Json.JsonSerializer.SerializeToElement(x.Payload).GetProperty("negotiationId").GetGuid() == retryId);
+        Assert.Equal(ViewerA, offer.To);
+
+        await harness.Publisher.HandleAsync(Frame(SignalingMessageTypes.WebRtcAnswer, ViewerA,
+            $$"""{"sdp":"stale-answer","negotiationId":"{{oldGeneration}}"}"""), CancellationToken.None);
+        Assert.Null(harness.Peers.Created[2].AppliedAnswer);
+        await harness.Publisher.HandleAsync(Frame(SignalingMessageTypes.WebRtcAnswer, ViewerA,
+            $$"""{"sdp":"relay-answer","negotiationId":"{{retryId}}"}"""), CancellationToken.None);
+        Assert.Equal("relay-answer", harness.Peers.Created[2].AppliedAnswer);
+
+        await harness.Publisher.HandleAsync(request, CancellationToken.None);
+        Assert.Equal(3, harness.Peers.Created.Count);
+
+        await harness.Publisher.RemoveViewerAsync(ViewerA);
+        await harness.Publisher.AddViewerAsync(ViewerA, CancellationToken.None);
+        var laterRequest = Frame(SignalingMessageTypes.WebRtcRenegotiate, ViewerA,
+            System.Text.Json.JsonSerializer.Serialize(new
+            {
+                reason = "direct_connection_failed",
+                negotiationId = Guid.NewGuid(),
+                iceTransportPolicy = "relay"
+            }));
+        await harness.Publisher.HandleAsync(laterRequest, CancellationToken.None);
+        Assert.Equal(4, harness.Peers.Created.Count);
+        Assert.Equal([false, false, true, false], harness.Peers.ForceRelayRequests);
+    }
+
     private static SignalingEnvelope Frame(string type, Guid from, string payloadJson) =>
         new(type, null, null, from, null, null,
             System.Text.Json.JsonDocument.Parse(payloadJson).RootElement.Clone());
@@ -481,9 +533,11 @@ public sealed class VideoPublisherTests
     private sealed class FakePeerFactory : IPeerConnectionFactory
     {
         public List<FakePeer> Created { get; } = [];
+        public List<bool> ForceRelayRequests { get; } = [];
 
-        public IPeerConnection Create(Guid participantId)
+        public IPeerConnection Create(Guid participantId, bool? forceRelay = null)
         {
+            ForceRelayRequests.Add(forceRelay ?? false);
             var peer = new FakePeer(participantId);
             Created.Add(peer);
             return peer;

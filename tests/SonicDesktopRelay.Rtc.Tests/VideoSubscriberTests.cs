@@ -27,6 +27,118 @@ public sealed class VideoSubscriberTests
     }
 
     [Fact]
+    public async Task A_failed_direct_preconnect_peer_requests_one_relay_replacement()
+    {
+        var harness = new Harness();
+        await harness.OfferAsync(Guid.NewGuid());
+        var directPeer = harness.Peers.CreatedPeers[0];
+        directPeer.ReportTransport(new RtcTransportDiagnostics("Direct", "UDP", "host", "host"));
+
+        directPeer.ReportConnectionState(connected: false);
+        await WaitUntilAsync(() => harness.Peers.CreateCalls == 2);
+
+        Assert.Equal([false, true], harness.Peers.ForceRelayRequests);
+        var retry = Assert.Single(harness.Signaling.Sent, x => x.Type == SignalingMessageTypes.WebRtcRenegotiate);
+        Assert.Equal(Publisher, retry.To);
+        Assert.Equal("direct_connection_failed", JsonSerializer.SerializeToElement(retry.Payload).GetProperty("reason").GetString());
+    }
+
+    [Fact]
+    public async Task A_connected_direct_peer_does_not_request_relay_after_later_failure()
+    {
+        var harness = new Harness();
+        await harness.OfferAsync(Guid.NewGuid());
+        var peer = harness.Peers.CreatedPeers[0];
+        peer.ReportTransport(new RtcTransportDiagnostics("Direct", "UDP", "host", "host"));
+        peer.ReportConnectionState(connected: true);
+        peer.ReportConnectionState(connected: false);
+
+        Assert.Single(harness.Peers.CreatedPeers);
+        Assert.DoesNotContain(harness.Signaling.Sent, x => x.Type == SignalingMessageTypes.WebRtcRenegotiate);
+    }
+
+    [Fact]
+    public async Task A_failed_peer_without_direct_transport_evidence_does_not_request_relay()
+    {
+        var harness = new Harness();
+        await harness.OfferAsync(Guid.NewGuid());
+        harness.Peers.CreatedPeers[0].ReportConnectionState(connected: false);
+
+        Assert.Single(harness.Peers.CreatedPeers);
+        Assert.DoesNotContain(harness.Signaling.Sent, x => x.Type == SignalingMessageTypes.WebRtcRenegotiate);
+
+        var turnHarness = new Harness();
+        await turnHarness.OfferAsync(Guid.NewGuid());
+        turnHarness.Peers.CreatedPeers[0].ReportTransport(new RtcTransportDiagnostics("TURN", "UDP", "relay", "host"));
+        turnHarness.Peers.CreatedPeers[0].ReportConnectionState(connected: false);
+
+        Assert.Single(turnHarness.Peers.CreatedPeers);
+        Assert.DoesNotContain(turnHarness.Signaling.Sent, x => x.Type == SignalingMessageTypes.WebRtcRenegotiate);
+    }
+
+    [Fact]
+    public async Task The_fallback_offer_timeout_raises_negotiation_failure()
+    {
+        var time = new FakeTimeProvider(Start);
+        var harness = new Harness(time);
+        var failures = new List<string>();
+        harness.Subscriber.NegotiationFailed += failures.Add;
+        await harness.OfferAsync(Guid.NewGuid());
+        var peer = harness.Peers.CreatedPeers[0];
+        peer.ReportTransport(new RtcTransportDiagnostics("Direct", "UDP", "host", "host"));
+        peer.ReportConnectionState(connected: false);
+        await WaitUntilAsync(() => harness.Peers.CreateCalls == 2);
+
+        time.Advance(TimeSpan.FromSeconds(15));
+        await WaitUntilAsync(() => failures.Count == 1);
+
+        Assert.Contains("relayOfferTimeout", failures[0]);
+        Assert.Equal(WatchState.Failed, harness.Pipeline.Pipeline.State);
+    }
+
+    [Fact]
+    public async Task A_relay_connection_timeout_is_terminal_after_the_matching_offer()
+    {
+        var time = new FakeTimeProvider(Start);
+        var harness = new Harness(time);
+        var failures = new List<string>();
+        harness.Subscriber.NegotiationFailed += failures.Add;
+        var directGeneration = Guid.NewGuid();
+        await harness.OfferAsync(directGeneration);
+        var directPeer = harness.Peers.CreatedPeers[0];
+        directPeer.ReportTransport(new RtcTransportDiagnostics("Direct", "UDP", "host", "host"));
+        directPeer.ReportConnectionState(connected: false);
+        await WaitUntilAsync(() => harness.Peers.CreateCalls == 2);
+        var retry = Assert.Single(harness.Signaling.Sent, x => x.Type == SignalingMessageTypes.WebRtcRenegotiate);
+        var relayGeneration = JsonSerializer.SerializeToElement(retry.Payload).GetProperty("negotiationId").GetGuid();
+        await harness.OfferAsync(relayGeneration);
+
+        time.Advance(TimeSpan.FromSeconds(30));
+        await WaitUntilAsync(() => failures.Count == 1);
+
+        Assert.Contains("relayConnectionTimeout", failures[0]);
+    }
+
+    [Fact]
+    public async Task Old_generation_offers_and_candidates_are_ignored_after_fallback_starts()
+    {
+        var harness = new Harness();
+        var oldGeneration = Guid.NewGuid();
+        await harness.OfferAsync(oldGeneration);
+        var directPeer = harness.Peers.CreatedPeers[0];
+        directPeer.ReportTransport(new RtcTransportDiagnostics("Direct", "UDP", "host", "host"));
+        directPeer.ReportConnectionState(connected: false);
+        await WaitUntilAsync(() => harness.Peers.CreateCalls == 2);
+        var relayPeer = harness.Peers.CreatedPeers[1];
+        await harness.Subscriber.HandleAsync(Frame(SignalingMessageTypes.WebRtcIceCandidate, Publisher,
+            $$"""{"candidate":"old-candidate","negotiationId":"{{oldGeneration}}"}"""), CancellationToken.None);
+        await harness.OfferAsync(oldGeneration);
+
+        Assert.Empty(relayPeer.RemoteCandidates);
+        Assert.Null(relayPeer.ReceivedOffer);
+    }
+
+    [Fact]
     public async Task ReceiverStats_are_sent_to_learned_publisher_on_two_second_intervals()
     {
         var time = new FakeTimeProvider(Start);
@@ -199,7 +311,7 @@ public sealed class VideoSubscriberTests
         string? reportedFailure = null;
         harness.Subscriber.NegotiationFailed += failure => reportedFailure = failure;
 
-        var failure = await Record.ExceptionAsync(harness.OfferAsync);
+        var failure = await Record.ExceptionAsync(() => harness.OfferAsync());
 
         Assert.Null(failure);
         Assert.True(harness.Peers.Created!.Disposed);
@@ -337,9 +449,29 @@ public sealed class VideoSubscriberTests
         Assert.Equal(SignalingMessageTypes.WebRtcAnswer, sent.Type);
     }
 
+    [Fact]
+    public async Task The_answer_and_viewer_candidates_echo_the_offer_generation()
+    {
+        var harness = new Harness();
+        var generation = Guid.NewGuid();
+        await harness.OfferAsync(generation);
+        var answer = Assert.Single(harness.Signaling.Sent, x => x.Type == SignalingMessageTypes.WebRtcAnswer);
+        Assert.Equal(generation, JsonSerializer.SerializeToElement(answer.Payload).GetProperty("negotiationId").GetGuid());
+
+        harness.Peers.CreatedPeers[0].GatherCandidate("candidate:1", "0", 0);
+        var candidate = Assert.Single(harness.Signaling.Sent, x => x.Type == SignalingMessageTypes.WebRtcIceCandidate);
+        Assert.Equal(generation, JsonSerializer.SerializeToElement(candidate.Payload).GetProperty("negotiationId").GetGuid());
+    }
+
     private static SignalingEnvelope Frame(string type, Guid from, string payloadJson) =>
         new(type, null, null, from, null, null,
             System.Text.Json.JsonDocument.Parse(payloadJson).RootElement.Clone());
+
+    private static Task WaitUntilAsync(Func<bool> condition)
+    {
+        Assert.True(SpinWait.SpinUntil(condition, TimeSpan.FromSeconds(2)), "Condition was not reached.");
+        return Task.CompletedTask;
+    }
 
     private sealed class Harness
     {
@@ -362,8 +494,9 @@ public sealed class VideoSubscriberTests
         public Task ReadyAsync() => Subscriber.HandleAsync(
             Frame(SignalingMessageTypes.PublisherReady, Publisher, "{}"), CancellationToken.None);
 
-        public Task OfferAsync() => Subscriber.HandleAsync(
-            Frame(SignalingMessageTypes.WebRtcOffer, Publisher, """{"type":"offer","sdp":"offer-sdp"}"""),
+        public Task OfferAsync(Guid? negotiationId = null) => Subscriber.HandleAsync(
+            Frame(SignalingMessageTypes.WebRtcOffer, Publisher,
+                JsonSerializer.Serialize(new { type = "offer", sdp = "offer-sdp", negotiationId })),
             CancellationToken.None);
     }
 
@@ -420,6 +553,8 @@ public sealed class VideoSubscriberTests
     private sealed class FakeAudioSink : IAudioSink
     {
         public string Name => "fake-sink";
+        public float Volume { get; set; } = 1f;
+        public bool IsMuted { get; set; }
         public List<AudioFrame> Frames { get; } = [];
 
         public Task StartAsync(CancellationToken ct) => Task.CompletedTask;
@@ -435,14 +570,20 @@ public sealed class VideoSubscriberTests
     {
         public FakeViewerPeer? Created { get; private set; }
 
+        public List<FakeViewerPeer> CreatedPeers { get; } = [];
+
+        public List<bool> ForceRelayRequests { get; } = [];
+
         public int CreateCalls { get; private set; }
 
         public Exception? AnswerFailure { get; set; }
 
-        public IViewerPeerConnection Create()
+        public IViewerPeerConnection Create(bool? forceRelay = null)
         {
             CreateCalls++;
+            ForceRelayRequests.Add(forceRelay ?? false);
             Created = new FakeViewerPeer(AnswerFailure);
+            CreatedPeers.Add(Created);
             return Created;
         }
     }
@@ -458,6 +599,8 @@ public sealed class VideoSubscriberTests
         public bool Disposed { get; private set; }
 
         public event Action<string, string?, int?>? IceCandidateGathered;
+
+        public event Action<bool>? ConnectionStateChanged;
 
         public event Action<EncodedVideoSample>? VideoSampleReceived;
 
@@ -506,6 +649,8 @@ public sealed class VideoSubscriberTests
             TransportDiagnostics = diagnostics;
             TransportDiagnosticsChanged?.Invoke(diagnostics);
         }
+
+        public void ReportConnectionState(bool connected) => ConnectionStateChanged?.Invoke(connected);
 
         public ValueTask DisposeAsync()
         {

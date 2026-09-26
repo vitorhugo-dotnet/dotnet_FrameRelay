@@ -2,121 +2,204 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:app="clr-namespace:SonicDesktopRelay.App"
              x:Class="SonicDesktopRelay.App.Views.DiagnosticsView"
-             x:DataType="app:Shell">
-    <Grid Margin="{StaticResource PagePadding}"
-          RowDefinitions="Auto,Auto,Auto,*,Auto,*,Auto,*">
-        <TextBlock Grid.Row="0"
-                   Text="Diagnostics"
-                   Margin="0,0,0,16"
-                   FontSize="{StaticResource FontSizeLg}"
-                   Foreground="{StaticResource TextPrimaryBrush}" />
+             x:DataType="app:Shell"
+             Container.Name="diagnosticsPage" Container.Sizing="Width">
+    <UserControl.Styles>
+        <Style Selector="Border.summaryCard">
+            <Setter Property="Width" Value="240" />
+        </Style>
+        <ContainerQuery Name="diagnosticsPage" Query="max-width:620">
+            <Style Selector="Border.summaryCard">
+                <Setter Property="Width" Value="220" />
+            </Style>
+        </ContainerQuery>
+    </UserControl.Styles>
 
-        <StackPanel Grid.Row="1" Margin="0,0,0,16">
-            <SelectableTextBlock Text="{Binding MediaStatusText}"
-                                 TextWrapping="Wrap"
-                                 FontFamily="Consolas, monospace"
-                                 FontSize="{StaticResource FontSizeSm}"
-                                 Foreground="{StaticResource TextPrimaryBrush}" />
-            <SelectableTextBlock Margin="0,6,0,0"
-                                 Text="{Binding LogDirectory, StringFormat='Persistent logs: {0}'}"
-                                 TextWrapping="Wrap"
-                                 FontFamily="Consolas, monospace"
-                                 FontSize="{StaticResource FontSizeSm}"
-                                 Foreground="{StaticResource TextSecondaryBrush}" />
+    <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+        <StackPanel Margin="{StaticResource PagePadding}" Spacing="{StaticResource SpaceLg}">
+            <StackPanel Spacing="{StaticResource SpaceXs}">
+                <TextBlock Text="Diagnostics" FontSize="{StaticResource FontSizeXl}"
+                           FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" />
+                <TextBlock Text="Session, signaling, and media diagnostics from this client."
+                           TextWrapping="Wrap" FontSize="{StaticResource FontSizeMd}"
+                           Foreground="{StaticResource TextSecondaryBrush}" />
+            </StackPanel>
+
+            <WrapPanel Orientation="Horizontal">
+                <Border Classes="card summaryCard" Margin="0,0,16,16">
+                    <StackPanel Spacing="{StaticResource SpaceSm}">
+                        <TextBlock Text="Session" FontSize="{StaticResource FontSizeSm}"
+                                   Foreground="{StaticResource TextSecondaryBrush}" />
+                        <TextBlock Text="{Binding ViewModel.Snapshot.Phase}"
+                                   FontSize="{StaticResource FontSizeLg}" FontWeight="SemiBold"
+                                   Foreground="{StaticResource TextPrimaryBrush}" />
+                        <TextBlock Text="Current session phase" FontSize="{StaticResource FontSizeSm}"
+                                   Foreground="{StaticResource TextMutedBrush}" />
+                    </StackPanel>
+                </Border>
+                <Border Classes="card summaryCard" Margin="0,0,16,16">
+                    <StackPanel Spacing="{StaticResource SpaceSm}">
+                        <TextBlock Text="Signaling" FontSize="{StaticResource FontSizeSm}"
+                                   Foreground="{StaticResource TextSecondaryBrush}" />
+                        <TextBlock Text="{Binding ViewModel.Snapshot.Signaling}"
+                                   FontSize="{StaticResource FontSizeLg}" FontWeight="SemiBold"
+                                   Foreground="{StaticResource TextPrimaryBrush}" />
+                        <TextBlock Text="Current socket state" FontSize="{StaticResource FontSizeSm}"
+                                   Foreground="{StaticResource TextMutedBrush}" />
+                    </StackPanel>
+                </Border>
+                <Border Classes="card summaryCard"
+                        Classes.unavailable="{Binding !ViewModel.HasViewerCount}"
+                        IsEnabled="{Binding ViewModel.HasViewerCount}" Margin="0,0,16,16">
+                    <StackPanel Spacing="{StaticResource SpaceSm}">
+                        <TextBlock Text="Viewers" FontSize="{StaticResource FontSizeSm}"
+                                   Foreground="{StaticResource TextSecondaryBrush}" />
+                        <TextBlock Text="{Binding ViewModel.ViewerCountText}"
+                                   FontSize="{StaticResource FontSizeLg}" FontWeight="SemiBold"
+                                   Foreground="{StaticResource TextPrimaryBrush}" />
+                        <TextBlock Text="Count available while sharing" FontSize="{StaticResource FontSizeSm}"
+                                   Foreground="{StaticResource TextMutedBrush}" />
+                    </StackPanel>
+                </Border>
+            </WrapPanel>
+
+            <Border Classes="card">
+                <StackPanel Spacing="{StaticResource SpaceSm}">
+                    <TextBlock Text="Media status" FontSize="{StaticResource FontSizeLg}"
+                               FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" />
+                    <SelectableTextBlock Text="{Binding MediaStatusText}" TextWrapping="Wrap"
+                                         FontFamily="Consolas, monospace" FontSize="{StaticResource FontSizeSm}"
+                                         Foreground="{StaticResource TextSecondaryBrush}" />
+                </StackPanel>
+            </Border>
+
+            <Border Classes="card">
+                <StackPanel Spacing="{StaticResource SpaceMd}">
+                    <TextBlock Text="Connection health"
+                               FontSize="{StaticResource FontSizeLg}" FontWeight="SemiBold"
+                               Foreground="{StaticResource TextPrimaryBrush}" />
+                    <WrapPanel Orientation="Horizontal">
+                        <StackPanel Width="140" Margin="0,0,16,8">
+                            <TextBlock Text="Latency" Foreground="{StaticResource TextSecondaryBrush}" />
+                            <TextBlock Text="{Binding ViewModel.LatencyText}" Foreground="{StaticResource TextPrimaryBrush}" />
+                        </StackPanel>
+                        <StackPanel Width="140" Margin="0,0,16,8">
+                            <TextBlock Text="Bitrate" Foreground="{StaticResource TextSecondaryBrush}" />
+                            <TextBlock Text="{Binding ViewModel.VideoBitrateText}" Foreground="{StaticResource TextPrimaryBrush}" />
+                        </StackPanel>
+                        <StackPanel Width="140" Margin="0,0,16,8">
+                            <TextBlock Text="Frame rate" Foreground="{StaticResource TextSecondaryBrush}" />
+                            <TextBlock Text="{Binding ViewModel.VideoFrameRateText}" Foreground="{StaticResource TextPrimaryBrush}" />
+                        </StackPanel>
+                        <StackPanel Width="140" Margin="0,0,16,8">
+                            <TextBlock Text="Resolution" Foreground="{StaticResource TextSecondaryBrush}" />
+                            <TextBlock Text="{Binding ViewModel.ResolutionText}" Foreground="{StaticResource TextPrimaryBrush}" />
+                        </StackPanel>
+                        <StackPanel Width="140" Margin="0,0,16,8">
+                            <TextBlock Text="Codec" Foreground="{StaticResource TextSecondaryBrush}" />
+                            <TextBlock Text="{Binding ViewModel.CodecText}" Foreground="{StaticResource TextPrimaryBrush}" />
+                        </StackPanel>
+                        <StackPanel Width="140" Margin="0,0,16,8">
+                            <TextBlock Text="Transport" Foreground="{StaticResource TextSecondaryBrush}" />
+                            <TextBlock Text="{Binding ViewModel.TransportText}" TextWrapping="Wrap"
+                                       Foreground="{StaticResource TextPrimaryBrush}" />
+                        </StackPanel>
+                    </WrapPanel>
+                </StackPanel>
+            </Border>
+
+            <StackPanel Spacing="{StaticResource SpaceMd}">
+                <TextBlock Text="Diagnostic logs" FontSize="{StaticResource FontSizeLg}"
+                           FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" />
+                <Border Classes="card unavailable" IsEnabled="False" Focusable="False">
+                    <StackPanel Spacing="{StaticResource SpaceSm}">
+                        <TextBlock Text="Filtering, search, copy, and export unavailable"
+                                   TextWrapping="Wrap" Foreground="{StaticResource TextSecondaryBrush}" />
+                        <WrapPanel Orientation="Horizontal">
+                            <Button Content="Filter events" IsEnabled="False" Margin="0,0,8,8" />
+                            <Button Content="Search" IsEnabled="False" Margin="0,0,8,8" />
+                            <Button Content="Copy diagnostics" IsEnabled="False" Margin="0,0,8,8" />
+                            <Button Content="Export logs" IsEnabled="False" Margin="0,0,8,8" />
+                        </WrapPanel>
+                    </StackPanel>
+                </Border>
+
+                <Border Classes="card">
+                    <StackPanel Spacing="{StaticResource SpaceSm}">
+                        <TextBlock Text="Session snapshots" FontSize="{StaticResource FontSizeMd}"
+                                   FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" />
+                        <TextBlock Text="Published session snapshots, newest first."
+                                   TextWrapping="Wrap" Foreground="{StaticResource TextSecondaryBrush}" />
+                        <ScrollViewer MaxHeight="220" VerticalScrollBarVisibility="Auto"
+                                      HorizontalScrollBarVisibility="Auto">
+                            <ItemsControl ItemsSource="{Binding Diagnostics}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="x:String">
+                                        <SelectableTextBlock Text="{Binding}" Margin="0,0,0,6"
+                                                             FontFamily="Consolas, monospace"
+                                                             FontSize="{StaticResource FontSizeSm}"
+                                                             Foreground="{StaticResource TextSecondaryBrush}" />
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </ScrollViewer>
+                    </StackPanel>
+                </Border>
+
+                <Border Classes="card">
+                    <StackPanel Spacing="{StaticResource SpaceSm}">
+                        <TextBlock Text="Signaling" FontSize="{StaticResource FontSizeMd}"
+                                   FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" />
+                        <TextBlock Text="RX/TX envelope metadata only, newest first. Payloads, SDP, and ICE candidate contents are never recorded."
+                                   TextWrapping="Wrap" Foreground="{StaticResource TextSecondaryBrush}" />
+                        <ScrollViewer MaxHeight="220" VerticalScrollBarVisibility="Auto"
+                                      HorizontalScrollBarVisibility="Auto">
+                            <ItemsControl ItemsSource="{Binding SignalingDiagnostics}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="x:String">
+                                        <SelectableTextBlock Text="{Binding}" Margin="0,0,0,6"
+                                                             FontFamily="Consolas, monospace"
+                                                             FontSize="{StaticResource FontSizeSm}"
+                                                             Foreground="{StaticResource TextSecondaryBrush}" />
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </ScrollViewer>
+                    </StackPanel>
+                </Border>
+
+                <Border Classes="card">
+                    <StackPanel Spacing="{StaticResource SpaceSm}">
+                        <TextBlock Text="Viewer WebRTC" FontSize="{StaticResource FontSizeMd}"
+                                   FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" />
+                        <TextBlock Text="Offer/answer stages and peer-state transitions, newest first. SDP, ICE candidate contents, and credentials are never stored."
+                                   TextWrapping="Wrap" Foreground="{StaticResource TextSecondaryBrush}" />
+                        <ScrollViewer MaxHeight="220" VerticalScrollBarVisibility="Auto"
+                                      HorizontalScrollBarVisibility="Auto">
+                            <ItemsControl ItemsSource="{Binding WebRtcDiagnostics}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="x:String">
+                                        <SelectableTextBlock Text="{Binding}" Margin="0,0,0,6"
+                                                             FontFamily="Consolas, monospace"
+                                                             FontSize="{StaticResource FontSizeSm}"
+                                                             Foreground="{StaticResource TextSecondaryBrush}" />
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </ScrollViewer>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+
+            <Border Classes="card">
+                <StackPanel Spacing="{StaticResource SpaceXs}">
+                    <TextBlock Text="Persistent log directory" FontSize="{StaticResource FontSizeMd}"
+                               FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" />
+                    <SelectableTextBlock Text="{Binding LogDirectory}" TextWrapping="Wrap"
+                                         FontFamily="Consolas, monospace" FontSize="{StaticResource FontSizeSm}"
+                                         Foreground="{StaticResource TextSecondaryBrush}" />
+                </StackPanel>
+            </Border>
         </StackPanel>
-
-        <StackPanel Grid.Row="2" Margin="0,0,0,8">
-            <TextBlock Text="Session snapshots"
-                       FontSize="{StaticResource FontSizeSm}"
-                       FontWeight="SemiBold"
-                       Foreground="{StaticResource TextPrimaryBrush}" />
-            <TextBlock Text="Every snapshot the session runtime has published, newest first."
-                       Margin="0,4,0,0"
-                       TextWrapping="Wrap"
-                       FontSize="{StaticResource FontSizeSm}"
-                       Foreground="{StaticResource TextSecondaryBrush}" />
-        </StackPanel>
-
-        <Border Grid.Row="3"
-                Margin="0,0,0,16"
-                Background="{StaticResource SurfaceRaisedBrush}"
-                BorderBrush="{StaticResource BorderBrush}"
-                BorderThickness="1"
-                CornerRadius="{StaticResource ControlCornerRadius}">
-            <ScrollViewer>
-                <ItemsControl ItemsSource="{Binding Diagnostics}" Margin="{StaticResource RailPadding}">
-                    <ItemsControl.ItemTemplate>
-                        <DataTemplate x:DataType="x:String">
-                            <SelectableTextBlock Text="{Binding}"
-                                                 FontFamily="Consolas, monospace"
-                                                 FontSize="{StaticResource FontSizeSm}"
-                                                 Foreground="{StaticResource TextSecondaryBrush}" />
-                        </DataTemplate>
-                    </ItemsControl.ItemTemplate>
-                </ItemsControl>
-            </ScrollViewer>
-        </Border>
-
-        <StackPanel Grid.Row="4" Margin="0,0,0,8">
-            <TextBlock Text="Signaling"
-                       FontSize="{StaticResource FontSizeSm}"
-                       FontWeight="SemiBold"
-                       Foreground="{StaticResource TextPrimaryBrush}" />
-            <TextBlock Text="RX/TX envelope metadata only, newest first. Payloads, SDP and ICE candidate contents are never recorded."
-                       Margin="0,4,0,0"
-                       TextWrapping="Wrap"
-                       FontSize="{StaticResource FontSizeSm}"
-                       Foreground="{StaticResource TextSecondaryBrush}" />
-        </StackPanel>
-
-        <Border Grid.Row="5"
-                Background="{StaticResource SurfaceRaisedBrush}"
-                BorderBrush="{StaticResource BorderBrush}"
-                BorderThickness="1"
-                CornerRadius="{StaticResource ControlCornerRadius}">
-            <ScrollViewer>
-                <ItemsControl ItemsSource="{Binding SignalingDiagnostics}" Margin="{StaticResource RailPadding}">
-                    <ItemsControl.ItemTemplate>
-                        <DataTemplate x:DataType="x:String">
-                            <SelectableTextBlock Text="{Binding}"
-                                                 FontFamily="Consolas, monospace"
-                                                 FontSize="{StaticResource FontSizeSm}"
-                                                 Foreground="{StaticResource TextSecondaryBrush}" />
-                        </DataTemplate>
-                    </ItemsControl.ItemTemplate>
-                </ItemsControl>
-            </ScrollViewer>
-        </Border>
-
-        <StackPanel Grid.Row="6" Margin="0,16,0,8">
-            <TextBlock Text="Viewer WebRTC"
-                       FontSize="{StaticResource FontSizeSm}"
-                       FontWeight="SemiBold"
-                       Foreground="{StaticResource TextPrimaryBrush}" />
-            <TextBlock Text="Offer/answer stages and peer-state transitions. Metadata only; SDP, ICE candidate contents and credentials are never stored."
-                       Margin="0,4,0,0"
-                       TextWrapping="Wrap"
-                       FontSize="{StaticResource FontSizeSm}"
-                       Foreground="{StaticResource TextSecondaryBrush}" />
-        </StackPanel>
-
-        <Border Grid.Row="7"
-                Background="{StaticResource SurfaceRaisedBrush}"
-                BorderBrush="{StaticResource BorderBrush}"
-                BorderThickness="1"
-                CornerRadius="{StaticResource ControlCornerRadius}">
-            <ScrollViewer>
-                <ItemsControl ItemsSource="{Binding WebRtcDiagnostics}" Margin="{StaticResource RailPadding}">
-                    <ItemsControl.ItemTemplate>
-                        <DataTemplate x:DataType="x:String">
-                            <SelectableTextBlock Text="{Binding}"
-                                                 FontFamily="Consolas, monospace"
-                                                 FontSize="{StaticResource FontSizeSm}"
-                                                 Foreground="{StaticResource TextSecondaryBrush}" />
-                        </DataTemplate>
-                    </ItemsControl.ItemTemplate>
-                </ItemsControl>
-            </ScrollViewer>
-        </Border>
-    </Grid>
+    </ScrollViewer>
 </UserControl>

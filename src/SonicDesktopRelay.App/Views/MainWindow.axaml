@@ -5,48 +5,136 @@
         xmlns:app="clr-namespace:SonicDesktopRelay.App"
         xmlns:conv="clr-namespace:SonicDesktopRelay.App.Converters"
         xmlns:views="clr-namespace:SonicDesktopRelay.App.Views"
-        mc:Ignorable="d" d:DesignWidth="900" d:DesignHeight="560"
+        mc:Ignorable="d" d:DesignWidth="1180" d:DesignHeight="760"
         x:Class="SonicDesktopRelay.App.Views.MainWindow"
         x:DataType="app:Shell"
-        Width="900" Height="560"
+        Width="1180" Height="760" MinWidth="640" MinHeight="480"
+        CanResize="True"
+        Container.Name="window" Container.Sizing="Width"
         Background="{StaticResource SurfaceBrush}"
-        Title="SonicDesktopRelay">
-    <Grid>
-        <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="{Binding ViewerRailWidth}" />
-            <ColumnDefinition Width="*" />
-        </Grid.ColumnDefinitions>
-        <Border Grid.Column="0"
+        Title="FrameRelay">
+    <Window.Styles>
+        <Style Selector="Border#navigationRail">
+            <Setter Property="Width" Value="180" />
+        </Style>
+        <Style Selector="Button.navButton">
+            <Setter Property="Height" Value="44" />
+            <Setter Property="HorizontalAlignment" Value="Stretch" />
+            <Setter Property="HorizontalContentAlignment" Value="Left" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="CornerRadius" Value="{DynamicResource ControlCornerRadius}" />
+            <Setter Property="Padding" Value="12,0" />
+        </Style>
+        <Style Selector="Button.navButton:pointerover">
+            <Setter Property="Background" Value="{DynamicResource SurfaceRaisedBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+        </Style>
+        <Style Selector="Button.navButton.active">
+            <Setter Property="Background" Value="{DynamicResource SurfaceRaisedBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
+        </Style>
+        <ContainerQuery Name="window" Query="max-width:700">
+            <Style Selector="Border#navigationRail">
+                <Setter Property="Width" Value="64" />
+            </Style>
+            <Style Selector="TextBlock.navLabel">
+                <Setter Property="IsVisible" Value="False" />
+            </Style>
+            <Style Selector="Button.navButton">
+                <Setter Property="Width" Value="48" />
+                <Setter Property="HorizontalContentAlignment" Value="Center" />
+                <Setter Property="Padding" Value="0" />
+            </Style>
+        </ContainerQuery>
+    </Window.Styles>
+
+    <Grid ColumnDefinitions="Auto,*">
+        <Border x:Name="navigationRail" Grid.Column="0"
                 IsVisible="{Binding !IsVideoExpanded}"
-                Background="{StaticResource RailBrush}"
-                BorderBrush="{StaticResource BorderBrush}"
+                Background="{DynamicResource RailBrush}"
+                BorderBrush="{DynamicResource BorderBrush}"
                 BorderThickness="0,0,1,0"
-                Padding="{StaticResource RailPadding}">
-            <StackPanel Spacing="{StaticResource SpaceXs}">
-                <TextBlock Text="SonicDesktopRelay"
-                           Margin="8,8,8,16"
-                           TextWrapping="Wrap"
-                           FontSize="{StaticResource FontSizeMd}"
-                           Foreground="{StaticResource TextPrimaryBrush}" />
-                <Button Content="Home" Tag="Home" Click="OnNavigate" HorizontalAlignment="Stretch" />
-                <Button Content="Share" Tag="Share" Click="OnNavigate" HorizontalAlignment="Stretch" />
-                <Button Content="Watch" Tag="Watch" Click="OnNavigate" HorizontalAlignment="Stretch" />
-                <Button Content="Settings" Tag="Settings" Click="OnNavigate" HorizontalAlignment="Stretch" />
-                <Button Content="Diagnostics" Tag="Diagnostics" Click="OnNavigate" HorizontalAlignment="Stretch" />
-            </StackPanel>
+                Padding="{DynamicResource RailPadding}">
+            <Grid RowDefinitions="Auto,*,Auto">
+                <StackPanel Grid.Row="0" Spacing="24">
+                    <StackPanel Orientation="Horizontal" Spacing="10" Margin="10,12,0,0"
+                                ToolTip.Tip="FrameRelay">
+                        <TextBlock Text="◈" FontSize="24"
+                                   Foreground="{DynamicResource AccentBrush}"
+                                   VerticalAlignment="Center" />
+                        <TextBlock Classes="navLabel" Text="FrameRelay"
+                                   FontSize="{DynamicResource FontSizeLg}"
+                                   FontWeight="SemiBold"
+                                   Foreground="{DynamicResource TextPrimaryBrush}"
+                                   VerticalAlignment="Center" />
+                    </StackPanel>
+
+                    <StackPanel Spacing="4">
+                        <Button Classes="navButton" Classes.active="{Binding ViewModel.CurrentPage, Converter={x:Static conv:EnumEqualsConverter.Instance}, ConverterParameter=Share}"
+                                Tag="Share" Click="OnNavigate" ToolTip.Tip="Share">
+                            <StackPanel Orientation="Horizontal" Spacing="12">
+                                <TextBlock Text="⇧" FontSize="20" Width="20" TextAlignment="Center" VerticalAlignment="Center" />
+                                <TextBlock Classes="navLabel" Text="Share" VerticalAlignment="Center" />
+                            </StackPanel>
+                        </Button>
+                        <Button Classes="navButton" Classes.active="{Binding ViewModel.CurrentPage, Converter={x:Static conv:EnumEqualsConverter.Instance}, ConverterParameter=Watch}"
+                                Tag="Watch" Click="OnNavigate" ToolTip.Tip="Watch">
+                            <StackPanel Orientation="Horizontal" Spacing="12">
+                                <TextBlock Text="▶" FontSize="17" Width="20" TextAlignment="Center" VerticalAlignment="Center" />
+                                <TextBlock Classes="navLabel" Text="Watch" VerticalAlignment="Center" />
+                            </StackPanel>
+                        </Button>
+                        <Button Classes="navButton" Classes.active="{Binding ViewModel.CurrentPage, Converter={x:Static conv:EnumEqualsConverter.Instance}, ConverterParameter=Diagnostics}"
+                                Tag="Diagnostics" Click="OnNavigate" ToolTip.Tip="Diagnostics">
+                            <StackPanel Orientation="Horizontal" Spacing="12">
+                                <TextBlock Text="▤" FontSize="20" Width="20" TextAlignment="Center" VerticalAlignment="Center" />
+                                <TextBlock Classes="navLabel" Text="Diagnostics" VerticalAlignment="Center" />
+                            </StackPanel>
+                        </Button>
+                        <Button Classes="navButton" Classes.active="{Binding ViewModel.CurrentPage, Converter={x:Static conv:EnumEqualsConverter.Instance}, ConverterParameter=Settings}"
+                                Tag="Settings" Click="OnNavigate" ToolTip.Tip="Settings">
+                            <StackPanel Orientation="Horizontal" Spacing="12">
+                                <TextBlock Text="⚙" FontSize="20" Width="20" TextAlignment="Center" VerticalAlignment="Center" />
+                                <TextBlock Classes="navLabel" Text="Settings" VerticalAlignment="Center" />
+                            </StackPanel>
+                        </Button>
+                    </StackPanel>
+                </StackPanel>
+
+                <StackPanel Grid.Row="2" Spacing="12" Margin="8,0,8,12">
+                    <StackPanel Orientation="Horizontal" Spacing="8" ToolTip.Tip="{Binding ViewModel.StatusText}">
+                        <TextBlock Text="●" FontSize="10" VerticalAlignment="Center"
+                                   Foreground="{DynamicResource AccentBrush}" />
+                        <TextBlock Classes="navLabel" Text="{Binding ViewModel.StatusText}"
+                                   FontSize="{DynamicResource FontSizeSm}"
+                                   Foreground="{DynamicResource TextSecondaryBrush}"
+                                   TextTrimming="CharacterEllipsis" />
+                    </StackPanel>
+                    <Border Height="1" Background="{DynamicResource BorderMutedBrush}" />
+                    <StackPanel ToolTip.Tip="{Binding DeviceName}">
+                        <TextBlock Classes="navLabel" Text="{Binding DeviceName}"
+                                   FontSize="{DynamicResource FontSizeSm}"
+                                   Foreground="{DynamicResource TextSecondaryBrush}"
+                                   TextTrimming="CharacterEllipsis" />
+                        <TextBlock Classes="navLabel" Text="{Binding AppVersion, StringFormat='Version {0}'}"
+                                   FontSize="{DynamicResource FontSizeSm}"
+                                   Foreground="{DynamicResource TextMutedBrush}" />
+                    </StackPanel>
+                </StackPanel>
+            </Grid>
         </Border>
 
         <Panel Grid.Column="1">
-            <views:HomeView IsVisible="{Binding ViewModel.CurrentPage,
-                Converter={x:Static conv:EnumEqualsConverter.Instance}, ConverterParameter=Home}" />
             <views:ShareView IsVisible="{Binding ViewModel.CurrentPage,
                 Converter={x:Static conv:EnumEqualsConverter.Instance}, ConverterParameter=Share}" />
             <views:WatchView IsVisible="{Binding ViewModel.CurrentPage,
                 Converter={x:Static conv:EnumEqualsConverter.Instance}, ConverterParameter=Watch}" />
-            <views:SettingsView IsVisible="{Binding ViewModel.CurrentPage,
-                Converter={x:Static conv:EnumEqualsConverter.Instance}, ConverterParameter=Settings}" />
             <views:DiagnosticsView IsVisible="{Binding ViewModel.CurrentPage,
                 Converter={x:Static conv:EnumEqualsConverter.Instance}, ConverterParameter=Diagnostics}" />
+            <views:SettingsView IsVisible="{Binding ViewModel.CurrentPage,
+                Converter={x:Static conv:EnumEqualsConverter.Instance}, ConverterParameter=Settings}" />
         </Panel>
     </Grid>
 </Window>

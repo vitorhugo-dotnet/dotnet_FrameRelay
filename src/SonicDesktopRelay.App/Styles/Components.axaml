@@ -1,0 +1,27 @@
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Style Selector="Border.card">
+        <Setter Property="Background" Value="{DynamicResource CardBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource BorderBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="{DynamicResource CardCornerRadius}" />
+        <Setter Property="Padding" Value="{DynamicResource CardPadding}" />
+    </Style>
+
+    <Style Selector="TextBlock.statusConnected">
+        <Setter Property="Foreground" Value="{DynamicResource SuccessBrush}" />
+    </Style>
+    <Style Selector="TextBlock.statusWarning">
+        <Setter Property="Foreground" Value="{DynamicResource WarningBrush}" />
+    </Style>
+    <Style Selector="TextBlock.statusDisconnected">
+        <Setter Property="Foreground" Value="{DynamicResource DangerBrush}" />
+    </Style>
+
+    <!-- Apply to a card root with IsEnabled="False" to disable descendant input and focus. -->
+    <Style Selector="Border.unavailable">
+        <Setter Property="Background" Value="{DynamicResource UnavailableBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource BorderMutedBrush}" />
+        <Setter Property="Opacity" Value="0.6" />
+    </Style>
+</Styles>

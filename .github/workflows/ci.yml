@@ -360,6 +360,28 @@ jobs:
             -p:DebugType=embedded `
             -o $singleFileDir
 
+      - name: Build and verify MSI
+        shell: pwsh
+        run: |
+          $version = '${{ steps.metadata.outputs.display_version }}'
+          $numericVersion = [regex]::Match($version, '^\d+\.\d+\.\d+').Value
+          if ([string]::IsNullOrWhiteSpace($numericVersion)) {
+            throw "Release version '$version' has no numeric Windows Installer version."
+          }
+
+          $publishDirectory = Join-Path $PWD 'artifacts/publish/portable'
+          $distDirectory = Join-Path $PWD 'artifacts/release'
+          & ./.github/scripts/Build-FrameRelayMsi.ps1 `
+            -PublishDirectory $publishDirectory `
+            -ReleaseVersion $version `
+            -OutputDirectory $distDirectory
+
+          $msiPath = Join-Path $distDirectory "FrameRelay-win-x64-$version.msi"
+          & ./.github/scripts/Test-FrameRelayMsi.ps1 `
+            -MsiPath $msiPath `
+            -PublishDirectory $publishDirectory `
+            -ExpectedProductVersion $numericVersion
+
       - name: Verify legacy codec artifacts are absent
         shell: pwsh
         run: |
@@ -399,10 +421,6 @@ jobs:
 
           Write-Host 'Portable and single-file outputs contain only the native Windows media path.'
 
-      # No MSI or setup bundle yet: packaging/*.wxs arrives with phase 4 of the design
-      # (docs/superpowers/specs/2026-08-23-sonicdesktoprelay-design.md). When it does, add a
-      # WiX step here pinned to v5 — v6+ requires accepting the Open Source Maintenance Fee
-      # EULA, which fails an unattended CI install.
       - name: Assemble release assets and checksums
         shell: pwsh
         run: |
@@ -421,7 +439,7 @@ jobs:
             -Destination (Join-Path $distDir "$env:PRODUCT_NAME-$env:RUNTIME_ID-$assetVersion.exe")
 
           Get-ChildItem -Path $distDir -File |
-            Where-Object { $_.Extension -in @('.zip', '.exe') } |
+            Where-Object { $_.Extension -in @('.zip', '.exe', '.msi') } |
             ForEach-Object {
               $hash = Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256
               "$($hash.Hash)  $($_.Name)"
@@ -435,12 +453,13 @@ jobs:
           Assets:
           - ``$env:PRODUCT_NAME-$env:RUNTIME_ID-$assetVersion.zip``: portable folder distribution.
           - ``$env:PRODUCT_NAME-$env:RUNTIME_ID-$assetVersion.exe``: portable single-file executable.
+          - ``FrameRelay-win-x64-$assetVersion.msi``: Windows installer.
 
           Notes:
           - Windows only. The app registers itself on first run; there is no sign-in.
           - Video uses Windows Media Foundation and system audio uses WASAPI + Opus; no separate
             native codec runtime needs to be installed or bundled.
-          - An installer is not built yet; both assets are portable and per-user.
+          - The MSI installer is machine-wide; the ZIP and EXE are portable and per-user.
           - Packages are currently unsigned.
           "@ | Set-Content -Path (Join-Path $distDir 'RELEASE-NOTES.md') -Encoding UTF8
 
@@ -462,7 +481,7 @@ jobs:
           $notesPath = Join-Path $env:GITHUB_WORKSPACE 'artifacts/release/RELEASE-NOTES.md'
           $assetPaths = @(
             Get-ChildItem -Path 'artifacts/release' -File |
-              Where-Object { $_.Extension -in @('.zip', '.exe', '.txt') } |
+              Where-Object { $_.Extension -in @('.zip', '.exe', '.msi', '.txt') } |
               Select-Object -ExpandProperty FullName
           )
 

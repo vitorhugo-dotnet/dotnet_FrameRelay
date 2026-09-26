@@ -36,13 +36,29 @@ public sealed record SessionSnapshot(
     /// </summary>
     WatchState? Watching = null,
     /// <summary>The decoder that actually opened, e.g. "h264". Null when not watching.</summary>
-    string? DecoderName = null)
+    string? DecoderName = null,
+    SessionMediaMetrics? Metrics = null)
 {
     public static SessionSnapshot Idle { get; } =
         new(SessionPhase.Idle, null, null, 0, SignalingState.Disconnected, null);
 
     public bool IsBusy => Phase is SessionPhase.Preparing or SessionPhase.Joining or SessionPhase.Ending;
 }
+
+/// <summary>
+/// UI-safe values from the active media host. The video rates are measured reception values;
+/// publisher quality settings occupy separate target fields. Null means no valid sample.
+/// </summary>
+public sealed record SessionMediaMetrics(
+    int? Width = null,
+    int? Height = null,
+    double? VideoBitrateBitsPerSecond = null,
+    double? VideoFramesPerSecond = null,
+    double? LatencyMilliseconds = null,
+    string? Codec = null,
+    string? Transport = null,
+    double? TargetVideoBitrateBitsPerSecond = null,
+    double? TargetVideoFramesPerSecond = null);
 
 public sealed record CreatedSession(Guid SessionId, string Code);
 
@@ -61,6 +77,8 @@ public interface ISessionApi
 
     Task<Guid> JoinAsync(string code, CancellationToken ct);
 
+    Task<Guid> JoinByIdAsync(Guid sessionId, CancellationToken ct);
+
     Task EndAsync(Guid sessionId, CancellationToken ct);
 }
 
@@ -70,9 +88,11 @@ public interface ISessionApi
 /// </summary>
 public interface IVideoPublishHost : IAsyncDisposable
 {
+    event Action<string>? CaptureTargetClosed;
+
     string? EncoderName { get; }
 
-    Task StartAsync(MonitorInfo monitor, VideoPublishProfile profile, CancellationToken ct);
+    Task StartAsync(CaptureTarget target, VideoPublishProfile profile, CancellationToken ct);
 
     Task StopAsync();
 

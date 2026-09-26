@@ -17,6 +17,8 @@ public readonly record struct VideoReceptionSnapshot(
 /// </summary>
 public interface IViewerPeerConnection : IAsyncDisposable
 {
+    /// <summary>Raised only for connected or terminal failed states.</summary>
+    event Action<bool>? ConnectionStateChanged;
     event Action<string, string?, int?>? IceCandidateGathered;
 
     /// <summary>
@@ -52,5 +54,5 @@ public interface IViewerPeerConnection : IAsyncDisposable
 
 public interface IViewerPeerConnectionFactory
 {
-    IViewerPeerConnection Create();
+    IViewerPeerConnection Create(bool? forceRelay = null);
 }

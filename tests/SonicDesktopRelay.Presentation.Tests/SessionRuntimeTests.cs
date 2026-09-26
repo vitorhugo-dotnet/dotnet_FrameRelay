@@ -10,6 +10,9 @@ public sealed class SessionRuntimeTests
 
     private static readonly MonitorInfo Monitor = new("\\\\.\\DISPLAY1", "Primary", 1920, 1080, true);
 
+    private static readonly WindowInfo Window = new(
+        (nint)0x1234, 57, DateTime.UnixEpoch, "Editor", "editor.exe", 1280, 720);
+
     [Fact]
     public void A_fresh_runtime_is_idle()
     {
@@ -17,6 +20,111 @@ public sealed class SessionRuntimeTests
 
         Assert.Equal(SessionPhase.Idle, runtime.Snapshot.Phase);
         Assert.Null(runtime.Snapshot.Code);
+    }
+
+    [Fact]
+    public async Task A_late_metric_sample_cannot_restore_stopped_session_data()
+    {
+        var runtime = new SessionRuntime(new FakeSessionApi(), () => new FakeConnection());
+        var metrics = new SessionMediaMetrics(1920, 1080, 4_000_000, 30, null, "H.264", "Direct/UDP");
+        await runtime.StartWatchingAsync("AB12CD", CancellationToken.None);
+        runtime.UpdateMetrics(metrics);
+        Assert.Equal(metrics, runtime.Snapshot.Metrics);
+
+        await runtime.StopAsync(CancellationToken.None);
+        runtime.UpdateMetrics(metrics);
+
+        Assert.Equal(SessionPhase.Idle, runtime.Snapshot.Phase);
+        Assert.Null(runtime.Snapshot.Metrics);
+    }
+
+    [Fact]
+    public async Task Late_watch_and_signaling_callbacks_cannot_restore_stopped_session_state()
+    {
+        var host = new FakeVideoWatchHost();
+        var connection = new FakeConnection();
+        var runtime = new SessionRuntime(new FakeSessionApi(), () => connection, watchHost: host);
+        var metrics = new SessionMediaMetrics(1920, 1080, 4_000_000, 30, null, "H.264", "Direct/UDP");
+        await runtime.StartWatchingAsync("AB12CD", CancellationToken.None);
+        runtime.UpdateMetrics(metrics);
+        var delayedSignaling = connection.CaptureStateChanged();
+        delayedSignaling?.Invoke(SignalingState.Reconnecting);
+        Assert.Equal(SignalingState.Reconnecting, runtime.Snapshot.Signaling);
+
+        await runtime.StopAsync(CancellationToken.None);
+        host.Raise(WatchState.Receiving);
+        host.RaiseNegotiationFailure("late negotiation failure");
+        delayedSignaling?.Invoke(SignalingState.Connected);
+
+        Assert.Equal(SessionSnapshot.Idle, runtime.Snapshot);
+    }
+
+    [Fact]
+    public async Task Retired_session_callbacks_cannot_change_a_new_watch_session()
+    {
+        var host = new FakeVideoWatchHost();
+        var firstConnection = new FakeConnection();
+        var secondConnection = new FakeConnection();
+        var connections = new Queue<FakeConnection>([firstConnection, secondConnection]);
+        var runtime = new SessionRuntime(new FakeSessionApi(), () => connections.Dequeue(), watchHost: host);
+
+        await runtime.StartWatchingAsync("AB12CD", CancellationToken.None);
+        var oldWatchState = host.CaptureWatchStateChanged();
+        var oldNegotiationFailure = host.CaptureNegotiationFailed();
+        var oldSignalingState = firstConnection.CaptureStateChanged();
+        var oldFrame = firstConnection.CaptureFrameReceived();
+        await runtime.StopAsync(CancellationToken.None);
+
+        await runtime.StartWatchingAsync("AB12CD", CancellationToken.None);
+        host.Raise(WatchState.Receiving);
+        runtime.UpdateMetrics(new SessionMediaMetrics(1280, 720, 2_000_000, 24, null, "H.264", "TURN/TCP"));
+        var expected = runtime.Snapshot;
+
+        oldWatchState?.Invoke(WatchState.Stalled);
+        oldNegotiationFailure?.Invoke("old peer failed");
+        oldSignalingState?.Invoke(SignalingState.Reconnecting);
+        oldFrame?.Invoke(new SignalingEnvelope(SignalingMessageTypes.SessionEnded,
+            null, null, null, null, null, null));
+
+        Assert.Equal(SessionPhase.Watching, runtime.Snapshot.Phase);
+        Assert.Equal(WatchState.Receiving, runtime.Snapshot.Watching);
+        Assert.Equal(expected, runtime.Snapshot);
+    }
+
+    [Fact]
+    public async Task Retired_capture_closure_cannot_stop_a_new_sharing_session()
+    {
+        var api = new FakeSessionApi();
+        var host = new FakeVideoPublishHost();
+        var runtime = new SessionRuntime(api, () => new FakeConnection(), host);
+        await runtime.StartSharingAsync(Monitor, 3, CancellationToken.None);
+        var oldClosure = host.CaptureTargetClosedHandler();
+        await runtime.StopAsync(CancellationToken.None);
+
+        await runtime.StartSharingAsync(Monitor, 3, CancellationToken.None);
+        runtime.UpdateMetrics(new SessionMediaMetrics(1920, 1080, null, null, null, "H.264", "Direct/UDP"));
+        var expected = runtime.Snapshot;
+        var endCalls = api.EndCalls;
+
+        oldClosure?.Invoke("session A's source closed late");
+
+        Assert.Equal(SessionPhase.Sharing, runtime.Snapshot.Phase);
+        Assert.Equal(expected, runtime.Snapshot);
+        Assert.Equal(endCalls, api.EndCalls);
+    }
+
+    [Fact]
+    public async Task Metrics_clear_across_a_role_change()
+    {
+        var runtime = new SessionRuntime(new FakeSessionApi(), () => new FakeConnection());
+        var metrics = new SessionMediaMetrics(1920, 1080, 4_000_000, 30, null, "H.264", "Direct/UDP");
+        await runtime.StartSharingAsync(Monitor, 3, CancellationToken.None);
+        runtime.UpdateMetrics(metrics);
+
+        await runtime.StopAsync(CancellationToken.None);
+        await runtime.StartWatchingAsync("AB12CD", CancellationToken.None);
+
+        Assert.Null(runtime.Snapshot.Metrics);
     }
 
     [Fact]
@@ -56,6 +164,19 @@ public sealed class SessionRuntimeTests
 
         Assert.Equal(SessionPhase.Watching, runtime.Snapshot.Phase);
         Assert.Equal("ab12cd", api.JoinedWithCode);
+    }
+
+    [Fact]
+    public async Task Watching_joins_by_resolved_session_id_through_existing_runtime()
+    {
+        var api = new FakeSessionApi();
+        var runtime = new SessionRuntime(api, () => new FakeConnection());
+
+        await runtime.StartWatchingSessionAsync(SessionId, CancellationToken.None);
+
+        Assert.Equal(SessionPhase.Watching, runtime.Snapshot.Phase);
+        Assert.Equal(SessionId, api.JoinedById);
+        Assert.Equal(SessionId, runtime.Snapshot.SessionId);
     }
 
     [Fact]
@@ -181,6 +302,79 @@ public sealed class SessionRuntimeTests
     }
 
     [Fact]
+    public async Task Sharing_passes_the_selected_window_target_to_the_publish_host()
+    {
+        var host = new FakeVideoPublishHost();
+        var runtime = new SessionRuntime(new FakeSessionApi(), () => new FakeConnection(), host);
+        var target = new CaptureTarget.Window(Window);
+
+        await runtime.StartSharingAsync(target, VideoPublishProfile.Default, 3, CancellationToken.None);
+
+        Assert.Equal(target, host.StartedTarget);
+        Assert.Equal(SessionPhase.Sharing, runtime.Snapshot.Phase);
+    }
+
+    [Fact]
+    public async Task A_window_closed_during_start_ends_the_session_instead_of_publishing()
+    {
+        var api = new FakeSessionApi();
+        var host = new FakeVideoPublishHost { CloseDuringStart = true };
+        var runtime = new SessionRuntime(api, () => new FakeConnection(), host);
+
+        await runtime.StartSharingAsync(
+            new CaptureTarget.Window(Window), VideoPublishProfile.Default, 3, CancellationToken.None);
+
+        Assert.Equal(SessionPhase.Failed, runtime.Snapshot.Phase);
+        Assert.Equal("capture_target_closed", runtime.Snapshot.Error);
+        Assert.Equal(1, api.EndCalls);
+        Assert.True(host.Stopped);
+    }
+
+    [Fact]
+    public async Task A_window_closed_while_sharing_ends_once_and_detaches_signaling()
+    {
+        var api = new FakeSessionApi();
+        var connection = new FakeConnection();
+        var host = new FakeVideoPublishHost();
+        var runtime = new SessionRuntime(api, () => connection, host);
+        await runtime.StartSharingAsync(new CaptureTarget.Window(Window), VideoPublishProfile.Default, 3, CancellationToken.None);
+
+        host.RaiseCaptureTargetClosed("Editor process exited");
+        host.RaiseCaptureTargetClosed("duplicate notification");
+        await Task.Yield();
+
+        Assert.Equal(SessionPhase.Failed, runtime.Snapshot.Phase);
+        Assert.Equal("capture_target_closed", runtime.Snapshot.Error);
+        Assert.Equal(1, api.EndCalls);
+        Assert.True(host.Stopped);
+        Assert.Equal(SignalingState.Disconnected, runtime.Snapshot.Signaling);
+    }
+
+    [Fact]
+    public async Task User_stop_racing_target_close_ends_owned_session_only_once()
+    {
+        var api = new FakeSessionApi();
+        var host = new FakeVideoPublishHost();
+        var runtime = new SessionRuntime(api, () => new FakeConnection(), host);
+        var failed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        runtime.Changed += snapshot =>
+        {
+            if (snapshot.Phase == SessionPhase.Failed) failed.TrySetResult();
+        };
+        await runtime.StartSharingAsync(new CaptureTarget.Window(Window), VideoPublishProfile.Default, 3, CancellationToken.None);
+        host.StopGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        host.RaiseCaptureTargetClosed("window destroyed");
+        var manualStop = runtime.StopAsync(CancellationToken.None);
+        host.StopGate.SetResult();
+        await manualStop;
+        await failed.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.Equal(1, api.EndCalls);
+        Assert.Equal(SessionPhase.Failed, runtime.Snapshot.Phase);
+    }
+
+    [Fact]
     public async Task A_viewer_joining_is_added_to_the_publisher()
     {
         var api = new FakeSessionApi();
@@ -266,6 +460,29 @@ public sealed class SessionRuntimeTests
         connection.Emit(SignalingMessageTypes.WebRtcAnswer);
 
         Assert.Contains(SignalingMessageTypes.WebRtcAnswer, host.Signalled);
+    }
+
+    [Fact]
+    public async Task Renegotiation_is_forwarded_only_to_the_sharing_host()
+    {
+        var api = new FakeSessionApi();
+        var publisher = new FakeVideoPublishHost();
+        var connection = new FakeConnection();
+        var runtime = new SessionRuntime(api, () => connection, publisher);
+        await runtime.StartSharingAsync(Monitor, 3, CancellationToken.None);
+
+        connection.Emit(SignalingMessageTypes.WebRtcRenegotiate);
+
+        Assert.Contains(SignalingMessageTypes.WebRtcRenegotiate, publisher.Signalled);
+
+        await runtime.StopAsync(CancellationToken.None);
+        var watchHost = new FakeVideoWatchHost();
+        connection = new FakeConnection();
+        runtime = new SessionRuntime(api, () => connection, watchHost: watchHost);
+        await runtime.StartWatchingAsync("AB12CD", CancellationToken.None);
+        connection.Emit(SignalingMessageTypes.WebRtcRenegotiate);
+
+        Assert.DoesNotContain(SignalingMessageTypes.WebRtcRenegotiate, watchHost.Signalled);
     }
 
     [Fact]
@@ -474,6 +691,10 @@ public sealed class SessionRuntimeTests
 
         public event Action<string>? NegotiationFailed;
 
+        public Action<WatchState>? CaptureWatchStateChanged() => WatchStateChanged;
+
+        public Action<string>? CaptureNegotiationFailed() => NegotiationFailed;
+
         public Task StartAsync(CancellationToken ct)
         {
             if (StartFailure is not null) throw new InvalidOperationException(StartFailure);
@@ -508,6 +729,8 @@ public sealed class SessionRuntimeTests
 
         public MonitorInfo? StartedOn { get; private set; }
 
+        public CaptureTarget? StartedTarget { get; private set; }
+
         public VideoPublishProfile? StartedProfile { get; private set; }
 
         public bool Stopped { get; private set; }
@@ -516,18 +739,39 @@ public sealed class SessionRuntimeTests
 
         public string? StartFailure { get; init; }
 
+        public bool CloseDuringStart { get; init; }
+
+        public TaskCompletionSource? StopGate { get; set; }
+
+        public event Action<string>? CaptureTargetClosed;
+
+        public Action<string>? CaptureTargetClosedHandler() => CaptureTargetClosed;
+
         public Task StartAsync(MonitorInfo monitor, VideoPublishProfile profile, CancellationToken ct)
         {
             if (StartFailure is not null) throw new InvalidOperationException(StartFailure);
             StartedOn = monitor;
+            StartedTarget = new CaptureTarget.Monitor(monitor);
             StartedProfile = profile;
             return Task.CompletedTask;
         }
 
-        public Task StopAsync()
+        public Task StartAsync(CaptureTarget target, VideoPublishProfile profile, CancellationToken ct)
+        {
+            if (StartFailure is not null) throw new InvalidOperationException(StartFailure);
+            StartedTarget = target;
+            if (target is CaptureTarget.Monitor monitor) StartedOn = monitor.Info;
+            StartedProfile = profile;
+            if (CloseDuringStart) CaptureTargetClosed?.Invoke("The selected window closed.");
+            return Task.CompletedTask;
+        }
+
+        public void RaiseCaptureTargetClosed(string message) => CaptureTargetClosed?.Invoke(message);
+
+        public async Task StopAsync()
         {
             Stopped = true;
-            return Task.CompletedTask;
+            if (StopGate is not null) await StopGate.Task;
         }
 
         public Task AddViewerAsync(Guid participantId, CancellationToken ct)
@@ -561,6 +805,8 @@ public sealed class SessionRuntimeTests
 
         public string? JoinedWithCode { get; private set; }
 
+        public Guid? JoinedById { get; private set; }
+
         public string? JoinFailureCode { get; init; }
 
         public Task<CreatedSession> CreateScreenShareAsync(int maxViewers, CancellationToken ct)
@@ -578,6 +824,14 @@ public sealed class SessionRuntimeTests
             return Task.FromResult(SessionId);
         }
 
+        public Task<Guid> JoinByIdAsync(Guid sessionId, CancellationToken ct)
+        {
+            JoinedById = sessionId;
+            if (JoinFailureCode is not null)
+                throw new SessionApiFailure(JoinFailureCode, "Join refused.");
+            return Task.FromResult(sessionId);
+        }
+
         public Task EndAsync(Guid sessionId, CancellationToken ct)
         {
             EndCalls++;
@@ -592,6 +846,10 @@ public sealed class SessionRuntimeTests
         public event Action<SignalingEnvelope>? FrameReceived;
 
         public event Action<SignalingState>? StateChanged;
+
+        public Action<SignalingState>? CaptureStateChanged() => StateChanged;
+
+        public Action<SignalingEnvelope>? CaptureFrameReceived() => FrameReceived;
 
         public Task StartAsync(Guid sessionId, CancellationToken ct)
         {

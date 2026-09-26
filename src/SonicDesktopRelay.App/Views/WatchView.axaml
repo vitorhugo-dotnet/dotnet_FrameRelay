@@ -2,74 +2,198 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:app="clr-namespace:SonicDesktopRelay.App"
              xmlns:controls="clr-namespace:SonicDesktopRelay.App.Controls"
+             xmlns:conv="clr-namespace:SonicDesktopRelay.App.Converters"
              x:Class="SonicDesktopRelay.App.Views.WatchView"
-             x:DataType="app:Shell">
-    <DockPanel Name="WatchLayout" Margin="{Binding WatchPagePadding}">
-        <StackPanel DockPanel.Dock="Top"
-                    Spacing="{StaticResource SpaceMd}"
-                    IsVisible="{Binding !IsVideoExpanded}">
-            <TextBlock Text="Watch"
-                       FontSize="{StaticResource FontSizeLg}"
-                       Foreground="{StaticResource TextPrimaryBrush}" />
+             x:DataType="app:Shell"
+             Container.Name="watchPage" Container.Sizing="Width">
+    <UserControl.Styles>
+        <Style Selector="ScrollViewer#pageScroll">
+            <Setter Property="Margin" Value="{StaticResource PagePadding}" />
+            <Setter Property="VerticalScrollBarVisibility" Value="Auto" />
+        </Style>
+        <Style Selector="ScrollViewer#pageScroll.expanded">
+            <Setter Property="Margin" Value="0" />
+            <Setter Property="VerticalScrollBarVisibility" Value="Disabled" />
+        </Style>
+        <Style Selector="Grid#pageLayout">
+            <Setter Property="MaxWidth" Value="1400" />
+        </Style>
+        <Style Selector="Grid#pageLayout.expanded">
+            <Setter Property="MaxWidth" Value="Infinity" />
+        </Style>
+        <Style Selector="StackPanel#sessionDetails">
+            <Setter Property="Grid.Column" Value="1" />
+            <Setter Property="Grid.Row" Value="0" />
+            <Setter Property="Margin" Value="16,0,0,0" />
+        </Style>
+        <ContainerQuery Name="watchPage" Query="max-width:900">
+            <Style Selector="Border#videoCard">
+                <Setter Property="Grid.ColumnSpan" Value="2" />
+            </Style>
+            <Style Selector="StackPanel#sessionDetails">
+                <Setter Property="Grid.Column" Value="0" />
+                <Setter Property="Grid.Row" Value="1" />
+                <Setter Property="Grid.ColumnSpan" Value="2" />
+                <Setter Property="Margin" Value="0,16,0,0" />
+            </Style>
+        </ContainerQuery>
+        <Style Selector="Border#videoCard.expanded">
+            <Setter Property="Background" Value="Black" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="CornerRadius" Value="0" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="Grid.ColumnSpan" Value="2" />
+        </Style>
+    </UserControl.Styles>
 
-            <StackPanel Spacing="{StaticResource SpaceXs}">
-                <TextBlock Text="Session code"
-                           FontSize="{StaticResource FontSizeSm}"
-                           Foreground="{StaticResource TextSecondaryBrush}" />
-                <TextBox Name="CodeBox"
-                         Width="240"
-                         MaxLength="6"
-                         PlaceholderText="ABC123"
-                         FontSize="{StaticResource FontSizeLg}"
-                         FontFamily="Consolas, monospace"
-                         TextChanged="OnCodeChanged" />
-            </StackPanel>
-
-            <StackPanel Orientation="Horizontal" Spacing="{StaticResource SpaceSm}">
-                <Button Name="WatchButton" Content="Watch" IsEnabled="False" Click="OnWatch" />
-                <Button Content="Stop watching"
-                        IsEnabled="{Binding ViewModel.CanStop}"
-                        Click="OnStop" />
-            </StackPanel>
-
-            <TextBlock Text="{Binding ViewModel.StatusText}"
-                       FontSize="{StaticResource FontSizeMd}"
-                       Foreground="{StaticResource TextSecondaryBrush}" />
-
-            <TextBlock Text="{Binding ShellError}"
-                       IsVisible="{Binding ShellError, Converter={x:Static ObjectConverters.IsNotNull}}"
-                       TextWrapping="Wrap"
-                       FontSize="{StaticResource FontSizeSm}"
-                       Foreground="{StaticResource DangerBrush}" />
-
-            <TextBlock Text="Fit fills this window. F11 toggles fullscreen; Esc returns to normal."
-                       TextWrapping="Wrap"
-                       FontSize="{StaticResource FontSizeSm}"
-                       Foreground="{StaticResource TextSecondaryBrush}"
-                       Margin="0,0,0,8" />
-        </StackPanel>
-
-        <Grid PointerMoved="OnVideoPointerMoved">
-            <controls:VideoSurface Name="Surface" />
-            <Border Name="ViewerControls" VerticalAlignment="Bottom"
-                    HorizontalAlignment="Stretch" Background="#DD151515" Padding="4" Margin="8"
-                    PointerEntered="OnControlsEntered" PointerExited="OnControlsExited">
-                <ScrollViewer MaxHeight="192" HorizontalScrollBarVisibility="Disabled"
-                              VerticalScrollBarVisibility="Auto">
+    <ScrollViewer Name="pageScroll" Classes.expanded="{Binding IsVideoExpanded}"
+                  HorizontalScrollBarVisibility="Disabled">
+        <Grid Name="pageLayout" Classes.expanded="{Binding IsVideoExpanded}"
+              MinHeight="{Binding #pageScroll.Bounds.Height}"
+              HorizontalAlignment="Stretch"
+              RowDefinitions="Auto,*">
+            <StackPanel Grid.Row="0" Spacing="{StaticResource SpaceMd}" Margin="0,0,0,16"
+                        IsVisible="{Binding !IsVideoExpanded}">
+                <StackPanel Spacing="{StaticResource SpaceXs}">
+                    <TextBlock Text="Watch a session" FontSize="{StaticResource FontSizeXl}"
+                               FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" />
+                    <TextBlock Text="Enter a session code to watch a shared screen."
+                               TextWrapping="Wrap" FontSize="{StaticResource FontSizeMd}"
+                               Foreground="{StaticResource TextSecondaryBrush}" />
+                </StackPanel>
+                <Border Classes="card">
                     <WrapPanel Orientation="Horizontal">
-                        <Button Content="Normal" Click="OnNormal" Margin="4" />
-                        <Button Content="Fit to screen" Click="OnFit" Margin="4" />
-                        <Button Content="Fullscreen" Click="OnFullScreen" Margin="4" />
-                        <ToggleButton Content="Mute" IsChecked="{Binding ViewerMuted, Mode=TwoWay}" Margin="4" />
-                        <TextBlock Text="Volume" VerticalAlignment="Center" Margin="4" />
-                        <Slider Width="120" Minimum="0" Maximum="100" Margin="4"
-                                Value="{Binding ViewerVolume, Mode=TwoWay}" />
-                        <TextBlock Text="{Binding ViewerVolume, StringFormat='{}{0:0}%'}"
-                                   Width="40" VerticalAlignment="Center" Margin="4" />
-                        <Button Content="Stop" IsEnabled="{Binding ViewModel.CanStop}" Click="OnStop" Margin="4" />
+                        <StackPanel Width="280" Margin="0,0,16,8" Spacing="{StaticResource SpaceXs}">
+                            <TextBlock Text="Session code" FontSize="{StaticResource FontSizeLg}"
+                                       FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" />
+                            <TextBlock Text="Enter the six character code from the host."
+                                       TextWrapping="Wrap" FontSize="{StaticResource FontSizeSm}"
+                                       Foreground="{StaticResource TextSecondaryBrush}" />
+                        </StackPanel>
+                        <TextBox Name="CodeBox" Width="220" MaxLength="6"
+                                 Margin="0,0,12,8" VerticalAlignment="Center"
+                                 PlaceholderText="ABC123" FontSize="{StaticResource FontSizeLg}"
+                                 FontFamily="Consolas, monospace" TextChanged="OnCodeChanged" />
+                        <Button Name="WatchButton" Content="Join session" IsEnabled="False"
+                                Margin="0,0,12,8" VerticalAlignment="Center"
+                                Background="{StaticResource AccentBrush}" Click="OnWatch" />
                     </WrapPanel>
-                </ScrollViewer>
-            </Border>
+                </Border>
+            </StackPanel>
+
+            <Grid Name="contentGrid" Grid.Row="1"
+                  Classes.expanded="{Binding IsVideoExpanded}" MinHeight="280"
+                  ColumnDefinitions="*,300" RowDefinitions="*,Auto">
+                <Border Name="videoCard" Classes="card" Classes.expanded="{Binding IsVideoExpanded}"
+                        Grid.Column="0" Grid.Row="0" MinWidth="0">
+                    <Grid RowDefinitions="Auto,*,Auto">
+                        <Grid Grid.Row="0" ColumnDefinitions="*,Auto" Margin="0,0,0,8"
+                              IsVisible="{Binding !IsVideoExpanded}">
+                            <StackPanel Spacing="{StaticResource SpaceXs}">
+                                <TextBlock Text="Remote screen" FontSize="{StaticResource FontSizeLg}"
+                                           FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" />
+                                <TextBlock Text="{Binding ViewModel.StatusText}" TextWrapping="Wrap"
+                                           FontSize="{StaticResource FontSizeSm}"
+                                           Foreground="{StaticResource TextSecondaryBrush}" />
+                            </StackPanel>
+                            <Button Grid.Column="1" Content="Fullscreen" Click="OnEnterFullScreen"
+                                    IsEnabled="{Binding ViewModel.Snapshot.Phase, Converter={x:Static conv:EnumEqualsConverter.Instance}, ConverterParameter=Watching}"
+                                    VerticalAlignment="Center" ToolTip.Tip="Fill the window (F11)" />
+                        </Grid>
+                        <Grid Grid.Row="1" MinHeight="240" Background="Black" ClipToBounds="True">
+                            <controls:VideoSurface Name="Surface" HorizontalAlignment="Stretch"
+                                                   VerticalAlignment="Stretch" />
+                            <Border HorizontalAlignment="Center" VerticalAlignment="Bottom"
+                                    Margin="16" Padding="12,8" CornerRadius="8"
+                                    Background="#C01B2028"
+                                    IsVisible="{Binding IsVideoExpanded}">
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <Button Content="Return" Click="OnExitFullScreen"
+                                            ToolTip.Tip="Leave fullscreen (Esc)" />
+                                    <Button Content="🔊" IsVisible="{Binding !IsPlaybackMuted}"
+                                            Click="OnTogglePlaybackMute" ToolTip.Tip="Mute playback" />
+                                    <Button Content="🔇" IsVisible="{Binding IsPlaybackMuted}"
+                                            Click="OnTogglePlaybackMute" ToolTip.Tip="Unmute playback" />
+                                    <Slider Width="150" Minimum="0" Maximum="100"
+                                            Value="{Binding PlaybackVolume, Mode=TwoWay}"
+                                            VerticalAlignment="Center" ToolTip.Tip="Playback volume" />
+                                </StackPanel>
+                            </Border>
+                        </Grid>
+                        <WrapPanel Grid.Row="2" Orientation="Horizontal" Margin="0,8,0,0"
+                                   IsVisible="{Binding !IsVideoExpanded}">
+                            <Button Content="Fit to screen" Click="OnFit" Margin="0,0,8,8"
+                                    ToolTip.Tip="Expand the video to fill the FrameRelay window." />
+                            <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,0,8,8"
+                                        VerticalAlignment="Center">
+                                <Button Content="🔊" IsVisible="{Binding !IsPlaybackMuted}"
+                                        Click="OnTogglePlaybackMute" ToolTip.Tip="Mute playback" />
+                                <Button Content="🔇" IsVisible="{Binding IsPlaybackMuted}"
+                                        Click="OnTogglePlaybackMute" ToolTip.Tip="Unmute playback" />
+                                <Slider Width="150" Minimum="0" Maximum="100"
+                                        Value="{Binding PlaybackVolume, Mode=TwoWay}"
+                                        VerticalAlignment="Center" ToolTip.Tip="Playback volume" />
+                            </StackPanel>
+                        </WrapPanel>
+                    </Grid>
+                </Border>
+
+                <StackPanel Name="sessionDetails" Spacing="{StaticResource SpaceMd}"
+                            IsVisible="{Binding !IsVideoExpanded}">
+                    <Border Classes="card">
+                        <StackPanel Spacing="{StaticResource SpaceMd}">
+                            <TextBlock Text="Session details" FontSize="{StaticResource FontSizeLg}"
+                                       FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" />
+                            <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto,Auto,Auto,Auto"
+                                  RowSpacing="{StaticResource SpaceSm}">
+                                <TextBlock Grid.Row="0" Text="Session" Foreground="{StaticResource TextSecondaryBrush}" />
+                                <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding ViewModel.Snapshot.Phase}"
+                                           Foreground="{StaticResource TextPrimaryBrush}" />
+                                <TextBlock Grid.Row="1" Text="Signaling" Foreground="{StaticResource TextSecondaryBrush}" />
+                                <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding ViewModel.Snapshot.Signaling}"
+                                           Foreground="{StaticResource TextPrimaryBrush}" />
+                                <TextBlock Grid.Row="2" Text="Transport" Foreground="{StaticResource TextSecondaryBrush}" />
+                                <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding ViewModel.TransportText}"
+                                           TextWrapping="Wrap" Foreground="{StaticResource TextPrimaryBrush}" />
+                                <TextBlock Grid.Row="3" Text="Resolution" Foreground="{StaticResource TextSecondaryBrush}" />
+                                <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding ViewModel.ResolutionText}"
+                                           Foreground="{StaticResource TextPrimaryBrush}" />
+                                <TextBlock Grid.Row="4" Text="Codec" Foreground="{StaticResource TextSecondaryBrush}" />
+                                <TextBlock Grid.Row="4" Grid.Column="1" Text="{Binding ViewModel.CodecText}"
+                                           Foreground="{StaticResource TextPrimaryBrush}" />
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+                    <Border Classes="card">
+                        <StackPanel Spacing="{StaticResource SpaceMd}">
+                            <TextBlock Text="Connection stats" FontSize="{StaticResource FontSizeLg}"
+                                       FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" />
+                            <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto,Auto"
+                                  RowSpacing="{StaticResource SpaceSm}">
+                                <TextBlock Grid.Row="0" Text="Latency" Foreground="{StaticResource TextSecondaryBrush}" />
+                                <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding ViewModel.LatencyText}"
+                                           Foreground="{StaticResource TextPrimaryBrush}" />
+                                <TextBlock Grid.Row="1" Text="Bitrate" Foreground="{StaticResource TextSecondaryBrush}" />
+                                <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding ViewModel.VideoBitrateText}"
+                                           Foreground="{StaticResource TextPrimaryBrush}" />
+                                <TextBlock Grid.Row="2" Text="Frame rate" Foreground="{StaticResource TextSecondaryBrush}" />
+                                <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding ViewModel.VideoFrameRateText}"
+                                           Foreground="{StaticResource TextPrimaryBrush}" />
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+                    <Border Classes="card">
+                        <StackPanel Spacing="{StaticResource SpaceSm}">
+                            <Button Content="Stop watching" HorizontalAlignment="Stretch"
+                                    IsEnabled="{Binding ViewModel.CanStop}" Click="OnStop" />
+                            <TextBlock Text="{Binding ShellError}"
+                                       IsVisible="{Binding ShellError, Converter={x:Static ObjectConverters.IsNotNull}}"
+                                       TextWrapping="Wrap" FontSize="{StaticResource FontSizeSm}"
+                                       Foreground="{StaticResource DangerBrush}" />
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </Grid>
         </Grid>
-    </DockPanel>
+    </ScrollViewer>
 </UserControl>

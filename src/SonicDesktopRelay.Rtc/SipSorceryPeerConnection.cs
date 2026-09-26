@@ -238,5 +238,6 @@ public sealed class SipSorceryPeerConnection : IPeerConnection
 
 public sealed class SipSorceryPeerConnectionFactory(IceServerSettings ice) : IPeerConnectionFactory
 {
-    public IPeerConnection Create(Guid participantId) => new SipSorceryPeerConnection(participantId, ice);
+    public IPeerConnection Create(Guid participantId, bool? forceRelay = null) =>
+        new SipSorceryPeerConnection(participantId, forceRelay is { } relay ? ice with { ForceRelay = relay } : ice);
 }

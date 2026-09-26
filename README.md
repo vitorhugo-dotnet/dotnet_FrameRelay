@@ -1,5 +1,11 @@
 # FrameRelay
 
+## Discord one-click sharing
+
+The standalone Go bot provides `/framerelay share` and `/framerelay watch <code>`. Share opens this desktop app with a short-lived, single-use launch link; the user selects a capture target and starts the normal screen-share flow. When the session is ready, the bot posts a watch button in the originating channel. Watch opens this app directly into the selected session. The app registers the `framerelay://` protocol for the current Windows user and forwards links to its existing process when one is already running.
+
+RelayControl owns the launch capabilities and the normal session authorization, device pairing, capacity, and join checks. See the bot repository's README for its environment and container setup.
+
 FrameRelay is a Windows desktop screen-sharing client built on .NET 10 and Avalonia. The current
 desktop project names still use the legacy `SonicDesktopRelay.*` namespace; this migration does
 not rename them.
@@ -7,26 +13,23 @@ not rename them.
 ## Runtime requirements
 
 - Windows 10 build 19041 or later.
+- Windows 10 build 20348 or later for audio from a selected application window; older builds
+  can still share window video without audio.
 - Access to the FrameRelay backend/signaling service.
 - No separate video codec runtime installation. Screen video uses the H.264 transforms shipped
   with Windows.
 
 For source builds, install the .NET 10 SDK.
 
-## Discord desktop launch links
+## Installing from GitHub Releases
 
-Running the Windows executable registers `framerelay://launch?token=...` for the current user
-under `HKCU\Software\Classes\framerelay`, with no administrator access. Run the executable from
-its permanent install location once; moving it requires running it again. Launching through
-`dotnet app.dll` does not register a handler. A protocol link opens a new process; this unpackaged
-app has no single-instance handoff. Configure the backend address before opening a link.
+Download `FrameRelay-win-x64-<version>.msi` from a GitHub Release to install FrameRelay as a Windows application. The MSI installs under `%ProgramFiles%\FrameRelay` and registers an entry in Windows Installed apps / Programs and Features. Use that entry to upgrade or uninstall FrameRelay.
 
-The link is redeemed once with the desktop's DeviceBearer credentials. A share request opens
-the regular monitor and quality controls and waits for **Start sharing** before capturing;
-the session is then bound to Discord. If binding fails or the intent expires, capture stops and
-the user should request another link. A watch request opens the normal Watch session flow.
-Tokens are never written to application logs. Verify protocol activation, monitor consent and
-real Discord launches manually on Windows after installing the updated backend and bot.
+The MSI does not own per-user settings, credentials, or logs. Data under `%LOCALAPPDATA%\FrameRelay` remains after upgrades and uninstall. The portable ZIP and single-file EXE are still available as separate release downloads.
+
+Windows Installer uses a numeric three-part product version. Stable MSI versions match the release version (for example, `1.2.3`). For prerelease releases, MSI metadata uses the first three numeric components; `0.0.0-alpha.pr42.110` therefore has MSI ProductVersion `0.0.0`. The MSI download filename keeps the full release version.
+
+Prerelease installers with the same three numeric version components can replace one another because Windows Installer cannot order their prerelease labels. The installer does not distinguish which same-core prerelease is newer.
 
 ## Build and test
 
@@ -41,9 +44,16 @@ dotnet test SonicDesktopRelay.sln --configuration Release --no-build --no-restor
 Publishing uses one media session for every viewer:
 
 ```text
-Windows.Graphics.Capture -> BGRA -> NV12 -> Media Foundation H.264 -> WebRTC
-WASAPI loopback -> PCM 48 kHz stereo -> Opus ----------------------^
+Monitor: Windows.Graphics.Capture -> BGRA -> NV12 -> Media Foundation H.264 -> WebRTC
+         WASAPI system loopback -> PCM 48 kHz stereo -> Opus ---------^
+Window:  Windows.Graphics.Capture -> BGRA -> NV12 -> Media Foundation H.264 -> WebRTC
+         selected process tree -> PCM 48 kHz stereo -> Opus ----------^
 ```
+
+The Share page can target a monitor or an eligible application window. Window audio is limited
+to the selected process and its child processes. It never falls back to system loopback; when
+process capture is unsupported or unavailable, viewers receive window video only. See
+[screen publishing and watching](docs/screen-publishing.md) for target and diagnostics details.
 
 Watching mirrors that path:
 
@@ -150,3 +160,7 @@ UI-delivered, or rendered-frame counters stop.
 - [Screen publishing and watching](docs/screen-publishing.md)
 - [Native media validation](docs/native-media-validation.md)
 - [Third-party notices](THIRD-PARTY-NOTICES.md)
+
+## Discord launch links
+
+FrameRelay registers `framerelay://open/share/{token}` and `framerelay://open/watch/{token}` for the current Windows user. Launches are forwarded to the running app; share links wait for the user to choose a capture target and start sharing. Tokens are redeemed with the device identity and are not written to application logs.

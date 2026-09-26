@@ -11,6 +11,7 @@ internal static class Program
     {
         using var logging = FrameRelayLogging.InitializeDefault();
         var logger = logging.LoggerFactory.CreateLogger("FrameRelay.Program");
+        FrameRelayProtocolRegistration.EnsureRegistered(logger);
 
         AppDomain.CurrentDomain.UnhandledException += (_, eventArgs) =>
         {
@@ -43,12 +44,15 @@ internal static class Program
 
         try
         {
-            try { ProtocolActivation.RegisterCurrentUser(); }
-            catch (Exception error) when (error is UnauthorizedAccessException or System.Security.SecurityException or IOException)
+            var startup = LaunchActivationCoordinator.StartAsync(args, logger, CancellationToken.None)
+                .GetAwaiter().GetResult();
+            if (startup.Coordinator is null) return;
+            using (startup.Coordinator)
             {
-                logger.LogWarning("Could not register the current-user FrameRelay protocol handler.");
+                startup.Coordinator.Activated += LaunchActivationRouter.Dispatch;
+                LaunchActivationRouter.SetInitial(startup.Initial);
+                BuildAvaloniaApp().StartWithClassicDesktopLifetime(startup.Arguments);
             }
-            BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
         }
         catch (Exception exception)
         {

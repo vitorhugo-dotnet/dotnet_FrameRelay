@@ -6,53 +6,39 @@ namespace SonicDesktopRelay.ApiClient.Tests;
 public sealed class LaunchIntentApiClientTests
 {
     [Fact]
-    public async Task Redeems_and_binds_with_the_documented_device_contract()
+    public async Task Share_consume_and_complete_use_device_authenticated_launch_routes()
     {
-        var id = Guid.NewGuid();
-        var session = Guid.NewGuid();
         var handler = new StubHttpMessageHandler()
-            .Respond(HttpStatusCode.OK, $$"""{"id":"{{id}}","kind":"share","code":null,"sessionId":null}""")
-            .Respond(HttpStatusCode.NoContent, "");
-        var client = new LaunchIntentApiClient(new HttpClient(handler) { BaseAddress = new Uri("https://relay.test") });
-        var intent = await client.RedeemAsync(new string('a', 64), CancellationToken.None);
-        await client.BindAsync(intent.Id, session, CancellationToken.None);
-        Assert.Equal("share", intent.Kind);
-        Assert.Equal("/api/launch-intents/redeem", handler.Requests[0].RequestUri!.AbsolutePath);
-        Assert.Contains("\"token\":", handler.RequestBodies[0]);
-        Assert.Equal($"/api/launch-intents/{id}/bind", handler.Requests[1].RequestUri!.AbsolutePath);
-        Assert.Contains(session.ToString(), handler.RequestBodies[1]);
-        Assert.All(handler.Requests, request => Assert.Null(request.Headers.Authorization));
+            .Respond(HttpStatusCode.OK, "{\"id\":\"6f9619ff-8b86-d011-b42d-00cf4fc964ff\",\"expiresAt\":\"2026-09-24T12:00:00Z\"}")
+            .Respond(HttpStatusCode.NoContent, string.Empty);
+        var client = new LaunchIntentApiClient(HttpClientFor(handler));
+        var intentId = Guid.Parse("b06d9b89-4980-4163-92de-9ee77960c485");
+        var sessionId = Guid.Parse("6f9619ff-8b86-d011-b42d-00cf4fc964ff");
+
+        var consumed = await client.ConsumeShareAsync("opaque-token", CancellationToken.None);
+        await client.CompleteShareAsync(intentId, sessionId, CancellationToken.None);
+
+        Assert.Equal("/api/launch-intents/share/consume", handler.Requests[0].RequestUri!.AbsolutePath);
+        Assert.Contains("opaque-token", handler.RequestBodies[0]);
+        Assert.Equal($"/api/launch-intents/share/{intentId}/complete", handler.Requests[1].RequestUri!.AbsolutePath);
+        Assert.Contains(sessionId.ToString(), handler.RequestBodies[1]);
+        Assert.Equal(sessionId, consumed.Id);
     }
 
     [Fact]
-    public void Watch_prefers_code_and_supports_session_id_fallback()
+    public async Task Watch_resolution_returns_the_session_id_without_a_code()
     {
-        var id = Guid.NewGuid();
-        var session = Guid.NewGuid();
-        Assert.Equal("AB12CD", new RedeemedLaunchIntent(id, "watch", "AB12CD", session).WatchTarget);
-        Assert.Equal(session.ToString(), new RedeemedLaunchIntent(id, "watch", null, session).WatchTarget);
-        Assert.Throws<InvalidOperationException>(() => new RedeemedLaunchIntent(id, "watch", null, null).WatchTarget);
+        var handler = new StubHttpMessageHandler().Respond(HttpStatusCode.OK,
+            "{\"sessionId\":\"6f9619ff-8b86-d011-b42d-00cf4fc964ff\"}");
+        var client = new LaunchIntentApiClient(HttpClientFor(handler));
+
+        var sessionId = await client.ResolveWatchAsync("opaque-watch-token", CancellationToken.None);
+
+        Assert.Equal("/api/launch-intents/watch/resolve", handler.Requests[0].RequestUri!.AbsolutePath);
+        Assert.Contains("opaque-watch-token", handler.RequestBodies[0]);
+        Assert.Equal(Guid.Parse("6f9619ff-8b86-d011-b42d-00cf4fc964ff"), sessionId);
     }
 
-    [Theory]
-    [InlineData("{}")]
-    [InlineData("not json")]
-    [InlineData("{\"id\":\"6f9619ff-8b86-d011-b42d-00cf4fc964ff\",\"kind\":\"host\"}")]
-    public async Task Rejects_invalid_intent_before_starting_a_session(string body)
-    {
-        var handler = new StubHttpMessageHandler().Respond(HttpStatusCode.OK, body);
-        var client = new LaunchIntentApiClient(new HttpClient(handler) { BaseAddress = new Uri("https://relay.test") });
-        await Assert.ThrowsAsync<InvalidOperationException>(() => client.RedeemAsync("unused", CancellationToken.None));
-    }
-
-    [Fact]
-    public async Task Session_id_watch_joins_existing_authenticated_route()
-    {
-        var id = Guid.NewGuid();
-        var handler = new StubHttpMessageHandler().Respond(HttpStatusCode.OK, $$"""{"id":"{{id}}"}""");
-        var client = new SessionApiClient(new HttpClient(handler) { BaseAddress = new Uri("https://relay.test") });
-        Assert.Equal(id, (await client.JoinByIdAsync(id, CancellationToken.None)).Id);
-        Assert.Equal($"/api/sessions/{id}/join", handler.Requests[0].RequestUri!.AbsolutePath);
-        Assert.Empty(handler.RequestBodies[0]);
-    }
+    private static HttpClient HttpClientFor(StubHttpMessageHandler handler) =>
+        new(handler) { BaseAddress = new Uri("https://relay.example.com") };
 }

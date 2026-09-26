@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Globalization;
 using System.Runtime.CompilerServices;
 using SonicDesktopRelay.Media;
 
@@ -21,7 +22,7 @@ public enum Page
 public sealed class MainWindowViewModel : INotifyPropertyChanged
 {
     private SessionSnapshot _snapshot = SessionSnapshot.Idle;
-    private Page _currentPage = Page.Home;
+    private Page _currentPage = Page.Share;
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
@@ -47,6 +48,35 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
 
     public string? Code => _snapshot.Code;
 
+    /// <summary>Only a sharing snapshot has a meaningful viewer count.</summary>
+    public bool HasViewerCount => _snapshot.Phase == SessionPhase.Sharing;
+
+    public string ViewerCountText =>
+        HasViewerCount ? _snapshot.ViewerCount.ToString() : "---";
+
+    public string ResolutionText => _snapshot.Metrics is { Width: > 0, Height: > 0 } metrics
+        ? $"{metrics.Width} × {metrics.Height}" : "---";
+
+    public string VideoBitrateText => _snapshot.Metrics?.VideoBitrateBitsPerSecond is { } bitrate
+        ? FormatBitrate(bitrate)
+        : _snapshot.Metrics?.TargetVideoBitrateBitsPerSecond is { } targetBitrate
+            ? FormatBitrate(targetBitrate, " target") : "---";
+
+    public string VideoFrameRateText => _snapshot.Metrics?.VideoFramesPerSecond is { } fps
+        ? FormatFrameRate(fps)
+        : _snapshot.Metrics?.TargetVideoFramesPerSecond is { } targetFps
+            ? FormatFrameRate(targetFps, " target") : "---";
+
+    public string LatencyText => _snapshot.Metrics?.LatencyMilliseconds is { } latency
+        && double.IsFinite(latency) && latency >= 0
+            ? $"{latency.ToString("0", CultureInfo.InvariantCulture)} ms" : "---";
+
+    public string CodecText => string.IsNullOrWhiteSpace(_snapshot.Metrics?.Codec)
+        ? "---" : _snapshot.Metrics.Codec;
+
+    public string TransportText => string.IsNullOrWhiteSpace(_snapshot.Metrics?.Transport)
+        ? "---" : _snapshot.Metrics.Transport;
+
     public string StatusText => _snapshot.Phase switch
     {
         SessionPhase.Idle => "Ready",
@@ -67,6 +97,14 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         Raise(nameof(CanWatch));
         Raise(nameof(CanStop));
         Raise(nameof(Code));
+        Raise(nameof(HasViewerCount));
+        Raise(nameof(ViewerCountText));
+        Raise(nameof(ResolutionText));
+        Raise(nameof(VideoBitrateText));
+        Raise(nameof(VideoFrameRateText));
+        Raise(nameof(LatencyText));
+        Raise(nameof(CodecText));
+        Raise(nameof(TransportText));
         Raise(nameof(StatusText));
     }
 
@@ -96,6 +134,16 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         "media_unavailable" => "Screen capture or the video encoder could not start. See Diagnostics.",
         _ => "Something went wrong. Try again."
     };
+
+    private static string FormatBitrate(double value, string suffix = "") =>
+        !double.IsFinite(value) || value < 0 ? "---"
+        : value >= 1_000_000
+            ? $"{(value / 1_000_000).ToString("0.0", CultureInfo.InvariantCulture)} Mbps{suffix}"
+            : $"{(value / 1_000).ToString("0.0", CultureInfo.InvariantCulture)} kbps{suffix}";
+
+    private static string FormatFrameRate(double value, string suffix = "") =>
+        !double.IsFinite(value) || value < 0 ? "---"
+        : $"{value.ToString("0.0", CultureInfo.InvariantCulture)} fps{suffix}";
 
     private void Raise([CallerMemberName] string? property = null) =>
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(property));

@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
+using SonicDesktopRelay.Media;
 using Vortice.Direct3D11;
 using Windows.Graphics.Capture;
 using Windows.Graphics.DirectX.Direct3D11;
@@ -74,6 +75,31 @@ internal static unsafe partial class CaptureInterop
         var createForMonitor =
             (delegate* unmanaged[Stdcall]<nint, nint, Guid*, nint*, int>)(*(void***)thisPtr)[4];
         Marshal.ThrowExceptionForHR(createForMonitor(thisPtr, hMonitor, &iid, &itemPtr));
+
+        try
+        {
+            return GraphicsCaptureItem.FromAbi(itemPtr);
+        }
+        finally
+        {
+            Marshal.Release(itemPtr);
+        }
+    }
+
+    internal static GraphicsCaptureItem CreateItemForWindow(nint hwnd)
+    {
+        if (hwnd == nint.Zero)
+            throw new ArgumentException("A valid window handle is required.", nameof(hwnd));
+
+        using var factory = ActivationFactory.Get("Windows.Graphics.Capture.GraphicsCaptureItem", ItemInteropIid);
+
+        var iid = CaptureItemIid;
+        nint itemPtr;
+        var thisPtr = factory.ThisPtr;
+        // IGraphicsCaptureItemInterop: [0..2] IUnknown, [3] CreateForWindow, [4] CreateForMonitor.
+        var createForWindow =
+            (delegate* unmanaged[Stdcall]<nint, nint, Guid*, nint*, int>)(*(void***)thisPtr)[3];
+        Marshal.ThrowExceptionForHR(createForWindow(thisPtr, hwnd, &iid, &itemPtr));
 
         try
         {
@@ -172,4 +198,44 @@ internal static unsafe partial class CaptureInterop
         /// <summary>CCHDEVICENAME, e.g. <c>\\.\DISPLAY1</c>.</summary>
         public fixed char szDevice[32];
     }
+}
+
+internal interface IGraphicsCaptureItemFactory
+{
+    GraphicsCaptureItem CreateForMonitor(MonitorInfo monitor);
+
+    GraphicsCaptureItem CreateForWindow(WindowInfo window);
+}
+
+internal sealed class GraphicsCaptureItemFactory : IGraphicsCaptureItemFactory
+{
+    private readonly Func<MonitorInfo, GraphicsCaptureItem> _createForMonitor;
+    private readonly Func<WindowInfo, GraphicsCaptureItem> _createForWindow;
+
+    public GraphicsCaptureItemFactory()
+        : this(CreateMonitorItem, CreateWindowItem)
+    {
+    }
+
+    internal GraphicsCaptureItemFactory(
+        Func<MonitorInfo, GraphicsCaptureItem> createForMonitor,
+        Func<WindowInfo, GraphicsCaptureItem> createForWindow)
+    {
+        _createForMonitor = createForMonitor ?? throw new ArgumentNullException(nameof(createForMonitor));
+        _createForWindow = createForWindow ?? throw new ArgumentNullException(nameof(createForWindow));
+    }
+
+    public GraphicsCaptureItem CreateForMonitor(MonitorInfo monitor) => _createForMonitor(monitor);
+
+    public GraphicsCaptureItem CreateForWindow(WindowInfo window) => _createForWindow(window);
+
+    private static GraphicsCaptureItem CreateMonitorItem(MonitorInfo monitor)
+    {
+        if (!CaptureInterop.TryFindMonitorHandle(monitor.Id, out var hMonitor))
+            throw new InvalidOperationException($"Monitor '{monitor.Id}' is not connected.");
+        return CaptureInterop.CreateItemForMonitor(hMonitor);
+    }
+
+    private static GraphicsCaptureItem CreateWindowItem(WindowInfo window) =>
+        CaptureInterop.CreateItemForWindow(window.Handle);
 }

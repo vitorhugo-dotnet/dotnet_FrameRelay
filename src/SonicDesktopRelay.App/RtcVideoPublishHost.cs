@@ -24,18 +24,23 @@ public sealed class RtcVideoPublishHost(
     private readonly ILogger<RtcVideoPublishHost> _logger =
         loggerFactory?.CreateLogger<RtcVideoPublishHost>() ?? NullLogger<RtcVideoPublishHost>.Instance;
     private readonly SemaphoreSlim _gate = new(1, 1);
-    private readonly Lock _audioPreferenceGate = new();
+    private readonly PublisherCaptureSelection _captureSelection = new(
+        loggerFactory?.CreateLogger("SonicDesktopRelay.Media.Windows.GraphicsCaptureItemSource"));
     private static readonly IReadOnlyDictionary<Guid, RtcTransportDiagnostics> EmptyTransportDiagnostics =
         new Dictionary<Guid, RtcTransportDiagnostics>();
 
     private ScreenPublishPipeline? _pipeline;
     private MediaFoundationH264Encoder? _encoder;
-    private GraphicsCaptureScreenSource? _capture;
+    private IScreenCaptureSource? _capture;
     private AudioPublishPipeline? _audioPipeline;
-    private DiscordExcludingAudioSource? _audioSource;
-    private bool _ignoreDiscordAudio;
+    private IAudioCaptureSource? _audioSource;
     private VideoPublisher? _publisher;
+    private ITimer? _diagnosticsTimer;
     private string? _audioPipelineFailure;
+    private CaptureTarget? _activeCaptureTarget;
+    private DiscordExcludingAudioSource? _discordExcludingAudio;
+    private MutedAudioCaptureSource? _discordWindowAudio;
+    private bool _ignoreDiscordAudio;
 
     public string? EncoderName { get; private set; }
 
@@ -53,6 +58,26 @@ public sealed class RtcVideoPublishHost(
 
     public IReadOnlyDictionary<Guid, RtcTransportDiagnostics> TransportDiagnostics =>
         _publisher?.TransportDiagnostics ?? EmptyTransportDiagnostics;
+
+    /// <summary>Current effective encoder settings and selected peer transports for the UI.</summary>
+    public SessionMediaMetrics? CurrentMetrics
+    {
+        get
+        {
+            if (_pipeline is null) return null;
+            var video = VideoDiagnostics;
+            var quality = EffectiveQuality;
+            var transport = TransportDiagnostics.Count == 0 ? null : string.Join(", ",
+                TransportDiagnostics.Values.Select(x => x.ToString()).Distinct(StringComparer.Ordinal));
+            return new SessionMediaMetrics(
+                Width: video?.Width is > 0 ? video.Width : null,
+                Height: video?.Height is > 0 ? video.Height : null,
+                Codec: video?.OutputFormat ?? EncoderName,
+                Transport: transport,
+                TargetVideoBitrateBitsPerSecond: quality?.TargetBitsPerSecond,
+                TargetVideoFramesPerSecond: quality?.FramesPerSecond);
+        }
+    }
 
     public long FramesCaptured => _pipeline?.FramesCaptured ?? 0;
 
@@ -72,11 +97,11 @@ public sealed class RtcVideoPublishHost(
 
     public int ViewersAwaitingKeyFrame => _publisher?.ViewersAwaitingKeyFrame ?? 0;
 
-    public long CaptureFramesArrived => _capture?.FramesArrived ?? 0;
+    public long CaptureFramesArrived => (_capture as IScreenCaptureDiagnostics)?.FramesArrived ?? 0;
 
-    public long CaptureFramesDelivered => _capture?.FramesDelivered ?? 0;
+    public long CaptureFramesDelivered => (_capture as IScreenCaptureDiagnostics)?.FramesDelivered ?? 0;
 
-    public long CaptureFramesDropped => _capture?.FramesDropped ?? 0;
+    public long CaptureFramesDropped => (_capture as IScreenCaptureDiagnostics)?.FramesDropped ?? 0;
 
     public long EncodeFramesDropped => _pipeline?.DroppedEncodeFrames ?? 0;
 
@@ -88,9 +113,37 @@ public sealed class RtcVideoPublishHost(
 
     public string? AudioEncoderName => _audioPipeline?.EncoderName;
 
-    public string? AudioCaptureEndpoint => _audioSource?.ActiveEndpointName;
+    public string? AudioCaptureEndpoint => (_audioSource as WasapiLoopbackAudioSource)?.ActiveEndpointName
+                                          ?? (_audioSource as ProcessLoopbackAudioSource)?.TargetProcessName
+                                          ?? _discordExcludingAudio?.ActiveEndpointName
+                                          ?? ((_audioSource as MutedAudioCaptureSource)?.Inner switch
+                                          {
+                                              ProcessLoopbackAudioSource process => process.TargetProcessName,
+                                              _ => null
+                                          });
 
-    public string? AudioDegradedReason => _audioPipelineFailure ?? _audioSource?.DegradedReason;
+    public string? AudioDegradedReason => _audioPipelineFailure
+        ?? (_audioSource as WasapiLoopbackAudioSource)?.DegradedReason
+        ?? (_audioSource as ProcessLoopbackAudioSource)?.DegradedReason
+        ?? _discordExcludingAudio?.DegradedReason
+        ?? ((_audioSource as MutedAudioCaptureSource)?.Inner switch
+        {
+            ProcessLoopbackAudioSource process => process.DegradedReason,
+            _ => null
+        });
+
+    public async Task SetIgnoreDiscordAudioAsync(bool value)
+    {
+        await _gate.WaitAsync();
+        try
+        {
+            _ignoreDiscordAudio = value;
+            if (_discordExcludingAudio is { } systemAudio)
+                await systemAudio.SetIgnoreDiscordAudioAsync(value);
+            _discordWindowAudio?.SetMuted(value);
+        }
+        finally { _gate.Release(); }
+    }
 
     /// <summary>Why the required video media stack could not start, when it could not.</summary>
     public string? StartFailure { get; private set; }
@@ -104,7 +157,15 @@ public sealed class RtcVideoPublishHost(
     /// </summary>
     public event Action? VideoDiagnosticsChanged;
 
+    public event Action<string>? CaptureTargetClosed;
+
+    public Task StartAsync(CaptureTarget target, VideoPublishProfile profile, CancellationToken ct) =>
+        StartCoreAsync(target, profile, ct);
+
     public async Task StartAsync(MonitorInfo monitor, VideoPublishProfile profile, CancellationToken ct)
+        => await StartCoreAsync(new CaptureTarget.Monitor(monitor), profile, ct);
+
+    private async Task StartCoreAsync(CaptureTarget target, VideoPublishProfile profile, CancellationToken ct)
     {
         await _gate.WaitAsync(ct);
         try
@@ -126,8 +187,11 @@ public sealed class RtcVideoPublishHost(
             EncoderName = encoder.Name;
             EncoderRejections = encoder.RejectionLog;
 
-            var capture = new GraphicsCaptureScreenSource();
+            var capture = _captureSelection.CreateVideo(target);
             _capture = capture;
+            _activeCaptureTarget = target;
+            ((IScreenCaptureSource)capture).TargetClosed += OnCaptureTargetClosed;
+            capture.DimensionsChanged += OnCaptureDimensionsChanged;
             var pipeline = new ScreenPublishPipeline(
                 capture,
                 encoder,
@@ -139,37 +203,56 @@ public sealed class RtcVideoPublishHost(
             // DisposeStackAsync can still release the capture source and Media Foundation MFT.
             _pipeline = pipeline;
 
-            await pipeline.StartAsync(monitor, ct);
+            await pipeline.StartAsync(target, ct);
 
             AudioPublishPipeline? audioPipeline = null;
-            var audioSource = new DiscordExcludingAudioSource();
-            lock (_audioPreferenceGate)
+            IAudioCaptureSource? audioSource;
+            if (target is CaptureTarget.Monitor)
             {
-                _audioSource = audioSource;
-                audioSource.RequestIgnoreDiscordAudio(_ignoreDiscordAudio);
+                _discordExcludingAudio = new DiscordExcludingAudioSource();
+                _discordExcludingAudio.RequestIgnoreDiscordAudio(_ignoreDiscordAudio);
+                audioSource = _discordExcludingAudio;
             }
-            audioSource.DiagnosticsChanged += OnAudioCaptureDiagnosticsChanged;
-
-            var candidateAudioPipeline = new AudioPublishPipeline(
-                audioSource,
-                new OpusAudioCodec(channels: 2),
-                clock);
-            candidateAudioPipeline.Failed += OnAudioPipelineFailed;
-
-            try
+            else
             {
-                await candidateAudioPipeline.StartAsync(ct);
-                audioPipeline = candidateAudioPipeline;
-                _audioPipeline = candidateAudioPipeline;
+                audioSource = _captureSelection.CreateAudio(target);
+                if (target is CaptureTarget.Window windowTarget && audioSource is not null
+                    && IsDiscordProcessName(windowTarget.Info.ProcessName))
+                {
+                    _discordWindowAudio = new MutedAudioCaptureSource(audioSource, _ignoreDiscordAudio);
+                    audioSource = _discordWindowAudio;
+                }
             }
-            catch (Exception e) when (e is not OperationCanceledException)
+            _audioSource = audioSource;
+            if (audioSource is null)
+                _audioPipelineFailure = "Per-process audio capture requires Windows build 20348 or later.";
+            else
             {
-                // System audio is optional to the survival of the screen share. A missing/removed
-                // endpoint or Opus failure is surfaced in Diagnostics while video keeps publishing.
-                _audioPipelineFailure = audioSource.DegradedReason ?? e.Message;
-                audioSource.DiagnosticsChanged -= OnAudioCaptureDiagnosticsChanged;
-                candidateAudioPipeline.Failed -= OnAudioPipelineFailed;
-                await candidateAudioPipeline.DisposeAsync();
+                var candidateAudioPipeline = new AudioPublishPipeline(audioSource, new OpusAudioCodec(channels: 2), clock);
+                candidateAudioPipeline.Failed += OnAudioPipelineFailed;
+                try
+                {
+                    await candidateAudioPipeline.StartAsync(ct);
+                    if (audioSource is not ProcessLoopbackAudioSource processAudio || processAudio.IsAvailable)
+                    {
+                        audioPipeline = candidateAudioPipeline;
+                        _audioPipeline = candidateAudioPipeline;
+                    }
+                    else
+                    {
+                        _audioPipelineFailure = processAudio.DegradedReason;
+                        candidateAudioPipeline.Failed -= OnAudioPipelineFailed;
+                        await candidateAudioPipeline.DisposeAsync();
+                        _audioSource = null;
+                    }
+                }
+                catch (Exception e) when (e is not OperationCanceledException)
+                {
+                    _audioPipelineFailure = (audioSource as ProcessLoopbackAudioSource)?.DegradedReason
+                                            ?? (audioSource as WasapiLoopbackAudioSource)?.DegradedReason ?? e.Message;
+                    candidateAudioPipeline.Failed -= OnAudioPipelineFailed;
+                    await candidateAudioPipeline.DisposeAsync();
+                }
             }
 
             _publisher = new VideoPublisher(
@@ -178,15 +261,37 @@ public sealed class RtcVideoPublishHost(
                 connection,
                 audioPipeline);
             _publisher.TransportDiagnosticsChanged += OnTransportDiagnosticsChanged;
+            _diagnosticsTimer = TimeProvider.System.CreateTimer(
+                _ => VideoDiagnosticsChanged?.Invoke(), null,
+                TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
 
             _logger.LogInformation(
-                "Publisher media stack started. encoder={EncoderName} transform={TransformName} acceleration={Acceleration} monitor={MonitorId} dimensions={Width}x{Height}",
+                "Publisher media stack started. encoder={EncoderName} transform={TransformName} acceleration={Acceleration} capture_source_type={CaptureSourceType} target_title={TargetTitle} target_process={TargetProcess} target_pid={TargetPid} dimensions_width={Width} dimensions_height={Height}",
                 encoder.Name,
                 encoder.TransformInfo?.Name ?? encoder.Name,
                 encoder.TransformInfo?.IsHardware == true ? "hardware" : "software",
-                monitor.Id,
-                monitor.Width,
-                monitor.Height);
+                target is CaptureTarget.Window ? "window" : "monitor",
+                target is CaptureTarget.Window targetWindow ? targetWindow.Info.Title : null,
+                target is CaptureTarget.Window processWindow ? processWindow.Info.ProcessName : null,
+                target is CaptureTarget.Window pidWindow ? pidWindow.Info.ProcessId : null,
+                capture.CurrentDimensions.Width,
+                capture.CurrentDimensions.Height);
+
+            _logger.LogInformation(
+                "Publisher audio capture selected. audio_capture_mode={AudioCaptureMode} target_process={TargetProcess} target_pid={TargetPid} process_tree={IncludesProcessTree} available={Available} activation_result={ActivationResult} degraded_reason={DegradedReason}",
+                target is CaptureTarget.Window ? "process_tree" : "system_loopback",
+                target is CaptureTarget.Window audioWindow ? audioWindow.Info.ProcessName : null,
+                target is CaptureTarget.Window audioPidWindow ? audioPidWindow.Info.ProcessId : null,
+                target is CaptureTarget.Window,
+                audioSource is not null
+                    && (audioSource is not ProcessLoopbackAudioSource processSource || processSource.IsAvailable),
+                audioSource switch
+                {
+                    null => "unsupported_os",
+                    ProcessLoopbackAudioSource process => process.ActivationResult,
+                    _ => "started"
+                },
+                _audioPipelineFailure);
         }
         catch (Exception e) when (e is InvalidOperationException or PlatformNotSupportedException
                                       or HttpRequestException or ApiException)
@@ -206,26 +311,6 @@ public sealed class RtcVideoPublishHost(
         {
             _gate.Release();
         }
-    }
-
-    public async Task SetIgnoreDiscordAudioAsync(bool value)
-    {
-        // Publish the request and silence the current source while startup/stop may still
-        // own the lifecycle gate. Source installation uses the same lock, so startup cannot
-        // install an unfiltered source after a concurrent enable request.
-        lock (_audioPreferenceGate)
-        {
-            _ignoreDiscordAudio = value;
-            _audioSource?.RequestIgnoreDiscordAudio(value);
-        }
-        await _gate.WaitAsync();
-        try
-        {
-            // Refresh the latest request; queued toggles must not restore an older preference.
-            if (_audioSource is not null) await _audioSource.RefreshAsync();
-            VideoDiagnosticsChanged?.Invoke();
-        }
-        finally { _gate.Release(); }
     }
 
     public async Task StopAsync()
@@ -259,7 +344,22 @@ public sealed class RtcVideoPublishHost(
     private void OnAudioPipelineFailed(Exception error)
         => _audioPipelineFailure ??= error.Message;
 
-    private void OnAudioCaptureDiagnosticsChanged() => VideoDiagnosticsChanged?.Invoke();
+    private void OnCaptureTargetClosed(string reason)
+    {
+        _logger.LogWarning("Capture target closed. close_reason={CloseReason}", reason);
+        CaptureTargetClosed?.Invoke(reason);
+    }
+
+    private void OnCaptureDimensionsChanged(int width, int height)
+    {
+        _logger.LogInformation(
+            "Capture target resized. capture_source_type={CaptureSourceType} target_title={TargetTitle} dimensions_width={Width} dimensions_height={Height} resize_reason={ResizeReason}",
+            _activeCaptureTarget is CaptureTarget.Window ? "window" : "monitor",
+            (_activeCaptureTarget as CaptureTarget.Window)?.Info.Title,
+            width,
+            height,
+            "content_size_changed");
+    }
 
     private void OnTransportDiagnosticsChanged(Guid participantId, RtcTransportDiagnostics diagnostics)
     {
@@ -284,7 +384,11 @@ public sealed class RtcVideoPublishHost(
 
     private async Task DisposeStackAsync()
     {
-        if (_audioSource is not null) _audioSource.DiagnosticsChanged -= OnAudioCaptureDiagnosticsChanged;
+        if (_diagnosticsTimer is not null)
+        {
+            await _diagnosticsTimer.DisposeAsync();
+            _diagnosticsTimer = null;
+        }
         if (_publisher is not null)
         {
             _publisher.TransportDiagnosticsChanged -= OnTransportDiagnosticsChanged;
@@ -299,8 +403,17 @@ public sealed class RtcVideoPublishHost(
             _audioPipeline = null;
         }
 
-        lock (_audioPreferenceGate) _audioSource = null;
+        _audioSource = null;
+        _discordExcludingAudio = null;
+        _discordWindowAudio = null;
+
+        if (_capture is { } captureSource)
+        {
+            captureSource.TargetClosed -= OnCaptureTargetClosed;
+            captureSource.DimensionsChanged -= OnCaptureDimensionsChanged;
+        }
         _capture = null;
+        _activeCaptureTarget = null;
 
         if (_pipeline is not null)
         {
@@ -311,4 +424,94 @@ public sealed class RtcVideoPublishHost(
             _encoder = null;
         }
     }
+
+    private static bool IsDiscordProcessName(string name) =>
+        name.Equals("Discord", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("Discord.exe", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("DiscordPTB", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("DiscordPTB.exe", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("DiscordCanary", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("DiscordCanary.exe", StringComparison.OrdinalIgnoreCase);
+}
+
+internal sealed class MutedAudioCaptureSource(IAudioCaptureSource inner, bool muted) : IAudioCaptureSource
+{
+    private bool _muted = muted;
+    public IAudioCaptureSource Inner => inner;
+    public event Action<AudioFrame>? AudioCaptured;
+
+    public void SetMuted(bool value) => Volatile.Write(ref _muted, value);
+
+    public async Task StartAsync(CancellationToken ct)
+    {
+        inner.AudioCaptured += OnAudioCaptured;
+        try { await inner.StartAsync(ct); }
+        catch
+        {
+            inner.AudioCaptured -= OnAudioCaptured;
+            throw;
+        }
+    }
+
+    public async Task StopAsync()
+    {
+        inner.AudioCaptured -= OnAudioCaptured;
+        await inner.StopAsync();
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        inner.AudioCaptured -= OnAudioCaptured;
+        await inner.DisposeAsync();
+    }
+
+    private void OnAudioCaptured(AudioFrame frame)
+    {
+        if (!Volatile.Read(ref _muted)) AudioCaptured?.Invoke(frame);
+    }
+}
+
+internal sealed class PublisherCaptureSelection
+{
+    private readonly Func<IScreenCaptureSource> _monitorVideo;
+    private readonly Func<IScreenCaptureSource> _windowVideo;
+    private readonly Func<IAudioCaptureSource> _systemAudio;
+    private readonly Func<WindowInfo, IAudioCaptureSource> _processAudio;
+    private readonly Func<bool> _processLoopbackSupported;
+
+    public PublisherCaptureSelection(ILogger? captureLogger = null)
+        : this(
+            () => captureLogger is null ? new GraphicsCaptureScreenSource() : new GraphicsCaptureScreenSource(captureLogger),
+            () => captureLogger is null ? new GraphicsCaptureWindowSource() : new GraphicsCaptureWindowSource(captureLogger),
+            () => new WasapiLoopbackAudioSource(), window => new ProcessLoopbackAudioSource(window),
+            () => ProcessLoopbackAudioSource.IsSupported) { }
+
+    internal PublisherCaptureSelection(
+        Func<IScreenCaptureSource> monitorVideo,
+        Func<IScreenCaptureSource> windowVideo,
+        Func<IAudioCaptureSource> systemAudio,
+        Func<WindowInfo, IAudioCaptureSource> processAudio,
+        Func<bool> processLoopbackSupported)
+    {
+        _monitorVideo = monitorVideo;
+        _windowVideo = windowVideo;
+        _systemAudio = systemAudio;
+        _processAudio = processAudio;
+        _processLoopbackSupported = processLoopbackSupported;
+    }
+
+    public IScreenCaptureSource CreateVideo(CaptureTarget target) => target switch
+    {
+        CaptureTarget.Monitor => _monitorVideo(),
+        CaptureTarget.Window => _windowVideo(),
+        _ => throw new ArgumentOutOfRangeException(nameof(target))
+    };
+
+    public IAudioCaptureSource? CreateAudio(CaptureTarget target) => target switch
+    {
+        CaptureTarget.Monitor => _systemAudio(),
+        CaptureTarget.Window window when _processLoopbackSupported() => _processAudio(window.Info),
+        CaptureTarget.Window => null,
+        _ => throw new ArgumentOutOfRangeException(nameof(target))
+    };
 }

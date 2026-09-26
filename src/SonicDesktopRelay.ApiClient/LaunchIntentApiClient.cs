@@ -1,37 +1,33 @@
 using System.Net.Http.Json;
-using System.Text.Json;
 
 namespace SonicDesktopRelay.ApiClient;
 
-public sealed record RedeemedLaunchIntent(Guid Id, string Kind, string? Code, Guid? SessionId)
-{
-    public string WatchTarget => !string.IsNullOrWhiteSpace(Code) ? Code
-        : SessionId is { } id && id != Guid.Empty ? id.ToString()
-        : throw new InvalidOperationException("The watch link has no session target.");
-}
+public sealed record ConsumeShareIntentRequest(string Token);
+public sealed record ConsumeShareIntentResponse(Guid Id, DateTimeOffset ExpiresAt);
+public sealed record CompleteShareIntentRequest(Guid SessionId);
+public sealed record ResolveWatchIntentRequest(string Token);
+public sealed record ResolveWatchIntentResponse(Guid SessionId);
 
-/// <summary>Uses the composition's DeviceBearer HTTP client, never a bot/service credential.</summary>
 public sealed class LaunchIntentApiClient(HttpClient http)
 {
-    public async Task<RedeemedLaunchIntent> RedeemAsync(string token, CancellationToken ct)
+    public async Task<ConsumeShareIntentResponse> ConsumeShareAsync(string token, CancellationToken ct)
     {
-        using var response = await http.PostAsJsonAsync("/api/launch-intents/redeem", new { token }, ct);
-        RedeemedLaunchIntent intent;
-        try { intent = await ApiResponse.ReadAsync<RedeemedLaunchIntent>(response, ct); }
-        catch (JsonException)
-        {
-            // Do not preserve response details in an exception that might reach startup logging.
-            throw new InvalidOperationException("The backend returned an invalid launch response.");
-        }
-        if (intent.Id == Guid.Empty || intent.Kind is not ("share" or "watch"))
-            throw new InvalidOperationException("The backend returned an invalid launch intent.");
-        if (intent.Kind == "watch") _ = intent.WatchTarget;
-        return intent;
+        var response = await http.PostAsJsonAsync("/api/launch-intents/share/consume",
+            new ConsumeShareIntentRequest(token), ct);
+        return await ApiResponse.ReadAsync<ConsumeShareIntentResponse>(response, ct);
     }
 
-    public async Task BindAsync(Guid intentId, Guid sessionId, CancellationToken ct)
+    public async Task CompleteShareAsync(Guid intentId, Guid sessionId, CancellationToken ct)
     {
-        using var response = await http.PostAsJsonAsync($"/api/launch-intents/{intentId}/bind", new { sessionId }, ct);
+        var response = await http.PostAsJsonAsync($"/api/launch-intents/share/{intentId}/complete",
+            new CompleteShareIntentRequest(sessionId), ct);
         await ApiResponse.EnsureSuccessAsync(response, ct);
+    }
+
+    public async Task<Guid> ResolveWatchAsync(string token, CancellationToken ct)
+    {
+        var response = await http.PostAsJsonAsync("/api/launch-intents/watch/resolve",
+            new ResolveWatchIntentRequest(token), ct);
+        return (await ApiResponse.ReadAsync<ResolveWatchIntentResponse>(response, ct)).SessionId;
     }
 }

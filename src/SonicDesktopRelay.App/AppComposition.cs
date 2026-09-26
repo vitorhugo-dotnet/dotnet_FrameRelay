@@ -80,6 +80,8 @@ public sealed class AppComposition
     public RtcVideoWatchHost WatchHost { get; }
 
     public IMonitorEnumerator Monitors { get; } = new MonitorEnumerator();
+
+    public IWindowEnumerator Windows { get; } = new WindowEnumerator();
 }
 
 /// <summary>Attaches the DeviceBearer token to every call, refreshing it before it lapses.</summary>
@@ -127,6 +129,18 @@ internal sealed class SessionApiAdapter(SessionApiClient client) : ISessionApi
             return (Guid.TryParse(code, out var id)
                 ? await client.JoinByIdAsync(id, ct)
                 : await client.JoinAsync(code, ct)).Id;
+        }
+        catch (ApiException e)
+        {
+            throw Translate(e);
+        }
+    }
+
+    public async Task<Guid> JoinByIdAsync(Guid sessionId, CancellationToken ct)
+    {
+        try
+        {
+            return (await client.JoinByIdAsync(sessionId, ct)).Id;
         }
         catch (ApiException e)
         {

@@ -134,6 +134,9 @@ public sealed class RtcVideoPublishHost(
 
     public async Task SetIgnoreDiscordAudioAsync(bool value)
     {
+        // Stop delivering frames immediately, even if startup currently holds the lifecycle gate.
+        // The asynchronous capture switch still runs under the gate below.
+        _discordExcludingAudio?.RequestIgnoreDiscordAudio(value);
         await _gate.WaitAsync();
         try
         {

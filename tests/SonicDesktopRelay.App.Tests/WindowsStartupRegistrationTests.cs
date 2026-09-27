@@ -49,6 +49,14 @@ public sealed class WindowsStartupRegistrationTests
     }
 
     [Fact]
+    public void Framework_dependent_dotnet_host_is_not_registered_as_FrameRelay()
+    {
+        Assert.Null(WindowsStartupRegistration.ResolveExecutablePath("C:\\Program Files\\dotnet\\dotnet.exe"));
+        Assert.Equal("C:\\FrameRelay\\FrameRelay.exe",
+            WindowsStartupRegistration.ResolveExecutablePath("C:\\FrameRelay\\FrameRelay.exe"));
+    }
+
+    [Fact]
     public void Registry_adapter_errors_are_propagated()
     {
         var key = new FakeStartupRunKey { WriteException = new UnauthorizedAccessException() };

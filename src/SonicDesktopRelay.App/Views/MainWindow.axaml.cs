@@ -66,6 +66,8 @@ public partial class MainWindow : Window
 
     internal void RestoreFromTray()
     {
+        ShowInTaskbar = true;
+        ShowActivated = true;
         if (!IsVisible) Show();
         if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
         Activate();

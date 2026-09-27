@@ -53,6 +53,14 @@ internal sealed class WindowsStartupRegistration(
             throw new ArgumentException("The executable path cannot contain a quote character.", nameof(executablePath));
         return $"\"{executablePath}\" --startup";
     }
+
+    public static string? ResolveExecutablePath(string? processPath)
+    {
+        if (string.IsNullOrWhiteSpace(processPath)) return null;
+        return Path.GetFileNameWithoutExtension(processPath).Equals("dotnet", StringComparison.OrdinalIgnoreCase)
+            ? null
+            : processPath;
+    }
 }
 
 [SupportedOSPlatform("windows")]

@@ -141,7 +141,7 @@ public sealed class Shell : INotifyPropertyChanged, IAsyncDisposable
         var logger = FrameRelayLogging.Current?.LoggerFactory.CreateLogger("FrameRelay.Startup")
                      ?? NullLogger.Instance;
         return new WindowsStartupRegistration(new CurrentUserStartupRunKey(),
-            () => Environment.ProcessPath, logger);
+            () => WindowsStartupRegistration.ResolveExecutablePath(Environment.ProcessPath), logger);
     }
 
     public string LogDirectory =>

@@ -10,6 +10,7 @@ Implement issue #36 using Avalonia's native tray support, make the existing Gene
 - `MainWindow` owns `Shell`, registers launch activation, and disposes `Shell` when its window closes.
 - `Shell` persists the Discord audio preference through `FileUserPreferencesStore` in the user's application data directory.
 - `Program` already uses `LaunchActivationCoordinator` and `LaunchActivationRouter` for per-user single-instance activation forwarding. Startup flags can integrate with this existing mechanism instead of creating another single-instance system.
+- There is no `.ico` asset in the app project yet; this change will add a bundled FrameRelay ICO for the tray icon.
 - The Settings General card is disabled and contains mocked startup/tray checkboxes.
 
 ## Design
@@ -20,7 +21,7 @@ Extend the existing user-preferences JSON document and store with `startOnSystem
 
 ### Windows login registration
 
-Add a small injectable startup-registration abstraction with a Windows implementation using the current user's `HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run` key. Write one stable value name and a quoted current executable path plus startup arguments. Repeated enable operations update the same value; disable removes it. On launch, reconcile the registration with the persisted preference so an upgrade that relocates the executable updates the old path. Log and surface registry failures; do not require elevation or introduce a service/task.
+Add a small injectable startup-registration abstraction with a Windows implementation using the current user's `HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run` key. Write one stable value name and a quoted current executable path plus a `--startup` argument. Repeated enable operations update the same value; disable removes it. On launch, reconcile the registration with the persisted preference so an upgrade that relocates the executable updates the old path. Log and surface registry failures; do not require elevation or introduce a service/task.
 
 ### Tray and window lifecycle
 
@@ -30,7 +31,7 @@ When `Minimize to tray` is enabled, minimize and user-close hide the window whil
 
 ### Startup activation and duplicate launches
 
-Use explicit startup arguments to distinguish a login launch and whether it should begin hidden. Extend the existing launch activation protocol/coordinator so a repeated login activation is forwarded to the active process instead of constructing another window/tray icon. A normal explicit open activation continues to restore and focus the window. Startup with tray disabled follows the normal visible startup path.
+Use the `--startup` argument to distinguish a login launch. When that argument is present, the app reads the persisted minimize-to-tray preference and starts hidden only when it is enabled. Extend the existing launch activation coordinator so a repeated login launch exits instead of constructing another window/tray icon. A normal explicit open activation continues to restore and focus the window. Startup with tray disabled follows the normal visible startup path.
 
 ### Settings UI
 

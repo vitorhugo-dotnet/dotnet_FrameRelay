@@ -47,7 +47,11 @@ public partial class App : Application
             var window = new Views.MainWindow();
             desktop.MainWindow = window;
             if (LaunchActivationRouter.StartupOptions.ShouldStartHidden(minimizeToTray))
+            {
+                window.ShowActivated = false;
+                window.ShowInTaskbar = false;
                 desktop.Startup += (_, _) => Dispatcher.UIThread.Post(window.Hide);
+            }
             desktop.ShutdownRequested += (_, _) => IsExitRequested = true;
             desktop.Exit += (_, _) =>
             {

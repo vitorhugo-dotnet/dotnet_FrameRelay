@@ -35,4 +35,31 @@ public sealed class LaunchActivationTests
         Assert.Equal(["--diagnostics"], remaining);
         Assert.Equal(LaunchActivationKind.Watch, activation!.Kind);
     }
+
+    [Fact]
+    public void Removes_startup_argument_and_preserves_other_arguments()
+    {
+        var remaining = LaunchStartupOptionsParser.RemoveArguments(
+            ["--startup", "--diagnostics"], out var options);
+
+        Assert.Equal(["--diagnostics"], remaining);
+        Assert.True(options.IsStartupLaunch);
+    }
+
+    [Fact]
+    public void Normal_launch_is_visible_even_when_minimize_to_tray_is_enabled()
+    {
+        LaunchStartupOptionsParser.RemoveArguments([], out var options);
+
+        Assert.False(options.ShouldStartHidden(minimizeToTray: true));
+    }
+
+    [Fact]
+    public void Startup_launch_is_hidden_only_when_minimize_to_tray_is_enabled()
+    {
+        LaunchStartupOptionsParser.RemoveArguments(["--startup"], out var options);
+
+        Assert.True(options.ShouldStartHidden(minimizeToTray: true));
+        Assert.False(options.ShouldStartHidden(minimizeToTray: false));
+    }
 }

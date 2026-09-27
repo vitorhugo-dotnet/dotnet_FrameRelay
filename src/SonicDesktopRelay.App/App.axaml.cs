@@ -34,7 +34,12 @@ public partial class App : Application
 
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
-            desktop.MainWindow = new Views.MainWindow();
+            var minimizeToTray = new SonicDesktopRelay.Core.FileUserPreferencesStore(
+                SonicDesktopRelay.Core.FileUserPreferencesStore.DefaultPath).ReadMinimizeToTray();
+            var window = new Views.MainWindow();
+            desktop.MainWindow = window;
+            if (LaunchActivationRouter.StartupOptions.ShouldStartHidden(minimizeToTray))
+                window.Hide();
         }
 
         base.OnFrameworkInitializationCompleted();

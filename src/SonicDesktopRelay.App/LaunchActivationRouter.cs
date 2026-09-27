@@ -7,6 +7,17 @@ internal static class LaunchActivationRouter
     private static readonly object Gate = new();
     private static Action<LaunchActivation>? _handler;
     private static LaunchActivation? _pending;
+    private static LaunchStartupOptions _startupOptions = new(false);
+
+    public static LaunchStartupOptions StartupOptions
+    {
+        get { lock (Gate) return _startupOptions; }
+    }
+
+    public static void SetStartupOptions(LaunchStartupOptions options)
+    {
+        lock (Gate) _startupOptions = options;
+    }
 
     public static void SetInitial(LaunchActivation? activation)
     {

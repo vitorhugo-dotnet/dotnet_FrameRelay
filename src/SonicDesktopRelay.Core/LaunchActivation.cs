@@ -8,6 +8,30 @@ public enum LaunchActivationKind
 
 public sealed record LaunchActivation(LaunchActivationKind Kind, string Token);
 
+public sealed record LaunchStartupOptions(bool IsStartupLaunch)
+{
+    public bool ShouldStartHidden(bool minimizeToTray) => IsStartupLaunch && minimizeToTray;
+}
+
+public static class LaunchStartupOptionsParser
+{
+    public static string[] RemoveArguments(IReadOnlyList<string> arguments, out LaunchStartupOptions options)
+    {
+        var isStartupLaunch = false;
+        var remaining = new List<string>(arguments.Count);
+        foreach (var argument in arguments)
+        {
+            if (string.Equals(argument, "--startup", StringComparison.OrdinalIgnoreCase))
+                isStartupLaunch = true;
+            else
+                remaining.Add(argument);
+        }
+
+        options = new LaunchStartupOptions(isStartupLaunch);
+        return [.. remaining];
+    }
+}
+
 public static class LaunchActivationParser
 {
     public static bool TryParse(string? value, out LaunchActivation? activation)

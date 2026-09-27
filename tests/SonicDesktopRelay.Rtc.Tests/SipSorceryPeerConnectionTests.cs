@@ -1,5 +1,6 @@
 using SonicDesktopRelay.Media;
 using SonicDesktopRelay.Rtc;
+using SIPSorcery.Net;
 using Xunit;
 
 namespace SonicDesktopRelay.Rtc.Tests;
@@ -37,6 +38,19 @@ public sealed class SipSorceryPeerConnectionTests
         await using var peer = factory.Create(participantId);
 
         Assert.Equal(participantId, peer.ParticipantId);
+    }
+
+    [Theory]
+    [InlineData(SDPMediaTypesEnum.audio, 11, RtcMediaKind.Audio)]
+    [InlineData(SDPMediaTypesEnum.video, 22, RtcMediaKind.Video)]
+    [InlineData(SDPMediaTypesEnum.video, 11, RtcMediaKind.Unknown)]
+    [InlineData(SDPMediaTypesEnum.audio, 33, RtcMediaKind.Unknown)]
+    public void Reception_reports_require_matching_track_media_and_ssrc(
+        SDPMediaTypesEnum mediaType, uint reportSsrc, RtcMediaKind expected)
+    {
+        var kind = SipSorceryPeerConnection.ClassifyReceptionReportMediaKind(mediaType, reportSsrc, 11, 22);
+
+        Assert.Equal(expected, kind);
     }
 
     [Fact]

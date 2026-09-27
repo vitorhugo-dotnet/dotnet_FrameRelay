@@ -79,6 +79,11 @@ public partial class WatchView : UserControl
         if (DataContext is Shell shell) shell.EnterVideoFullScreen();
     }
 
+    private void OnFit(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is Shell shell) shell.EnterVideoFit();
+    }
+
     private void OnExitFullScreen(object? sender, RoutedEventArgs e)
     {
         if (DataContext is Shell shell) shell.ExitVideoFullScreen();

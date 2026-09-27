@@ -126,7 +126,9 @@ internal sealed class SessionApiAdapter(SessionApiClient client) : ISessionApi
     {
         try
         {
-            return (await client.JoinAsync(code, ct)).Id;
+            return (Guid.TryParse(code, out var id)
+                ? await client.JoinByIdAsync(id, ct)
+                : await client.JoinAsync(code, ct)).Id;
         }
         catch (ApiException e)
         {

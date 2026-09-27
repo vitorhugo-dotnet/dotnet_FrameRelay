@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Time.Testing;
+using Microsoft.Extensions.Logging;
 using Xunit;
 
 namespace SonicDesktopRelay.Media.Tests;
@@ -19,6 +20,122 @@ public sealed class ScreenPublishPipelineTests
         await pipeline.StartAsync(target, CancellationToken.None);
 
         Assert.Equal(target, capture.StartedTarget);
+    }
+
+    [Theory]
+    [InlineData(false, 1080, 60)]
+    [InlineData(true, 1080, 60)]
+    [InlineData(false, 720, 30)]
+    [InlineData(true, 720, 30)]
+    public async Task Each_video_source_recovers_every_rung_to_the_configured_ceiling(
+        bool receiverStats, int height, int fps)
+    {
+        var time = new FakeTimeProvider(DateTimeOffset.UnixEpoch);
+        var capture = new FakeCapture();
+        var logger = new QualityLogger();
+        var profile = new VideoPublishProfile(height, fps);
+        await using var pipeline = new ScreenPublishPipeline(capture, new FakeEncoder(),
+            time: time, logger: logger, profile: profile);
+        await pipeline.StartAsync(Monitor, CancellationToken.None);
+        var viewer = Guid.NewGuid();
+        var expected = new List<VideoQuality> { pipeline.Quality };
+
+        void Report(bool poor)
+        {
+            if (receiverStats)
+                pipeline.ReportReceiverStats(viewer, new VideoReceiverStats(1, 2000,
+                    poor ? 90 : 100, poor ? 10 : 0, 100, 0,
+                    pipeline.Quality.FramesPerSecond * 2, pipeline.Quality.FramesPerSecond));
+            else
+                pipeline.ReportReception(viewer, poor ? 0.1 : 0);
+        }
+
+        while (pipeline.Quality != new VideoQuality(360, 15, 600_000))
+        {
+            time.Advance(TimeSpan.FromSeconds(15));
+            Report(true);
+            time.Advance(TimeSpan.FromSeconds(2.5));
+            Report(true);
+            time.Advance(TimeSpan.FromSeconds(2.5));
+            Report(true);
+            Assert.Equal(expected[^1].Reduced(profile), pipeline.Quality);
+            expected.Add(pipeline.Quality);
+        }
+
+        for (var rung = expected.Count - 2; rung >= 0; rung--)
+        {
+            Report(false);
+            for (var interval = 0; interval < 3; interval++)
+            {
+                time.Advance(TimeSpan.FromSeconds(10));
+                Report(false);
+            }
+            Assert.Equal(expected[rung], pipeline.Quality);
+        }
+
+        Assert.Equal(VideoQuality.InitialFor(profile), pipeline.Quality);
+        Assert.Contains(fps, capture.FrameRateUpdates);
+        Assert.Contains(logger.Events, entry => entry["QualityEvent"] as string == "video.quality.recovered"
+            && entry["EvidenceSource"] as string == (receiverStats ? "video.receiver_stats" : "video-rtcp")
+            && entry["Reason"] as string == "stable-video-reception"
+            && (int)entry["NewFps"]! == fps);
+    }
+
+    [Theory]
+    [InlineData(10, 0, 60, "receiver-video-packet-loss")]
+    [InlineData(0, 10, 60, "receiver-video-access-unit-loss")]
+    [InlineData(0, 0, 20, "low-decoded-fps")]
+    public async Task Receiver_transitions_identify_the_video_evidence_reason(
+        int lostPackets, int incompleteUnits, int decodedFrames, string reason)
+    {
+        var time = new FakeTimeProvider(DateTimeOffset.UnixEpoch);
+        var logger = new QualityLogger();
+        await using var pipeline = new ScreenPublishPipeline(new FakeCapture(), new FakeEncoder(),
+            time: time, logger: logger);
+        var viewer = Guid.NewGuid();
+        var stats = new VideoReceiverStats(1, 2000, 100, lostPackets, 100, incompleteUnits, decodedFrames, 30);
+        for (var i = 0; i < 3; i++)
+        {
+            pipeline.ReportReceiverStats(viewer, stats);
+            if (i < 2) time.Advance(TimeSpan.FromSeconds(2.5));
+        }
+        Assert.Equal(3_000_000, pipeline.Quality.TargetBitsPerSecond);
+        Assert.Contains(logger.Events, entry => entry["QualityEvent"] as string == "video.quality.changed"
+            && entry["EvidenceSource"] as string == "video.receiver_stats"
+            && entry["Reason"] as string == reason);
+    }
+
+    [Fact]
+    public async Task Video_rtcp_transitions_identify_rtcp_and_not_receiver_telemetry()
+    {
+        var time = new FakeTimeProvider(DateTimeOffset.UnixEpoch);
+        var logger = new QualityLogger();
+        await using var pipeline = new ScreenPublishPipeline(new FakeCapture(), new FakeEncoder(),
+            time: time, logger: logger);
+        for (var i = 0; i < 3; i++)
+        {
+            pipeline.ReportReception(0.1);
+            if (i < 2) time.Advance(TimeSpan.FromSeconds(2.5));
+        }
+        Assert.Contains(logger.Events, entry => entry["QualityEvent"] as string == "video.quality.changed"
+            && entry["EvidenceSource"] as string == "video-rtcp"
+            && entry["Reason"] as string == "video-rtcp-loss");
+    }
+
+    private sealed class QualityLogger : ILogger<ScreenPublishPipeline>
+    {
+        public List<Dictionary<string, object?>> Events { get; } = [];
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel logLevel) => true;
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state,
+            Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            if (state is IEnumerable<KeyValuePair<string, object?>> properties)
+            {
+                var entry = properties.ToDictionary(pair => pair.Key, pair => pair.Value);
+                if (entry.ContainsKey("QualityEvent")) Events.Add(entry);
+            }
+        }
     }
 
     [Fact]

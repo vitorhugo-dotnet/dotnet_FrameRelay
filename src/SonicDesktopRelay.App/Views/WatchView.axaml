@@ -11,14 +11,14 @@
             <Setter Property="Margin" Value="{StaticResource PagePadding}" />
             <Setter Property="VerticalScrollBarVisibility" Value="Auto" />
         </Style>
-        <Style Selector="ScrollViewer#pageScroll.fullScreen">
+        <Style Selector="ScrollViewer#pageScroll.expanded">
             <Setter Property="Margin" Value="0" />
             <Setter Property="VerticalScrollBarVisibility" Value="Disabled" />
         </Style>
         <Style Selector="Grid#pageLayout">
             <Setter Property="MaxWidth" Value="1400" />
         </Style>
-        <Style Selector="Grid#pageLayout.fullScreen">
+        <Style Selector="Grid#pageLayout.expanded">
             <Setter Property="MaxWidth" Value="Infinity" />
         </Style>
         <Style Selector="StackPanel#sessionDetails">
@@ -37,7 +37,7 @@
                 <Setter Property="Margin" Value="0,16,0,0" />
             </Style>
         </ContainerQuery>
-        <Style Selector="Border#videoCard.fullScreen">
+        <Style Selector="Border#videoCard.expanded">
             <Setter Property="Background" Value="Black" />
             <Setter Property="BorderThickness" Value="0" />
             <Setter Property="CornerRadius" Value="0" />
@@ -46,14 +46,14 @@
         </Style>
     </UserControl.Styles>
 
-    <ScrollViewer Name="pageScroll" Classes.fullScreen="{Binding IsVideoFullScreen}"
+    <ScrollViewer Name="pageScroll" Classes.expanded="{Binding IsVideoExpanded}"
                   HorizontalScrollBarVisibility="Disabled">
-        <Grid Name="pageLayout" Classes.fullScreen="{Binding IsVideoFullScreen}"
+        <Grid Name="pageLayout" Classes.expanded="{Binding IsVideoExpanded}"
               MinHeight="{Binding #pageScroll.Bounds.Height}"
               HorizontalAlignment="Stretch"
               RowDefinitions="Auto,*">
             <StackPanel Grid.Row="0" Spacing="{StaticResource SpaceMd}" Margin="0,0,0,16"
-                        IsVisible="{Binding !IsVideoFullScreen}">
+                        IsVisible="{Binding !IsVideoExpanded}">
                 <StackPanel Spacing="{StaticResource SpaceXs}">
                     <TextBlock Text="Watch a session" FontSize="{StaticResource FontSizeXl}"
                                FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" />
@@ -82,13 +82,13 @@
             </StackPanel>
 
             <Grid Name="contentGrid" Grid.Row="1"
-                  Classes.fullScreen="{Binding IsVideoFullScreen}" MinHeight="280"
+                  Classes.expanded="{Binding IsVideoExpanded}" MinHeight="280"
                   ColumnDefinitions="*,300" RowDefinitions="*,Auto">
-                <Border Name="videoCard" Classes="card" Classes.fullScreen="{Binding IsVideoFullScreen}"
+                <Border Name="videoCard" Classes="card" Classes.expanded="{Binding IsVideoExpanded}"
                         Grid.Column="0" Grid.Row="0" MinWidth="0">
                     <Grid RowDefinitions="Auto,*,Auto">
                         <Grid Grid.Row="0" ColumnDefinitions="*,Auto" Margin="0,0,0,8"
-                              IsVisible="{Binding !IsVideoFullScreen}">
+                              IsVisible="{Binding !IsVideoExpanded}">
                             <StackPanel Spacing="{StaticResource SpaceXs}">
                                 <TextBlock Text="Remote screen" FontSize="{StaticResource FontSizeLg}"
                                            FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" />
@@ -106,7 +106,7 @@
                             <Border HorizontalAlignment="Center" VerticalAlignment="Bottom"
                                     Margin="16" Padding="12,8" CornerRadius="8"
                                     Background="#C01B2028"
-                                    IsVisible="{Binding IsVideoFullScreen}">
+                                    IsVisible="{Binding IsVideoExpanded}">
                                 <StackPanel Orientation="Horizontal" Spacing="8">
                                     <Button Content="Return" Click="OnExitFullScreen"
                                             ToolTip.Tip="Leave fullscreen (Esc)" />
@@ -121,9 +121,9 @@
                             </Border>
                         </Grid>
                         <WrapPanel Grid.Row="2" Orientation="Horizontal" Margin="0,8,0,0"
-                                   IsVisible="{Binding !IsVideoFullScreen}">
-                            <Button Content="Fit to screen" IsEnabled="False" Margin="0,0,8,8"
-                                    ToolTip.Tip="Fit control unavailable; the picture fits automatically." />
+                                   IsVisible="{Binding !IsVideoExpanded}">
+                            <Button Content="Fit to screen" Click="OnFit" Margin="0,0,8,8"
+                                    ToolTip.Tip="Expand the video to fill the FrameRelay window." />
                             <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,0,8,8"
                                         VerticalAlignment="Center">
                                 <Button Content="🔊" IsVisible="{Binding !IsPlaybackMuted}"
@@ -139,7 +139,7 @@
                 </Border>
 
                 <StackPanel Name="sessionDetails" Spacing="{StaticResource SpaceMd}"
-                            IsVisible="{Binding !IsVideoFullScreen}">
+                            IsVisible="{Binding !IsVideoExpanded}">
                     <Border Classes="card">
                         <StackPanel Spacing="{StaticResource SpaceMd}">
                             <TextBlock Text="Session details" FontSize="{StaticResource FontSizeLg}"

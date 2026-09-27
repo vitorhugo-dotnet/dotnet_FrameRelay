@@ -52,6 +52,9 @@ public sealed class VideoPublisher(
 
     public event Action<Guid, RtcTransportDiagnostics>? TransportDiagnosticsChanged;
 
+    /// <summary>Audio-track RTCP reception reports for audio diagnostics; never sent to video quality policy.</summary>
+    public event Action<Guid, RtcpReceptionReport>? AudioRtcpReportReceived;
+
     public async Task AddViewerAsync(Guid participantId, CancellationToken ct)
     {
         var peerGate = _peerGates.GetOrAdd(participantId, _ => new SemaphoreSlim(1, 1));
@@ -177,7 +180,13 @@ public sealed class VideoPublisher(
             _ = signaling.SendAsync(SignalingMessageTypes.WebRtcIceCandidate, participantId,
                 new { candidate, sdpMid = mid, sdpMLineIndex = index, negotiationId }, CancellationToken.None);
         peer.KeyFrameRequested += pipeline.RequestKeyFrame;
-        peer.PacketLossReported += loss => pipeline.ReportReception(participantId, loss);
+        peer.ReceptionReportReceived += report =>
+        {
+            if (report.MediaKind == RtcMediaKind.Video)
+                pipeline.ReportReception(participantId, report.FractionLost);
+            else if (report.MediaKind == RtcMediaKind.Audio)
+                AudioRtcpReportReceived?.Invoke(participantId, report);
+        };
         peer.TransportDiagnosticsChanged += diagnostics =>
         {
             if (!_peers.TryGetValue(participantId, out var current) || !ReferenceEquals(current, peer)) return;

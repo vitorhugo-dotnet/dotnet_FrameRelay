@@ -53,12 +53,38 @@ public sealed class AudioWatchPipelineTests
         Assert.Single(failures);
     }
 
+    [Theory]
+    [InlineData(50, false, 1000, -1000)]
+    [InlineData(0, false, 0, 0)]
+    [InlineData(100, true, 0, 0)]
+    [InlineData(150, false, 2000, -2000)]
+    [InlineData(-20, false, 0, 0)]
+    public async Task Local_gain_scales_pcm_without_mutating_decoded_audio(
+        double volume, bool muted, short positive, short negative)
+    {
+        var decoder = new FakeDecoder();
+        var sink = new FakeSink();
+        await using var pipeline = new AudioWatchPipeline(decoder, sink);
+        pipeline.SetPlaybackVolume(volume, muted);
+        await pipeline.StartAsync(CancellationToken.None);
+        pipeline.Push(Sample());
+        Assert.Equal(positive, BitConverter.ToInt16(sink.Frames[0].Data.Span[..2]));
+        Assert.Equal(negative, BitConverter.ToInt16(sink.Frames[0].Data.Span.Slice(2, 2)));
+        Assert.Equal(2000, BitConverter.ToInt16(decoder.Pcm.AsSpan(0, 2)));
+        Assert.Equal(48_000, sink.Frames[0].SampleRate);
+        Assert.Equal(TimeSpan.FromMilliseconds(120), sink.Frames[0].Timestamp);
+        pipeline.SetPlaybackVolume(100, false);
+        pipeline.Push(Sample());
+        Assert.Equal(2000, BitConverter.ToInt16(sink.Frames[1].Data.Span[..2]));
+    }
+
     private static EncodedAudioSample Sample() =>
         new(new byte[] { 1, 2, 3 }, 960, TimeSpan.FromMilliseconds(20), TimeSpan.FromMilliseconds(120));
 
     private sealed class FakeDecoder : IAudioDecoder
     {
         public string Name => "fake-opus";
+        public byte[] Pcm { get; } = [0xd0, 0x07, 0x30, 0xf8];
         public int DecodeCalls { get; private set; }
         public Exception? Failure { get; init; }
 
@@ -66,7 +92,7 @@ public sealed class AudioWatchPipelineTests
         {
             DecodeCalls++;
             if (Failure is not null) throw Failure;
-            return new AudioFrame(new byte[960 * 2 * 2], 48_000, 2, sample.SampleCount, sample.Timestamp);
+            return new AudioFrame(Pcm, 48_000, 2, sample.SampleCount, sample.Timestamp);
         }
 
         public void Dispose() { }

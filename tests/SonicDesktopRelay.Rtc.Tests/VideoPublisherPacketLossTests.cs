@@ -94,6 +94,77 @@ public sealed class VideoPublisherPacketLossTests
         Assert.Equal(1080, pipeline.Quality.MaxHeight);
     }
 
+    [Fact]
+    public async Task Only_video_rtcp_reception_reports_reach_the_screen_quality_controller()
+    {
+        var time = new FakeTimeProvider(DateTimeOffset.UnixEpoch);
+        var pipeline = new ScreenPublishPipeline(new FakeCapture(), new FakeEncoder(), time: time);
+        var peers = new FakePeerFactory();
+        await using var publisher = new VideoPublisher(pipeline, peers, new FakeSignaling(), time: time);
+        await pipeline.StartAsync(new MonitorInfo("display", "display", 1920, 1080, true), CancellationToken.None);
+        await publisher.AddViewerAsync(Guid.NewGuid(), CancellationToken.None);
+        var initialQuality = pipeline.Quality;
+        var peer = peers.Created!;
+        var audioReports = new List<RtcpReceptionReport>();
+        publisher.AudioRtcpReportReceived += (_, report) => audioReports.Add(report);
+
+        for (var i = 0; i < 3; i++)
+        {
+            peer.ReportReception(new RtcpReceptionReport(RtcMediaKind.Audio, 11, 0.15));
+            peer.ReportReception(new RtcpReceptionReport(RtcMediaKind.Unknown, 33, 0.15));
+            if (i < 2) time.Advance(TimeSpan.FromSeconds(2.5));
+        }
+
+        Assert.Equal(3, audioReports.Count);
+        Assert.All(audioReports, report => Assert.Equal(RtcMediaKind.Audio, report.MediaKind));
+        Assert.Equal(initialQuality, pipeline.Quality);
+
+        peer.ReportReception(new RtcpReceptionReport(RtcMediaKind.Video, 22, 0.15));
+        time.Advance(TimeSpan.FromSeconds(2.5));
+        peer.ReportReception(new RtcpReceptionReport(RtcMediaKind.Video, 22, 0.15));
+        time.Advance(TimeSpan.FromSeconds(2.5));
+        peer.ReportReception(new RtcpReceptionReport(RtcMediaKind.Video, 22, 0.15));
+        Assert.True(pipeline.Quality.TargetBitsPerSecond < initialQuality.TargetBitsPerSecond);
+        Assert.Equal(3, audioReports.Count);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Audio_and_unknown_loss_cannot_block_recovery_from_either_video_source(bool receiverStats)
+    {
+        var time = new FakeTimeProvider(DateTimeOffset.UnixEpoch);
+        var pipeline = new ScreenPublishPipeline(new FakeCapture(), new FakeEncoder(), time: time);
+        var peers = new FakePeerFactory();
+        await using var publisher = new VideoPublisher(pipeline, peers, new FakeSignaling(), time: time);
+        var viewer = Guid.NewGuid();
+        await publisher.AddViewerAsync(viewer, CancellationToken.None);
+        var peer = peers.Created!;
+        for (var i = 0; i < 3; i++)
+        {
+            peer.ReportPacketLoss(0.1);
+            if (i < 2) time.Advance(TimeSpan.FromSeconds(2.5));
+        }
+        Assert.Equal(3_000_000, pipeline.Quality.TargetBitsPerSecond);
+
+        for (var i = 0; i < 4; i++)
+        {
+            peer.ReportReception(new RtcpReceptionReport(RtcMediaKind.Audio, 11, 0.9));
+            peer.ReportReception(new RtcpReceptionReport(RtcMediaKind.Unknown, 33, 0.9));
+            if (receiverStats)
+            {
+                using var document = System.Text.Json.JsonDocument.Parse(
+                    "{\"version\":1,\"intervalMilliseconds\":2000,\"rtpPacketsReceived\":100,\"rtpPacketsLost\":0,\"accessUnitsReceived\":60,\"incompleteAccessUnits\":0,\"decodedFrames\":60,\"targetFramesPerSecond\":30}");
+                await publisher.HandleAsync(new SignalingEnvelope(SignalingMessageTypes.VideoReceiverStats,
+                    null, null, viewer, null, null, document.RootElement.Clone()), CancellationToken.None);
+            }
+            else
+                peer.ReportPacketLoss(0);
+            if (i < 3) time.Advance(TimeSpan.FromSeconds(10));
+        }
+        Assert.Equal(VideoQuality.Default, pipeline.Quality);
+    }
+
     private sealed class FakeCapture : IScreenCaptureSource
     {
         public MonitorInfo Monitor { get; private set; }
@@ -134,7 +205,7 @@ public sealed class VideoPublisherPacketLossTests
 
         public event Action<string, string?, int?>? IceCandidateGathered { add { } remove { } }
         public event Action<KeyFrameRequestReason>? KeyFrameRequested { add { } remove { } }
-        public event Action<double>? PacketLossReported;
+        public event Action<RtcpReceptionReport>? ReceptionReportReceived;
         public event Action<RtcTransportDiagnostics>? TransportDiagnosticsChanged { add { } remove { } }
 
         public RtcTransportDiagnostics? TransportDiagnostics => null;
@@ -144,7 +215,8 @@ public sealed class VideoPublisherPacketLossTests
         public Task AddIceCandidateAsync(string candidate, string? sdpMid, int? sdpMLineIndex, CancellationToken ct) => Task.CompletedTask;
         public void SendVideo(EncodedVideoSample sample) { }
         public void SendAudio(EncodedAudioSample sample) { }
-        public void ReportPacketLoss(double loss) => PacketLossReported?.Invoke(loss);
+        public void ReportPacketLoss(double loss) => ReportReception(new RtcpReceptionReport(RtcMediaKind.Video, 22, loss));
+        public void ReportReception(RtcpReceptionReport report) => ReceptionReportReceived?.Invoke(report);
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 

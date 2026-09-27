@@ -93,6 +93,7 @@ public sealed class DiscordExcludingAudioSourceTests
         SetField(host, "_pipeline", video);
         SetField(host, "_audioPipeline", audio);
         SetField(host, "_audioSource", source);
+        SetField(host, "_discordExcludingAudio", source);
         factory.Current!.Push();
         await host.SetIgnoreDiscordAudioAsync(true);
         factory.Current!.Push();
@@ -142,6 +143,7 @@ public sealed class DiscordExcludingAudioSourceTests
         await using var host = new RtcVideoPublishHost(new IceApiClient(http), () => null);
         SetField(host, "_audioPipeline", audio);
         SetField(host, "_audioSource", source);
+        SetField(host, "_discordExcludingAudio", source);
         var gate = (SemaphoreSlim)typeof(RtcVideoPublishHost)
             .GetField("_gate", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(host)!;
         factory.Current!.Push();

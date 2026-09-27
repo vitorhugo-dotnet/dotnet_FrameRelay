@@ -70,6 +70,8 @@
 - Test: `tests/SonicDesktopRelay.Core.Tests/LaunchActivationTests.cs`
 - Modify: `src/SonicDesktopRelay.App/Program.cs`
 - Modify: `src/SonicDesktopRelay.App/LaunchActivationCoordinator.cs`
+- Create: `src/SonicDesktopRelay.App/LaunchInstancePolicy.cs`
+- Test: `tests/SonicDesktopRelay.App.Tests/LaunchInstancePolicyTests.cs`
 - Modify: `src/SonicDesktopRelay.App/LaunchActivationRouter.cs`
 - Modify: `src/SonicDesktopRelay.App/App.axaml.cs`
 
@@ -83,7 +85,7 @@
 - [ ] Test startup flag parsing/removal and normal launch defaults; test that startup combined with the persisted tray preference determines initial hidden state.
 - [ ] Verify Core and focused App tests fail for absent option parsing.
 - [ ] Implement parser and route initial options into `App` without changing URI activation semantics.
-- [ ] Confirm that the existing mutex coordinator exits duplicate launches without creating a second UI when no protocol activation is present.
+- [ ] Test `LaunchInstancePolicy.Decide` so a duplicate startup exits without UI, a duplicate protocol launch forwards, and the mutex owner runs.
 - [ ] Re-run focused tests and verify PASS.
 
 ### Task 4: Bind settings and reconcile startup registration

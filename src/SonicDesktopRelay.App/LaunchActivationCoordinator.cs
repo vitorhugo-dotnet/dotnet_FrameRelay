@@ -44,12 +44,13 @@ internal sealed class LaunchActivationCoordinator : IDisposable
     {
         var remaining = LaunchActivationParser.RemoveActivationArgument(arguments, out var initial);
         var coordinator = new LaunchActivationCoordinator(logger);
-        if (coordinator._ownsMutex)
+        var action = LaunchInstancePolicy.Decide(coordinator._ownsMutex, initial);
+        if (action == LaunchInstanceAction.Run)
         {
             return (coordinator, remaining, initial);
         }
 
-        if (initial is not null)
+        if (action == LaunchInstanceAction.ForwardActivation && initial is not null)
         {
             var forwarded = await TryForwardAsync(initial, coordinator._pipeName, ct);
             if (!forwarded) logger.LogWarning("Could not forward FrameRelay activation to the running instance.");

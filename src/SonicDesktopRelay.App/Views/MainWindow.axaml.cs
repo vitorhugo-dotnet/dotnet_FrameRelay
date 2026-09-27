@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Runtime.Versioning;
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
@@ -25,6 +26,7 @@ public partial class MainWindow : Window
         DataContext = shell;
         shell.PropertyChanged += OnShellPropertyChanged;
         AddHandler(KeyDownEvent, OnWindowKeyDown, RoutingStrategies.Tunnel);
+        Closing += OnWindowClosing;
         _logger = FrameRelayLogging.Current?.LoggerFactory.CreateLogger("FrameRelay.LaunchActivation")
                   ?? Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance;
         _activationHandler = OnLaunchActivation;
@@ -35,6 +37,44 @@ public partial class MainWindow : Window
             LaunchActivationRouter.Unregister(_activationHandler);
             await shell.DisposeAsync();
         };
+    }
+
+    protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
+    {
+        base.OnPropertyChanged(change);
+        if (change.Property != WindowStateProperty || WindowState != WindowState.Minimized
+            || DataContext is not Shell shell)
+            return;
+
+        var app = Application.Current as App;
+        if (!TrayLifecyclePolicy.ShouldHideWindow(shell.MinimizeToTray, app?.IsExitRequested == true))
+            return;
+
+        WindowState = WindowState.Normal;
+        Hide();
+    }
+
+    private void OnWindowClosing(object? sender, CancelEventArgs e)
+    {
+        var minimizeToTray = DataContext is Shell shell && shell.MinimizeToTray;
+        var explicitExit = Application.Current is App app && app.IsExitRequested;
+        if (!TrayLifecyclePolicy.ShouldHideWindow(minimizeToTray, explicitExit)) return;
+
+        e.Cancel = true;
+        Hide();
+    }
+
+    internal void RestoreFromTray()
+    {
+        if (!IsVisible) Show();
+        if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
+        Activate();
+    }
+
+    internal void OpenSettingsFromTray()
+    {
+        RestoreFromTray();
+        if (DataContext is Shell shell) shell.ViewModel.CurrentPage = AppPage.Settings;
     }
 
     private void OnShellPropertyChanged(object? sender, PropertyChangedEventArgs e)

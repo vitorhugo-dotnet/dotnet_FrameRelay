@@ -12,7 +12,8 @@
         CanResize="True"
         Container.Name="window" Container.Sizing="Width"
         Background="{StaticResource SurfaceBrush}"
-        Title="FrameRelay">
+        Title="FrameRelay"
+        Icon="/Assets/FrameRelay.ico">
     <Window.Styles>
         <Style Selector="Border#navigationRail">
             <Setter Property="Width" Value="180" />

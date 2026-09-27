@@ -15,4 +15,20 @@
         <FluentTheme />
         <StyleInclude Source="avares://SonicDesktopRelay.App/Styles/Components.axaml" />
     </Application.Styles>
+
+    <TrayIcon.Icons>
+        <TrayIcons>
+            <TrayIcon Icon="/Assets/FrameRelay.ico" ToolTipText="FrameRelay"
+                      Clicked="OnTrayIconClicked">
+                <TrayIcon.Menu>
+                    <NativeMenu>
+                        <NativeMenuItem Header="Open FrameRelay" Click="OnTrayOpenClicked" />
+                        <NativeMenuItem Header="Settings" Click="OnTraySettingsClicked" />
+                        <NativeMenuItemSeparator />
+                        <NativeMenuItem Header="Exit" Click="OnTrayExitClicked" />
+                    </NativeMenu>
+                </TrayIcon.Menu>
+            </TrayIcon>
+        </TrayIcons>
+    </TrayIcon.Icons>
 </Application>

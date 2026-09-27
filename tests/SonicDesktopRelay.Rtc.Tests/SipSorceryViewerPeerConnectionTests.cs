@@ -1,4 +1,5 @@
 using SonicDesktopRelay.Rtc;
+using System.Collections.Concurrent;
 using Xunit;
 
 namespace SonicDesktopRelay.Rtc.Tests;
@@ -93,8 +94,8 @@ public sealed class SipSorceryViewerPeerConnectionTests
     {
         var factory = new SipSorceryViewerPeerConnectionFactory(Ice);
         await using var peer = factory.Create();
-        var diagnostics = new List<ViewerNegotiationDiagnosticEntry>();
-        peer.Diagnostic += diagnostics.Add;
+        var diagnostics = new ConcurrentQueue<ViewerNegotiationDiagnosticEntry>();
+        peer.Diagnostic += diagnostics.Enqueue;
 
         await peer.CreateAnswerAsync(PublisherOfferSdp, CancellationToken.None);
 
@@ -118,8 +119,8 @@ public sealed class SipSorceryViewerPeerConnectionTests
         var incompatibleOffer = PublisherOfferSdp.Replace("H264/90000", "VP8/90000", StringComparison.Ordinal);
         var factory = new SipSorceryViewerPeerConnectionFactory(Ice);
         await using var peer = factory.Create();
-        var diagnostics = new List<ViewerNegotiationDiagnosticEntry>();
-        peer.Diagnostic += diagnostics.Add;
+        var diagnostics = new ConcurrentQueue<ViewerNegotiationDiagnosticEntry>();
+        peer.Diagnostic += diagnostics.Enqueue;
 
         var failure = await Assert.ThrowsAsync<ViewerNegotiationException>(
             () => peer.CreateAnswerAsync(incompatibleOffer, CancellationToken.None));

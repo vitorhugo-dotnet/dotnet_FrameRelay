@@ -1,5 +1,6 @@
 using Avalonia;
 using Microsoft.Extensions.Logging;
+using SonicDesktopRelay.Core;
 
 namespace SonicDesktopRelay.App;
 
@@ -44,7 +45,9 @@ internal static class Program
 
         try
         {
-            var startup = LaunchActivationCoordinator.StartAsync(args, logger, CancellationToken.None)
+            var arguments = LaunchStartupOptionsParser.RemoveArguments(args, out var startupOptions);
+            LaunchActivationRouter.SetStartupOptions(startupOptions);
+            var startup = LaunchActivationCoordinator.StartAsync(arguments, logger, CancellationToken.None)
                 .GetAwaiter().GetResult();
             if (startup.Coordinator is null) return;
             using (startup.Coordinator)

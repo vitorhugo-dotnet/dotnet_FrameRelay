@@ -44,6 +44,47 @@ public sealed class FileUserPreferencesStoreTests : IDisposable
         Assert.False(new FileUserPreferencesStore(PathUnderTest).ReadIgnoreDiscordAudio());
     }
 
+    [Fact]
+    public void Missing_and_legacy_preferences_default_tray_and_startup_to_disabled()
+    {
+        var store = new FileUserPreferencesStore(PathUnderTest);
+        Assert.False(store.ReadStartOnSystemStartup());
+        Assert.False(store.ReadMinimizeToTray());
+
+        Directory.CreateDirectory(_directory);
+        File.WriteAllText(PathUnderTest, "{\"ignoreDiscordAudio\":true}");
+        store = new FileUserPreferencesStore(PathUnderTest);
+
+        Assert.True(store.ReadIgnoreDiscordAudio());
+        Assert.False(store.ReadStartOnSystemStartup());
+        Assert.False(store.ReadMinimizeToTray());
+    }
+
+    [Fact]
+    public void All_preferences_survive_writes_from_separate_store_instances()
+    {
+        var store = new FileUserPreferencesStore(PathUnderTest);
+        store.WriteIgnoreDiscordAudio(true);
+        store.WriteStartOnSystemStartup(true);
+        store.WriteMinimizeToTray(true);
+
+        store = new FileUserPreferencesStore(PathUnderTest);
+        Assert.True(store.ReadIgnoreDiscordAudio());
+        Assert.True(store.ReadStartOnSystemStartup());
+        Assert.True(store.ReadMinimizeToTray());
+    }
+
+    [Fact]
+    public void Invalid_json_defaults_new_preferences_to_disabled()
+    {
+        Directory.CreateDirectory(_directory);
+        File.WriteAllText(PathUnderTest, "not json");
+        var store = new FileUserPreferencesStore(PathUnderTest);
+
+        Assert.False(store.ReadStartOnSystemStartup());
+        Assert.False(store.ReadMinimizeToTray());
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_directory)) Directory.Delete(_directory, recursive: true);

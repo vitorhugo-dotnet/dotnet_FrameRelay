@@ -9,6 +9,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using SonicDesktopRelay.ApiClient;
 using SonicDesktopRelay.Core;
+using SonicDesktopRelay.Core.Updates;
 using SonicDesktopRelay.Media;
 using SonicDesktopRelay.Media.Windows;
 using SonicDesktopRelay.Presentation;
@@ -41,6 +42,7 @@ public sealed class Shell : INotifyPropertyChanged, IAsyncDisposable
     private readonly IWindowEnumerator _windowEnumerator;
     private readonly ILogger<Shell> _logger;
     private readonly SharePreviewController _preview;
+    private readonly ReleaseUpdateChecker? _updateChecker;
     private bool _shareViewAttached;
     private bool _startingPublicShare;
     private AppComposition? _composition;
@@ -77,10 +79,33 @@ public sealed class Shell : INotifyPropertyChanged, IAsyncDisposable
 
     public MainWindowViewModel ViewModel { get; } = new();
 
-    public string AppVersion => typeof(Shell).Assembly.GetName().Version?.ToString(3) ?? "0.0.0";
+    public string AppVersion => (typeof(Shell).Assembly.GetCustomAttributes(
+        typeof(System.Reflection.AssemblyInformationalVersionAttribute), false)
+        .OfType<System.Reflection.AssemblyInformationalVersionAttribute>().FirstOrDefault()?.InformationalVersion
+        ?? typeof(Shell).Assembly.GetName().Version?.ToString(3) ?? "0.0.0").Split('+')[0];
+
+    public string UpdateStatusText => _updateChecker?.Result.Status switch
+    {
+        UpdateCheckStatus.Checking => "Checking for updates…",
+        UpdateCheckStatus.UpToDate => $"FrameRelay {AppVersion} is up to date.",
+        UpdateCheckStatus.UpdateAvailable => $"FrameRelay {_updateChecker.Result.AvailableVersion} is available (installed: {AppVersion}).",
+        UpdateCheckStatus.Offline => _updateChecker.Result.Message ?? "Could not check for updates.",
+        UpdateCheckStatus.RateLimited => _updateChecker.Result.Message ?? "GitHub is temporarily rate limiting update checks.",
+        UpdateCheckStatus.InvalidMetadata => _updateChecker.Result.Message ?? "GitHub returned unexpected release metadata.",
+        _ => "Updates are checked automatically every hour."
+    };
+    public bool IsCheckingUpdates => _updateChecker?.Result.Status == UpdateCheckStatus.Checking;
+    public bool IsUpdateAvailable => _updateChecker?.Result.Status == UpdateCheckStatus.UpdateAvailable;
+    public string? UpdateDownloadUrl => (_updateChecker?.Result.DownloadUri ?? _updateChecker?.Result.ReleaseUri)?.ToString();
 
     public Shell()
-        : this(new MonitorEnumerator(), new WindowEnumerator()) { }
+        : this(new MonitorEnumerator(), new WindowEnumerator(), new PublisherCaptureSelection().CreateVideo,
+            action => Dispatcher.UIThread.Post(action),
+            new FileUserPreferencesStore(FileUserPreferencesStore.DefaultPath), CreateStartupRegistration(),
+            new ReleaseUpdateChecker(
+                typeof(Shell).Assembly.GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), false)
+                    .OfType<System.Reflection.AssemblyInformationalVersionAttribute>().FirstOrDefault()?.InformationalVersion
+                ?? typeof(Shell).Assembly.GetName().Version?.ToString(3) ?? "0.0.0")) { }
 
     public Shell(IMonitorEnumerator monitorEnumerator, IWindowEnumerator windowEnumerator)
         : this(monitorEnumerator, windowEnumerator, new PublisherCaptureSelection().CreateVideo,
@@ -88,17 +113,17 @@ public sealed class Shell : INotifyPropertyChanged, IAsyncDisposable
 
     internal Shell(IMonitorEnumerator monitorEnumerator, IWindowEnumerator windowEnumerator,
         Func<CaptureTarget, IScreenCaptureSource> previewSourceFactory,
-        Action<Action>? postToUi = null)
+        Action<Action>? postToUi = null,
+        ReleaseUpdateChecker? updateChecker = null)
         : this(monitorEnumerator, windowEnumerator, previewSourceFactory, postToUi,
-            new FileUserPreferencesStore(FileUserPreferencesStore.DefaultPath),
-            CreateStartupRegistration())
+            new FileUserPreferencesStore(FileUserPreferencesStore.DefaultPath), CreateStartupRegistration(), updateChecker)
     {
     }
 
     internal Shell(IMonitorEnumerator monitorEnumerator, IWindowEnumerator windowEnumerator,
         FileUserPreferencesStore preferencesStore, IStartupRegistration startupRegistration)
         : this(monitorEnumerator, windowEnumerator, new PublisherCaptureSelection().CreateVideo,
-            action => Dispatcher.UIThread.Post(action), preferencesStore, startupRegistration)
+            action => Dispatcher.UIThread.Post(action), preferencesStore, startupRegistration, null)
     {
     }
 
@@ -106,7 +131,8 @@ public sealed class Shell : INotifyPropertyChanged, IAsyncDisposable
         Func<CaptureTarget, IScreenCaptureSource> previewSourceFactory,
         Action<Action>? postToUi,
         FileUserPreferencesStore preferencesStore,
-        IStartupRegistration startupRegistration)
+        IStartupRegistration startupRegistration,
+        ReleaseUpdateChecker? updateChecker)
     {
         _monitorEnumerator = monitorEnumerator ?? throw new ArgumentNullException(nameof(monitorEnumerator));
         _windowEnumerator = windowEnumerator ?? throw new ArgumentNullException(nameof(windowEnumerator));
@@ -116,6 +142,12 @@ public sealed class Shell : INotifyPropertyChanged, IAsyncDisposable
         _startupRegistration = startupRegistration ?? throw new ArgumentNullException(nameof(startupRegistration));
         _preview = new SharePreviewController(previewSourceFactory,
             postToUi ?? (action => action()));
+        _updateChecker = updateChecker;
+        if (_updateChecker is not null)
+        {
+            _updateChecker.ResultChanged += OnUpdateResultChanged;
+            _updateChecker.Start();
+        }
         _preview.FrameCaptured += frame => PreviewFrameCaptured?.Invoke(frame);
         _preview.StatusChanged += () => Raise(nameof(PreviewStatus));
         _backendAddressStore = new FileBackendAddressStore(FileBackendAddressStore.DefaultPath);
@@ -354,8 +386,24 @@ public sealed class Shell : INotifyPropertyChanged, IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         ViewModel.PropertyChanged -= OnViewModelPropertyChanged;
+        if (_updateChecker is not null)
+        {
+            _updateChecker.ResultChanged -= OnUpdateResultChanged;
+            await _updateChecker.DisposeAsync();
+        }
         await _preview.DisposeAsync();
     }
+
+    public Task CheckForUpdatesAsync() => _updateChecker?.CheckAsync() ?? Task.CompletedTask;
+
+    private void OnUpdateResultChanged(object? sender, UpdateCheckResult result) =>
+        Dispatcher.UIThread.Post(() =>
+        {
+            Raise(nameof(UpdateStatusText));
+            Raise(nameof(IsCheckingUpdates));
+            Raise(nameof(IsUpdateAvailable));
+            Raise(nameof(UpdateDownloadUrl));
+        });
 
     /// <summary>Watch playback level on the 0–100 scale shown by both watch controls.</summary>
     public double PlaybackVolume

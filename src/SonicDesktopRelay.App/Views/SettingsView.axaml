@@ -182,18 +182,23 @@
                         </StackPanel>
                     </Border>
 
-                    <Border Classes="card unavailable" IsEnabled="False" Focusable="False">
+                    <Border Classes="card">
                         <StackPanel Spacing="{StaticResource SpaceSm}">
                             <TextBlock Text="About" FontSize="{StaticResource FontSizeLg}"
                                        FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" />
                             <TextBlock Text="FrameRelay · Share. Watch. Together."
                                        TextWrapping="Wrap" Foreground="{StaticResource TextSecondaryBrush}" />
-                            <TextBlock Text="Update checks and licenses · Coming soon"
+                            <TextBlock Text="{Binding UpdateStatusText}"
                                        TextWrapping="Wrap" FontSize="{StaticResource FontSizeSm}"
                                        Foreground="{StaticResource TextSecondaryBrush}" />
+                            <TextBlock Text="Installed version:" Foreground="{StaticResource TextSecondaryBrush}" />
+                            <TextBlock Text="{Binding AppVersion}" />
                             <WrapPanel Orientation="Horizontal">
-                                <Button Content="Check for updates" Margin="0,0,8,8" />
-                                <Button Content="View licenses" Margin="0,0,8,8" />
+                                <Button Content="Check for updates" Click="OnCheckForUpdates"
+                                        IsEnabled="{Binding !IsCheckingUpdates}" Margin="0,0,8,8" />
+                                <Button Content="Open download" Click="OnOpenUpdate"
+                                        IsVisible="{Binding IsUpdateAvailable}" Margin="0,0,8,8" />
+                                <Button Content="View licenses" IsEnabled="False" Margin="0,0,8,8" />
                             </WrapPanel>
                         </StackPanel>
                     </Border>

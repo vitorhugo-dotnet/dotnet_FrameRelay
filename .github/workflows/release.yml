@@ -123,12 +123,14 @@ jobs:
         run: >-
           dotnet publish $env:APP_PROJECT_PATH
           --configuration $env:CONFIGURATION --runtime $env:RUNTIME_ID --self-contained true --no-restore
+          -p:Version=${{ steps.release.outputs.version }}
           --output artifacts/publish/win-x64
 
       - name: Publish single-file EXE
         run: >-
           dotnet publish $env:APP_PROJECT_PATH
           --configuration $env:CONFIGURATION --runtime $env:RUNTIME_ID --self-contained true --no-restore
+          -p:Version=${{ steps.release.outputs.version }}
           -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
           -p:EnableCompressionInSingleFile=true -p:DebugType=embedded
           --output artifacts/publish/single-file

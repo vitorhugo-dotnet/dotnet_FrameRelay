@@ -36,6 +36,7 @@ public sealed class Shell : INotifyPropertyChanged, IAsyncDisposable
 
     private readonly FileBackendAddressStore _backendAddressStore;
     private readonly FileUserPreferencesStore _userPreferencesStore;
+    private readonly IStartupRegistration _startupRegistration;
     private readonly IMonitorEnumerator _monitorEnumerator;
     private readonly IWindowEnumerator _windowEnumerator;
     private readonly ILogger<Shell> _logger;
@@ -45,6 +46,8 @@ public sealed class Shell : INotifyPropertyChanged, IAsyncDisposable
     private AppComposition? _composition;
     private string _backendAddress;
     private bool _ignoreDiscordAudio;
+    private bool _startOnSystemStartup;
+    private bool _minimizeToTray;
     private string _deviceName = Environment.MachineName;
     private string? _shellError;
     private MonitorInfo? _selectedMonitor;
@@ -86,24 +89,59 @@ public sealed class Shell : INotifyPropertyChanged, IAsyncDisposable
     internal Shell(IMonitorEnumerator monitorEnumerator, IWindowEnumerator windowEnumerator,
         Func<CaptureTarget, IScreenCaptureSource> previewSourceFactory,
         Action<Action>? postToUi = null)
+        : this(monitorEnumerator, windowEnumerator, previewSourceFactory, postToUi,
+            new FileUserPreferencesStore(FileUserPreferencesStore.DefaultPath),
+            CreateStartupRegistration())
+    {
+    }
+
+    internal Shell(IMonitorEnumerator monitorEnumerator, IWindowEnumerator windowEnumerator,
+        FileUserPreferencesStore preferencesStore, IStartupRegistration startupRegistration)
+        : this(monitorEnumerator, windowEnumerator, new PublisherCaptureSelection().CreateVideo,
+            action => Dispatcher.UIThread.Post(action), preferencesStore, startupRegistration)
+    {
+    }
+
+    private Shell(IMonitorEnumerator monitorEnumerator, IWindowEnumerator windowEnumerator,
+        Func<CaptureTarget, IScreenCaptureSource> previewSourceFactory,
+        Action<Action>? postToUi,
+        FileUserPreferencesStore preferencesStore,
+        IStartupRegistration startupRegistration)
     {
         _monitorEnumerator = monitorEnumerator ?? throw new ArgumentNullException(nameof(monitorEnumerator));
         _windowEnumerator = windowEnumerator ?? throw new ArgumentNullException(nameof(windowEnumerator));
         _logger = FrameRelayLogging.Current?.LoggerFactory.CreateLogger<Shell>()
                   ?? NullLogger<Shell>.Instance;
+        _userPreferencesStore = preferencesStore ?? throw new ArgumentNullException(nameof(preferencesStore));
+        _startupRegistration = startupRegistration ?? throw new ArgumentNullException(nameof(startupRegistration));
         _preview = new SharePreviewController(previewSourceFactory,
             postToUi ?? (action => action()));
         _preview.FrameCaptured += frame => PreviewFrameCaptured?.Invoke(frame);
         _preview.StatusChanged += () => Raise(nameof(PreviewStatus));
         _backendAddressStore = new FileBackendAddressStore(FileBackendAddressStore.DefaultPath);
-        _userPreferencesStore = new FileUserPreferencesStore(FileUserPreferencesStore.DefaultPath);
         _backendAddress = _backendAddressStore.Read();
         _ignoreDiscordAudio = _userPreferencesStore.ReadIgnoreDiscordAudio();
+        _startOnSystemStartup = _userPreferencesStore.ReadStartOnSystemStartup();
+        _minimizeToTray = _userPreferencesStore.ReadMinimizeToTray();
         SelectedShareQuality = ShareQualities[0];
         SelectedShareFrameRate = ShareFrameRates[1];
         ViewModel.PropertyChanged += OnViewModelPropertyChanged;
         RefreshMonitors();
         RefreshWindows();
+        try { _startupRegistration.SetEnabled(_startOnSystemStartup); }
+        catch (Exception error)
+        {
+            _logger.LogError(error, "Could not reconcile FrameRelay login startup registration.");
+            ShellError = "Could not update the startup registration. Check the application log for details.";
+        }
+    }
+
+    private static IStartupRegistration CreateStartupRegistration()
+    {
+        var logger = FrameRelayLogging.Current?.LoggerFactory.CreateLogger("FrameRelay.Startup")
+                     ?? NullLogger.Instance;
+        return new WindowsStartupRegistration(new CurrentUserStartupRunKey(),
+            () => Environment.ProcessPath, logger);
     }
 
     public string LogDirectory =>
@@ -217,6 +255,45 @@ public sealed class Shell : INotifyPropertyChanged, IAsyncDisposable
             }
             Raise();
             if (_composition is { } composition) _ = ApplyDiscordAudioPreferenceAsync(composition, value);
+        }
+    }
+
+    public bool StartOnSystemStartup
+    {
+        get => _startOnSystemStartup;
+        set
+        {
+            if (_startOnSystemStartup == value) return;
+            _startOnSystemStartup = value;
+            try
+            {
+                _userPreferencesStore.WriteStartOnSystemStartup(value);
+                _startupRegistration.SetEnabled(value);
+                ShellError = null;
+            }
+            catch (Exception error)
+            {
+                _logger.LogError(error, "Could not update FrameRelay login startup registration. enabled={Enabled}", value);
+                ShellError = "Could not update the startup registration. Check the application log for details.";
+            }
+            Raise();
+        }
+    }
+
+    public bool MinimizeToTray
+    {
+        get => _minimizeToTray;
+        set
+        {
+            if (_minimizeToTray == value) return;
+            _minimizeToTray = value;
+            try { _userPreferencesStore.WriteMinimizeToTray(value); }
+            catch (Exception error)
+            {
+                _logger.LogError(error, "Could not save the minimize-to-tray preference.");
+                ShellError = "Could not save the minimize-to-tray preference.";
+            }
+            Raise();
         }
     }
 

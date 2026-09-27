@@ -105,20 +105,30 @@
 
             <UniformGrid Classes="settingsColumns">
                 <StackPanel Classes="leftColumn" Spacing="{StaticResource SpaceMd}">
-                    <Border Classes="card unavailable" IsEnabled="False" Focusable="False">
+                    <Border Classes="card">
                         <StackPanel Spacing="{StaticResource SpaceSm}">
                             <TextBlock Text="General" FontSize="{StaticResource FontSizeLg}"
                                        FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" />
-                            <TextBlock Text="Appearance, language, startup, and tray behavior · Coming soon"
+                            <TextBlock Text="Startup and tray behavior"
                                        TextWrapping="Wrap" FontSize="{StaticResource FontSizeSm}"
                                        Foreground="{StaticResource TextSecondaryBrush}" />
-                            <TextBlock Text="Theme" Foreground="{StaticResource TextSecondaryBrush}" />
-                            <ComboBox PlaceholderText="Select a theme" />
-                            <TextBlock Text="Language" Foreground="{StaticResource TextSecondaryBrush}" />
-                            <ComboBox PlaceholderText="Select a language" />
-                            <CheckBox Content="Start on system startup" />
-                            <CheckBox Content="Minimize to tray" />
-                            <CheckBox Content="Reconnect to the last session automatically" />
+                            <CheckBox Content="Start on system startup"
+                                      IsChecked="{Binding StartOnSystemStartup, Mode=TwoWay}" />
+                            <CheckBox Content="Minimize to tray"
+                                      IsChecked="{Binding MinimizeToTray, Mode=TwoWay}" />
+                            <TextBlock Text="When enabled, minimizing or closing hides FrameRelay in the tray. Use Exit in the tray menu to fully quit."
+                                       TextWrapping="Wrap" FontSize="{StaticResource FontSizeSm}"
+                                       Foreground="{StaticResource TextSecondaryBrush}" />
+                            <StackPanel IsEnabled="False" Spacing="{StaticResource SpaceSm}">
+                                <TextBlock Text="Appearance, language, and reconnect preferences · Coming soon"
+                                           TextWrapping="Wrap" FontSize="{StaticResource FontSizeSm}"
+                                           Foreground="{StaticResource TextSecondaryBrush}" />
+                                <TextBlock Text="Theme" Foreground="{StaticResource TextSecondaryBrush}" />
+                                <ComboBox PlaceholderText="Select a theme" />
+                                <TextBlock Text="Language" Foreground="{StaticResource TextSecondaryBrush}" />
+                                <ComboBox PlaceholderText="Select a language" />
+                                <CheckBox Content="Reconnect to the last session automatically" />
+                            </StackPanel>
                         </StackPanel>
                     </Border>
 

@@ -82,7 +82,7 @@ public sealed class RtcVideoPublishHost(
             var codec = _publisher?.CodecDiagnostics;
             var transport = TransportDiagnostics.Count == 0 ? null : string.Join(", ",
                 TransportDiagnostics.Values.Select(x => x.ToString()).Distinct(StringComparer.Ordinal));
-            return new SessionMediaMetrics(
+            var metrics = new SessionMediaMetrics(
                 Width: video?.Width is > 0 ? video.Width : null,
                 Height: video?.Height is > 0 ? video.Height : null,
                 Codec: codec?.ActiveCodec?.ToString() ?? (_encoder is MediaFoundationAv1Encoder ? VideoCodec.Av1 : VideoCodec.H264).ToString(),
@@ -97,10 +97,21 @@ public sealed class RtcVideoPublishHost(
                 CodecProfileLevel: codec?.ProfileLevel,
                 VideoImplementation: video?.TransformName ?? EncoderName,
                 VideoAcceleration: video?.Acceleration,
-                CodecFallbackReason: _codecFallbackReason ?? codec?.FallbackReason,
                 EncodeDurationMilliseconds: LastEncodeDuration?.TotalMilliseconds);
+            return ApplyCodecFallbackReason(metrics, codec?.FallbackReason, _codecFallbackReason);
         }
     }
+
+    internal static SessionMediaMetrics ApplyCodecFallbackReason(
+        SessionMediaMetrics metrics,
+        string? publisherFallbackReason,
+        string? hostFallbackReason) =>
+        metrics with
+        {
+            CodecFallbackReason = string.IsNullOrWhiteSpace(publisherFallbackReason)
+                ? hostFallbackReason
+                : publisherFallbackReason
+        };
 
     public long FramesCaptured => _pipeline?.FramesCaptured ?? 0;
 

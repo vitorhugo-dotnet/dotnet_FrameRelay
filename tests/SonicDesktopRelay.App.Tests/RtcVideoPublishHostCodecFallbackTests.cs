@@ -1,5 +1,6 @@
 using SonicDesktopRelay.App;
 using SonicDesktopRelay.Media;
+using SonicDesktopRelay.Presentation;
 
 namespace SonicDesktopRelay.App.Tests;
 
@@ -45,6 +46,23 @@ public sealed class RtcVideoPublishHostCodecFallbackTests
         Assert.Equal(new VideoCodecConstraints("0", 9), required);
         Assert.Equal(new VideoCodecConstraints("0", 1), degradedOnly);
         Assert.True(required.MaxLevel > degradedOnly.MaxLevel);
+    }
+
+    [Fact]
+    public void Current_metrics_preserve_specific_publisher_fallback_reason()
+    {
+        var metrics = RtcVideoPublishHost.ApplyCodecFallbackReason(
+            new SessionMediaMetrics(Codec: "H264"),
+            publisherFallbackReason: "viewer-av1-decoder-unavailable",
+            hostFallbackReason: "av1-session-downgraded-to-h264");
+
+        Assert.Equal("viewer-av1-decoder-unavailable", metrics.CodecFallbackReason);
+
+        var hostFallback = RtcVideoPublishHost.ApplyCodecFallbackReason(
+            metrics,
+            publisherFallbackReason: null,
+            hostFallbackReason: "av1-encoder-initialization-failed");
+        Assert.Equal("av1-encoder-initialization-failed", hostFallback.CodecFallbackReason);
     }
 
     private sealed class FakeEncoder(string name) : IVideoEncoder

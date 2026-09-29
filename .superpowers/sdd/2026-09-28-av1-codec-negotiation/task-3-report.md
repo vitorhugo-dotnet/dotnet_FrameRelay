@@ -1,27 +1,29 @@
 # Task 3 report: Media Foundation AV1 probing and codecs
 
-**Status: BLOCKED**
+**Status: DONE_WITH_CONCERNS**
 
-## Attempted
+## Implemented
 
-Read the Task 3 brief, approved design, implementation plan, H.264 encoder/decoder reference implementations, Media Foundation project dependencies, and current codec capability contracts. Confirmed the AV1 media subtype is the `AV01` FOURCC, represented by the standard Media Foundation subtype GUID `31305641-0000-0010-8000-00AA00389B71`. The pinned Vortice.MediaFoundation 3.8.3 package does not expose a named AV1 subtype constant.
+- Added hardware-only AV1 encoder and decoder capability enumeration through separate Media Foundation categories, AV1 subtype `31305641-0000-0010-8000-00AA00389B71` (`AV01`), activation, and concrete media-type configuration.
+- The probe rejects software transforms, records category-specific empty enumeration, enables asynchronous hardware encoders before configuration, disposes temporary activations/transforms, and requires AV1 profile value `0` plus NV12 at 640x360@30.
+- Added an AV1 Media Foundation encoder. It uses the existing bounded input conversion and async MFT pump, tags outputs `Codec = VideoCodec.Av1`, and carries output timestamp, duration, keyframe flag, and dimensions.
+- Added an AV1 Media Foundation decoder for synchronous hardware MFTs. It accepts only samples tagged AV1, configures AV1 Main profile input, selects NV12 output, and normalizes decoded frames to the existing BGRA `VideoFrame` contract.
+- Added injectable tests for absent transforms, software-only transforms, hardware acceptance, activation/configuration failure, async decoder rejection, and COM candidate disposal. Added hardware encoder sample-contract and encoder/decoder pair integration coverage. xUnit discovery metadata skips integration tests with the measured host reason.
 
-No product code was changed. The H.264 encoder is 651 lines and uses output-before-input setup, an async MFT pump, keyframe control, and retry logic. The 901-line H.264 decoder has a different input-before-output setup, dynamic stream-change handling, output geometry/stride normalization, and sample ownership logic. An AV1 codec implementation cannot safely be produced by a mechanical subtype substitution: AV1 MFTs need their own validated profile/configuration and output behavior, and no AV1-capable Windows hardware/MFT is available here to establish those details.
+## Host evidence and limitation
 
-The brief requires a probe to advertise only a transform that successfully activates and configures, plus usable hardware-only encoder and decoder implementations. Shipping a probe without codec paths would not meet the required outcome; guessing the AV1 transform contract and copying either H.264 pipeline would risk advertising unusable hardware and emitting samples with incorrect framing/metadata.
+On Windows 11 build 26200 with the RTX 5060, `MFTEnumEx` found `NVIDIA AV1 Encoder MFT`. Initial configuration returned `MF_E_TRANSFORM_ASYNC_LOCKED`; enabling `MF_TRANSFORM_ASYNC_UNLOCK` allowed the candidate to configure successfully for AV1 profile 0 output and NV12 input at 640x360@30. The hardware encoder integration test produced tagged AV1 output with the expected dimensions and 30 FPS duration.
 
-## Tests
+The hardware decoder category returned no AV1 decoder activation. Therefore the host integration test for the encoder/decoder pair is skipped with: `MFTEnumEx returned no hardware AV1 decoder activation.` The published capabilities contain AV1 encode but no AV1 decode, so session selection must fall back to H.264 on this host.
 
-No tests run. There is no implementation to validate, and the focused test project is Windows-targeted. Hardware-dependent integration behavior could not be established on this host.
+The current AV1 decoder deliberately rejects asynchronous MFTs because no decoder event-pump path was implemented or validated. The probe mirrors that restriction and never advertises such a decoder. Synchronous hardware decoder support remains unverified on this host. Media Foundation exposes no maximum AV1 level through the inspected type negotiation, so the probe conservatively bounds its advertised constraint to AV1 Main profile `0`, AV1 `seq_level_idx` 4 (Level 3.0), and the tested 640x360@30 configuration; it does not claim arbitrary transform capacity.
 
-## Files changed
+## Verification
 
-- `.superpowers/sdd/2026-09-28-av1-codec-negotiation/task-3-report.md` (this report only)
+- `dotnet build src\SonicDesktopRelay.Media.Windows\SonicDesktopRelay.Media.Windows.csproj --no-restore --verbosity:minimal` — passed, 0 warnings and 0 errors.
+- `dotnet test tests\SonicDesktopRelay.Media.Windows.Tests\SonicDesktopRelay.Media.Windows.Tests.csproj --no-restore --filter "FullyQualifiedName~MediaFoundationAv1CapabilityProbeTests|FullyQualifiedName~MediaFoundationAv1CodecTests" --logger "console;verbosity=minimal"` — 6 passed, 1 skipped, 0 failed. The skipped test is the pair integration because no hardware AV1 decoder was enumerated.
+- `git diff --check` — no whitespace errors in Task 3 source/tests; the shared plan file had an existing extra blank line at EOF from concurrent Task 4 progress.
 
 ## Self-review
 
-This reports a blocker rather than claiming partial completion. No H.264 behavior, dependencies, RTC/session code, diagnostics, or PR metadata were changed.
-
-## Blocker / needed context
-
-Please provide access to a Windows environment with known AV1 encode and decode hardware transforms, or revise Task 3 into a smaller research/probe task with a specific supported Windows/MFT target and verified media-type/profile contract. Then the implementation can validate activation, media-type setup, encoded sample format, and BGRA decode output against the intended transform before completing the capability probe and codec classes.
+The new AV1 paths contain no H.264 bitstream conversion or software fallback. The encoder's AV1 bytes are kept as emitted by the AV1 MFT. The decoder copies only the generic stride, output allocation, stream-change, and BGRA normalization logic from the H.264 implementation; codec-specific negotiation uses AV1 subtype/profile. The principal limitation is lack of an AV1 hardware decoder on the validation host and no support for asynchronous AV1 decoders yet.

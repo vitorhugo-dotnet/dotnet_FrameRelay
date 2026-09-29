@@ -80,14 +80,40 @@ public sealed class VideoPublisherTests
         Assert.True(SpinWait.SpinUntil(() => h264.EncodeCalls == 1, TimeSpan.FromSeconds(1)));
         await peer.VideoSendCompleted.Task.WaitAsync(TimeSpan.FromSeconds(1));
         Assert.Equal(1, peer.DroppedVideoSamples);
-        var keyFrameRequestsBeforeAnswer = h264.KeyFrameRequests;
 
         peer.NegotiatedVideoCodec = VideoCodec.H264;
+        peer.BlockApplyAnswer = true;
         var h264NegotiationId = ReadNegotiationId(signaling.Sent.Last().Payload);
-        await publisher.HandleAsync(Frame(SignalingMessageTypes.WebRtcAnswer, ViewerA,
+        var answerTask = publisher.HandleAsync(Frame(SignalingMessageTypes.WebRtcAnswer, ViewerA,
             $$"""{"type":"answer","sdp":"h264-answer","negotiationId":"{{h264NegotiationId}}"}"""),
             CancellationToken.None);
-        Assert.Equal(keyFrameRequestsBeforeAnswer + 1, h264.KeyFrameRequests);
+        var viewersAwaitingDuringAnswer = -1;
+        var droppedSamplesBeforeDelta = -1;
+        var droppedSamplesDuringAnswer = -1;
+        var keyFrameSignalsBeforeAnswerCompletes = -1L;
+        try
+        {
+            await peer.ApplyAnswerEntered.Task.WaitAsync(TimeSpan.FromSeconds(1));
+
+            viewersAwaitingDuringAnswer = publisher.ViewersAwaitingKeyFrame;
+            droppedSamplesBeforeDelta = peer.DroppedVideoSamples;
+            h264.NextIsKeyFrame = false;
+            capture.Emit();
+            Assert.True(SpinWait.SpinUntil(() => h264.EncodeCalls == 2, TimeSpan.FromSeconds(1)));
+            await Task.Delay(50);
+            droppedSamplesDuringAnswer = peer.DroppedVideoSamples;
+
+            keyFrameSignalsBeforeAnswerCompletes = pipeline.KeyFrameRequestSignals;
+        }
+        finally
+        {
+            peer.ReleaseApplyAnswer();
+        }
+        await answerTask.WaitAsync(TimeSpan.FromSeconds(1));
+
+        Assert.Equal(1, viewersAwaitingDuringAnswer);
+        Assert.Equal(droppedSamplesBeforeDelta, droppedSamplesDuringAnswer);
+        Assert.Equal(keyFrameSignalsBeforeAnswerCompletes + 1, pipeline.KeyFrameRequestSignals);
         Assert.Equal(1, publisher.ViewersAwaitingKeyFrame);
         Assert.Equal("av1-runtime-encoder-failure", publisher.CodecDiagnostics.FallbackReason);
 
@@ -106,7 +132,7 @@ public sealed class VideoPublisherTests
         capture.Emit();
         audioCapture.Emit();
         await Task.Delay(50);
-        Assert.Equal(2, h264.EncodeCalls);
+        Assert.Equal(3, h264.EncodeCalls);
         Assert.Equal(1, downgradeCalls);
         Assert.Equal(1, peer.H264OfferCalls);
         Assert.Equal(2, peer.SentAudioSamples.Count);

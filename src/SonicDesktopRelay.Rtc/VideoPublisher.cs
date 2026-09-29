@@ -236,6 +236,10 @@ public sealed class VideoPublisher(
                     || sdp.ValueKind != JsonValueKind.String
                     || sdp.GetString() is not { } sdpText) return;
 
+                if (_sessionCodec == VideoCodec.H264
+                    && _videoQueues.TryGetValue(participantId, out var h264VideoQueue))
+                    h264VideoQueue.ResetForCodecTransition();
+
                 await peer.ApplyAnswerAsync(sdpText, ct);
                 if (peer.NegotiatedVideoCodec is { } negotiated)
                     _viewerCapabilities[participantId] = BuildViewerCapabilities(negotiated, peer.NegotiatedVideoConstraints);
@@ -250,12 +254,7 @@ public sealed class VideoPublisher(
             if (_sessionCodec == VideoCodec.H264
                 && _peers.TryGetValue(participantId, out var answeredPeer)
                 && answeredPeer.NegotiatedVideoCodec == VideoCodec.H264)
-            {
-                if (_videoQueues.TryGetValue(participantId, out var videoQueue))
-                    videoQueue.ResetForCodecTransition();
-                else
-                    pipeline.RequestKeyFrame(KeyFrameRequestReason.QualityChange);
-            }
+                pipeline.RequestKeyFrame(KeyFrameRequestReason.QualityChange);
         }
         finally { _sessionGate.Release(); }
     }

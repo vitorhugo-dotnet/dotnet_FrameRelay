@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.Extensions.Time.Testing;
 using SonicDesktopRelay.Media;
 using SonicDesktopRelay.Rtc;
@@ -272,6 +273,7 @@ public sealed class VideoPublisherTests
         await harness.Publisher.AddViewerAsync(ViewerA, CancellationToken.None);
         var first = harness.Peers.Created[0];
         first.NegotiatedVideoCodec = VideoCodec.Av1;
+        first.NegotiatedVideoConstraints = new VideoCodecConstraints("0", 4);
         var firstId = ReadNegotiationId(harness.Signaling.Sent.Last().Payload);
         await harness.Publisher.HandleAsync(Frame(SignalingMessageTypes.WebRtcAnswer, ViewerA,
             $$"""{"type":"answer","sdp":"answer","negotiationId":"{{firstId}}"}"""), CancellationToken.None);
@@ -287,6 +289,76 @@ public sealed class VideoPublisherTests
         Assert.Equal(1, second.H264OfferCalls);
         Assert.Same(first, harness.Peers.Created[0]);
         Assert.Same(second, harness.Peers.Created[1]);
+    }
+
+    [Theory]
+    [InlineData("1", 4)]
+    [InlineData("0", 3)]
+    public async Task Profile_or_level_mismatch_in_negotiated_av1_answer_downgrades_shared_codec(string profile, int level)
+    {
+        var downgradeCalls = 0;
+        var harness = await Harness.StartedAsync(VideoCodec.Av1, _ => { downgradeCalls++; return Task.CompletedTask; });
+        await harness.Publisher.AddViewerAsync(ViewerA, CancellationToken.None);
+        var peer = harness.Peers.Created[0];
+        peer.NegotiatedVideoCodec = VideoCodec.Av1;
+        peer.NegotiatedVideoConstraints = new VideoCodecConstraints(profile, level);
+        var negotiationId = ReadNegotiationId(harness.Signaling.Sent.Last().Payload);
+
+        await harness.Publisher.HandleAsync(Frame(SignalingMessageTypes.WebRtcAnswer, ViewerA,
+            $$"""{"type":"answer","sdp":"answer","negotiationId":"{{negotiationId}}"}"""), CancellationToken.None);
+
+        Assert.Equal(1, downgradeCalls);
+        Assert.Equal(1, peer.H264OfferCalls);
+        Assert.Equal(1, harness.Publisher.PeerCount);
+        Assert.False(peer.Disposed);
+    }
+
+    [Fact]
+    public async Task Current_av1_decoder_failure_transitions_the_live_session_to_h264()
+    {
+        var downgradeCalls = 0;
+        var harness = await Harness.StartedAsync(VideoCodec.Av1, _ => { downgradeCalls++; return Task.CompletedTask; });
+        await harness.Publisher.AddViewerAsync(ViewerA, CancellationToken.None);
+        var peer = harness.Peers.Created[0];
+        peer.NegotiatedVideoCodec = VideoCodec.Av1;
+        peer.NegotiatedVideoConstraints = new VideoCodecConstraints("0", 4);
+        var initialId = ReadNegotiationId(harness.Signaling.Sent.Last().Payload);
+        await harness.Publisher.HandleAsync(Frame(SignalingMessageTypes.WebRtcAnswer, ViewerA,
+            $$"""{"type":"answer","sdp":"answer","negotiationId":"{{initialId}}"}"""), CancellationToken.None);
+
+        await harness.Publisher.HandleAsync(Frame(SignalingMessageTypes.WebRtcRenegotiate, ViewerA,
+            $$"""{"reason":"av1_decoder_init_failed","negotiationId":"{{initialId}}"}"""), CancellationToken.None);
+
+        Assert.Equal(1, downgradeCalls);
+        Assert.Equal(1, peer.H264OfferCalls);
+        Assert.Same(peer, harness.Peers.Created.Single());
+        Assert.False(peer.Disposed);
+        Assert.Equal(1, harness.Publisher.PeerCount);
+    }
+
+    [Fact]
+    public async Task Relay_retry_after_downgrade_keeps_the_replacement_offer_h264_only()
+    {
+        var harness = await Harness.StartedAsync(VideoCodec.Av1, _ => Task.CompletedTask);
+        await harness.Publisher.AddViewerAsync(ViewerA, CancellationToken.None);
+        var peer = harness.Peers.Created[0];
+        peer.NegotiatedVideoCodec = VideoCodec.Av1;
+        peer.NegotiatedVideoConstraints = new VideoCodecConstraints("0", 4);
+        var negotiationId = ReadNegotiationId(harness.Signaling.Sent.Last().Payload);
+        await harness.Publisher.HandleAsync(Frame(SignalingMessageTypes.WebRtcAnswer, ViewerA,
+            $$"""{"type":"answer","sdp":"answer","negotiationId":"{{negotiationId}}"}"""), CancellationToken.None);
+        await harness.Publisher.HandleAsync(Frame(SignalingMessageTypes.WebRtcRenegotiate, ViewerA,
+            $$"""{"reason":"av1_decoder_init_failed","negotiationId":"{{negotiationId}}"}"""), CancellationToken.None);
+
+        var relayId = Guid.NewGuid();
+        await harness.Publisher.HandleAsync(Frame(SignalingMessageTypes.WebRtcRenegotiate, ViewerA,
+            $$"""{"reason":"direct_connection_failed","iceTransportPolicy":"relay","negotiationId":"{{relayId}}"}"""), CancellationToken.None);
+
+        Assert.Equal(2, harness.Peers.Created.Count);
+        Assert.Equal(1, harness.Peers.Created[1].H264OfferCalls);
+        var relayOffer = harness.Signaling.Sent.Last(x => x.Type == SignalingMessageTypes.WebRtcOffer);
+        Assert.Equal("h264-offer-sdp", JsonDocument.Parse(JsonSerializer.Serialize(relayOffer.Payload))
+            .RootElement.GetProperty("sdp").GetString());
     }
 
     private static Guid ReadNegotiationId(object? payload)
@@ -499,7 +571,8 @@ public sealed class VideoPublisherTests
             var peers = new FakePeerFactory();
             var signaling = new FakeSignaling();
             var publisher = new VideoPublisher(pipeline, peers, signaling, audioPipeline, effectiveTime,
-                downgradeEncoderToH264: downgrade, initialSessionCodec: initialCodec);
+                downgradeEncoderToH264: downgrade, initialSessionCodec: initialCodec,
+                publisherVideoCapabilities: initialCodec == VideoCodec.Av1 ? Av1PublisherCapabilities() : null);
             await pipeline.StartAsync(Monitor, CancellationToken.None);
             await audioPipeline.StartAsync(CancellationToken.None);
             return new Harness
@@ -515,6 +588,13 @@ public sealed class VideoPublisherTests
                 Publisher = publisher
             };
         }
+
+        private static VideoCodecCapabilities Av1PublisherCapabilities() => new(
+            new HashSet<VideoCodec> { VideoCodec.H264, VideoCodec.Av1 },
+            new HashSet<VideoCodec>(),
+            new Dictionary<VideoCodec, VideoCodecConstraints> { [VideoCodec.Av1] = new("0", 4) },
+            new Dictionary<VideoCodec, VideoCodecConstraints>(),
+            new Dictionary<VideoCodec, string>());
     }
 
     private sealed class FakeCapture : IScreenCaptureSource
@@ -616,6 +696,7 @@ public sealed class VideoPublisherTests
         public bool Disposed { get; private set; }
         public int H264OfferCalls { get; private set; }
         public VideoCodec? NegotiatedVideoCodec { get; set; }
+        public VideoCodecConstraints? NegotiatedVideoConstraints { get; set; }
 
         public Action? DuringVideoSend { get; set; }
 

@@ -17,7 +17,9 @@ public sealed class VideoPublisher(
     AudioPublishPipeline? audioPipeline = null,
     TimeProvider? time = null,
     Func<CancellationToken, Task>? downgradeEncoderToH264 = null,
-    VideoCodec initialSessionCodec = VideoCodec.H264) : IAsyncDisposable
+    VideoCodec initialSessionCodec = VideoCodec.H264,
+    VideoCodecCapabilities? publisherVideoCapabilities = null,
+    VideoCodecConstraints? requiredAv1 = null) : IAsyncDisposable
 {
     private readonly ConcurrentDictionary<Guid, IPeerConnection> _peers = new();
     private readonly ConcurrentDictionary<Guid, VideoSampleSendQueue> _videoQueues = new();
@@ -26,8 +28,11 @@ public sealed class VideoPublisher(
     private readonly ConcurrentDictionary<Guid, Guid> _fallbackIds = new();
     private readonly ConcurrentDictionary<Guid, byte> _fallbackUsed = new();
     private readonly ConcurrentDictionary<Guid, SemaphoreSlim> _peerGates = new();
+    private readonly ConcurrentDictionary<Guid, VideoCodecCapabilities> _viewerCapabilities = new();
     private readonly SemaphoreSlim _sessionGate = new(1, 1);
     private VideoCodec? _sessionCodec = initialSessionCodec;
+    private readonly VideoCodecCapabilities? _publisherVideoCapabilities = publisherVideoCapabilities;
+    private readonly VideoCodecConstraints _requiredAv1 = requiredAv1 ?? new VideoCodecConstraints("0", 4);
     private readonly object _receiverStatsGate = new();
     private readonly TimeProvider _time = time ?? TimeProvider.System;
     private long _lastVideoSendDurationTicks;
@@ -118,6 +123,7 @@ public sealed class VideoPublisher(
             }
             _transportDiagnostics.TryRemove(participantId, out _);
             _negotiationIds.TryRemove(participantId, out _);
+            _viewerCapabilities.TryRemove(participantId, out _);
             _fallbackIds.TryRemove(participantId, out _);
             if (_videoQueues.TryRemove(participantId, out var queue))
                 await queue.DisposeAsync();
@@ -143,10 +149,12 @@ public sealed class VideoPublisher(
                     await peer.ApplyAnswerAsync(sdpText, ct);
                     if (peer.NegotiatedVideoCodec is { } negotiated)
                     {
+                        _viewerCapabilities[from] = BuildViewerCapabilities(negotiated, peer.NegotiatedVideoConstraints);
                         await _sessionGate.WaitAsync(ct);
                         try
                         {
-                            if (_sessionCodec != negotiated && negotiated == VideoCodec.H264)
+                            var selection = SelectSharedCodec();
+                            if (_sessionCodec == VideoCodec.Av1 && selection.Codec == VideoCodec.H264)
                                 await SwitchSessionToH264Async(ct);
                         }
                         finally { _sessionGate.Release(); }
@@ -233,25 +241,32 @@ public sealed class VideoPublisher(
             || idElement.ValueKind != JsonValueKind.String
             || !Guid.TryParse(idElement.GetString(), out var requestedId)) return;
 
-        var gate = _peerGates.GetOrAdd(participantId, _ => new SemaphoreSlim(1, 1));
-        await gate.WaitAsync(ct);
+        await _sessionGate.WaitAsync(ct);
         try
         {
-            if (!_peers.TryGetValue(participantId, out var oldPeer)) return;
-            if (!_fallbackUsed.TryAdd(participantId, 0)) return;
-            _fallbackIds[participantId] = requestedId;
+            var gate = _peerGates.GetOrAdd(participantId, _ => new SemaphoreSlim(1, 1));
+            await gate.WaitAsync(ct);
+            try
+            {
+                if (!_peers.TryGetValue(participantId, out var oldPeer)) return;
+                if (!_fallbackUsed.TryAdd(participantId, 0)) return;
+                _fallbackIds[participantId] = requestedId;
 
-            var relayPeer = peers.Create(participantId, forceRelay: true);
-            _negotiationIds[participantId] = requestedId;
-            _peers[participantId] = relayPeer;
-            if (_videoQueues.TryRemove(participantId, out var oldQueue)) await oldQueue.DisposeAsync();
-            AttachPeer(participantId, relayPeer, requestedId);
-            await oldPeer.DisposeAsync();
-            var offer = await relayPeer.CreateOfferAsync(ct);
-            await signaling.SendAsync(SignalingMessageTypes.WebRtcOffer, participantId,
-                new { type = "offer", sdp = offer, negotiationId = requestedId }, ct);
+                var relayPeer = peers.Create(participantId, forceRelay: true);
+                _negotiationIds[participantId] = requestedId;
+                _peers[participantId] = relayPeer;
+                if (_videoQueues.TryRemove(participantId, out var oldQueue)) await oldQueue.DisposeAsync();
+                AttachPeer(participantId, relayPeer, requestedId);
+                await oldPeer.DisposeAsync();
+                var offer = _sessionCodec == VideoCodec.H264
+                    ? await relayPeer.CreateH264OfferAsync(ct)
+                    : await relayPeer.CreateOfferAsync(ct);
+                await signaling.SendAsync(SignalingMessageTypes.WebRtcOffer, participantId,
+                    new { type = "offer", sdp = offer, negotiationId = requestedId }, ct);
+            }
+            finally { gate.Release(); }
         }
-        finally { gate.Release(); }
+        finally { _sessionGate.Release(); }
     }
 
     private async Task HandleRenegotiationRequestAsync(Guid participantId, JsonElement payload, CancellationToken ct)
@@ -277,10 +292,40 @@ public sealed class VideoPublisher(
         try
         {
             if (!_negotiationIds.TryGetValue(participantId, out currentId) || requestedId != currentId) return;
-            await SwitchSessionToH264Async(ct);
+            _viewerCapabilities[participantId] = BuildViewerCapabilities(VideoCodec.H264, null);
+            if (SelectSharedCodec().Codec == VideoCodec.H264)
+                await SwitchSessionToH264Async(ct);
         }
         finally { _sessionGate.Release(); }
     }
+
+    private VideoCodecSelection SelectSharedCodec() =>
+        VideoCodecNegotiator.Select(
+            _publisherVideoCapabilities ?? H264OnlyCapabilities,
+            _viewerCapabilities.Values.ToArray(),
+            _requiredAv1);
+
+    private static VideoCodecCapabilities BuildViewerCapabilities(
+        VideoCodec negotiatedCodec,
+        VideoCodecConstraints? negotiatedConstraints)
+    {
+        var decoderCodecs = negotiatedCodec == VideoCodec.Av1
+            ? new HashSet<VideoCodec> { VideoCodec.Av1 }
+            : new HashSet<VideoCodec>();
+        var decoderConstraints = negotiatedCodec == VideoCodec.Av1 && negotiatedConstraints is not null
+            ? new Dictionary<VideoCodec, VideoCodecConstraints> { [VideoCodec.Av1] = negotiatedConstraints }
+            : new Dictionary<VideoCodec, VideoCodecConstraints>();
+        return new VideoCodecCapabilities(
+            new HashSet<VideoCodec>(), decoderCodecs,
+            new Dictionary<VideoCodec, VideoCodecConstraints>(), decoderConstraints,
+            new Dictionary<VideoCodec, string>());
+    }
+
+    private static readonly VideoCodecCapabilities H264OnlyCapabilities = new(
+        new HashSet<VideoCodec>(), new HashSet<VideoCodec>(),
+        new Dictionary<VideoCodec, VideoCodecConstraints>(),
+        new Dictionary<VideoCodec, VideoCodecConstraints>(),
+        new Dictionary<VideoCodec, string>());
 
     private async Task SwitchSessionToH264Async(CancellationToken ct)
     {

@@ -36,6 +36,8 @@ public interface IPeerConnection : IAsyncDisposable
     /// <summary>The first compatible video format selected by the completed SDP exchange.</summary>
     VideoCodec? NegotiatedVideoCodec => null;
 
+    VideoCodecConstraints? NegotiatedVideoConstraints => null;
+
     Task<string> CreateOfferAsync(CancellationToken ct);
 
     Task<string> CreateH264OfferAsync(CancellationToken ct) =>

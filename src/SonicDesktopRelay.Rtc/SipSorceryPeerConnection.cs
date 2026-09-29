@@ -23,6 +23,7 @@ public sealed class SipSorceryPeerConnection : IPeerConnection
     private RtcTransportDiagnostics? _transportDiagnostics;
     private bool _negotiated;
     private VideoCodec? _negotiatedVideoCodec;
+    private VideoCodecConstraints? _negotiatedVideoConstraints;
     private int? _negotiatedVideoPayloadId;
     private bool _closed;
 
@@ -110,6 +111,11 @@ public sealed class SipSorceryPeerConnection : IPeerConnection
         get { lock (_gate) return _negotiatedVideoCodec; }
     }
 
+    public VideoCodecConstraints? NegotiatedVideoConstraints
+    {
+        get { lock (_gate) return _negotiatedVideoConstraints; }
+    }
+
     public async Task<string> CreateOfferAsync(CancellationToken ct)
     {
         var offer = _connection.createOffer();
@@ -127,6 +133,7 @@ public sealed class SipSorceryPeerConnection : IPeerConnection
                 throw new InvalidOperationException("H.264 was not present in the existing video track capabilities.");
             _negotiated = false;
             _negotiatedVideoCodec = null;
+            _negotiatedVideoConstraints = null;
             _negotiatedVideoPayloadId = null;
         }
 
@@ -155,6 +162,10 @@ public sealed class SipSorceryPeerConnection : IPeerConnection
         lock (_gate)
         {
             _negotiatedVideoCodec = negotiatedCodec;
+            _negotiatedVideoConstraints = negotiatedCodec == VideoCodec.Av1
+                && TryParseAv1Constraints(negotiatedFormat.Parameters, out var constraints)
+                    ? constraints
+                    : null;
             _negotiatedVideoPayloadId = negotiatedFormat.FormatID;
             _negotiated = true;
         }
@@ -217,8 +228,9 @@ public sealed class SipSorceryPeerConnection : IPeerConnection
     private List<VideoFormat> CreateLocalVideoFormats()
     {
         var formats = new List<VideoFormat>();
-        if (CanAdvertiseAv1(_localVideoCapabilities?.Encoders, _localVideoCapabilities?.EncoderConstraints))
-            formats.Add(new VideoFormat(VideoCodecsEnum.AV1, Av1PayloadId, 90_000));
+        if (CanAdvertiseAv1(_localVideoCapabilities?.Encoders, _localVideoCapabilities?.EncoderConstraints)
+            && _localVideoCapabilities!.EncoderConstraints.TryGetValue(VideoCodec.Av1, out var av1))
+            formats.Add(CreateAv1Format(av1));
         formats.Add(new VideoFormat(VideoCodecsEnum.H264, H264PayloadId, 90_000, "packetization-mode=1"));
         return formats;
     }
@@ -237,6 +249,35 @@ public sealed class SipSorceryPeerConnection : IPeerConnection
         VideoCodecsEnum.AV1 => VideoCodec.Av1,
         _ => null
     };
+
+    private static VideoFormat CreateAv1Format(VideoCodecConstraints constraints) =>
+        new(VideoCodecsEnum.AV1, Av1PayloadId, 90_000,
+            $"profile={constraints.Profile};level-idx={constraints.MaxLevel};tier=0");
+
+    private static bool TryParseAv1Constraints(string? parameters, out VideoCodecConstraints constraints)
+    {
+        constraints = null!;
+        if (string.IsNullOrWhiteSpace(parameters)) return false;
+        var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var item in parameters.Split(';', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
+        {
+            var separator = item.IndexOf('=');
+            if (separator <= 0 || separator == item.Length - 1) return false;
+            var key = item[..separator].Trim();
+            var value = item[(separator + 1)..].Trim();
+            if (!values.TryAdd(key, value)) return false;
+        }
+        if (!values.TryGetValue("profile", out var profileText)
+            || !int.TryParse(profileText, out var profile) || profile is < 0 or > 2
+            || !values.TryGetValue("level-idx", out var levelText)
+            || !int.TryParse(levelText, out var level) || level is < 0 or > 31
+            || !values.TryGetValue("tier", out var tierText)
+            || !int.TryParse(tierText, out var tier) || tier is < 0 or > 1)
+            return false;
+
+        constraints = new VideoCodecConstraints(profile.ToString(), level);
+        return true;
+    }
 
     private static bool IsExpectedTransportFailure(Exception e) =>
         e is ObjectDisposedException or InvalidOperationException

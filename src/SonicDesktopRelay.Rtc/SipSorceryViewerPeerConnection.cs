@@ -434,8 +434,10 @@ public sealed class SipSorceryViewerPeerConnection : IViewerPeerConnection
     private List<VideoFormat> CreateLocalVideoFormats()
     {
         var formats = new List<VideoFormat>();
-        if (CanAdvertiseAv1(_localVideoCapabilities?.Decoders, _localVideoCapabilities?.DecoderConstraints))
-            formats.Add(new VideoFormat(VideoCodecsEnum.AV1, Av1PayloadId, (int)VideoClockRate));
+        if (CanAdvertiseAv1(_localVideoCapabilities?.Decoders, _localVideoCapabilities?.DecoderConstraints)
+            && _localVideoCapabilities!.DecoderConstraints.TryGetValue(VideoCodec.Av1, out var av1))
+            formats.Add(new VideoFormat(VideoCodecsEnum.AV1, Av1PayloadId, (int)VideoClockRate,
+                $"profile={av1.Profile};level-idx={av1.MaxLevel};tier=0"));
         formats.Add(new VideoFormat(VideoCodecsEnum.H264, H264PayloadId, (int)VideoClockRate, "packetization-mode=1"));
         return formats;
     }

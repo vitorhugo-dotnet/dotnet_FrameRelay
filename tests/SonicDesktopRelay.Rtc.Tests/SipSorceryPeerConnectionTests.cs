@@ -83,6 +83,8 @@ public sealed class SipSorceryPeerConnectionTests
         Assert.Contains("AV1/90000", answer, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(VideoCodec.Av1, publisher.NegotiatedVideoCodec);
         Assert.Equal(VideoCodec.Av1, viewer.NegotiatedVideoCodec);
+        Assert.Contains("profile=0;level-idx=13;tier=0", offer, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(new VideoCodecConstraints("0", 13), publisher.NegotiatedVideoConstraints);
     }
 
     [Fact]

@@ -298,7 +298,8 @@ public sealed class RtcVideoPublishHost(
                     }
                     return Task.CompletedTask;
                 },
-                initialSessionCodec: encoder is MediaFoundationAv1Encoder ? VideoCodec.Av1 : VideoCodec.H264);
+                initialSessionCodec: encoder is MediaFoundationAv1Encoder ? VideoCodec.Av1 : VideoCodec.H264,
+                publisherVideoCapabilities: _publisherVideoCapabilities);
             _publisher.TransportDiagnosticsChanged += OnTransportDiagnosticsChanged;
             _diagnosticsTimer = TimeProvider.System.CreateTimer(
                 _ => VideoDiagnosticsChanged?.Invoke(), null,

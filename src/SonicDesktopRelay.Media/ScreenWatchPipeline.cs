@@ -37,6 +37,7 @@ public sealed class ScreenWatchPipeline(
     private long _statsDecodedFrameBaseline;
     private long _statsEncodedBytes;
     private long _lastSampleDurationTicks;
+    private long _lastDecodeDurationTicks;
 
     private DateTimeOffset? _lastFrameAt;
     private long _lastAccessUnitUtcTicks;
@@ -90,6 +91,15 @@ public sealed class ScreenWatchPipeline(
     }
 
     public DateTimeOffset? LastDecodedFrameAt => _lastFrameAt;
+
+    public TimeSpan? LastDecodeDuration
+    {
+        get
+        {
+            var ticks = Interlocked.Read(ref _lastDecodeDurationTicks);
+            return ticks <= 0 ? null : TimeSpan.FromTicks(ticks);
+        }
+    }
 
     /// <summary>Returns decoder and access-unit deltas since the previous monotonic snapshot.</summary>
     public VideoReceiverStats TakeStatsSnapshot()
@@ -162,6 +172,7 @@ public sealed class ScreenWatchPipeline(
         if (_state == WatchState.Failed) return;
 
         VideoFrame? frame;
+        var decodeStarted = time.GetTimestamp();
         try
         {
             frame = decoder.Decode(sample);
@@ -189,6 +200,11 @@ public sealed class ScreenWatchPipeline(
             }
             SetState(WatchState.Failed);
             return;
+        }
+        finally
+        {
+            var elapsed = time.GetElapsedTime(decodeStarted);
+            Interlocked.Exchange(ref _lastDecodeDurationTicks, Math.Max(0, elapsed.Ticks));
         }
 
         if (frame is null)

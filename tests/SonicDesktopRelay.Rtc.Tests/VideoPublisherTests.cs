@@ -278,6 +278,12 @@ public sealed class VideoPublisherTests
         await harness.Publisher.HandleAsync(Frame(SignalingMessageTypes.WebRtcAnswer, ViewerA,
             $$"""{"type":"answer","sdp":"answer","negotiationId":"{{firstId}}"}"""), CancellationToken.None);
 
+        var av1 = harness.Publisher.CodecDiagnostics;
+        Assert.Equal(VideoCodec.Av1, av1.ActiveCodec);
+        Assert.Equal("profile=0, level-idx=4", av1.ProfileLevel);
+        Assert.Equal("viewer1=H264, AV1", av1.ViewerCodecs);
+        Assert.Equal("H264, AV1", av1.CommonCodecs);
+
         await harness.Publisher.AddViewerAsync(ViewerB, CancellationToken.None);
         var second = harness.Peers.Created[1];
         second.NegotiatedVideoCodec = VideoCodec.H264;
@@ -289,6 +295,7 @@ public sealed class VideoPublisherTests
         Assert.Equal(1, second.H264OfferCalls);
         Assert.Same(first, harness.Peers.Created[0]);
         Assert.Same(second, harness.Peers.Created[1]);
+        Assert.Equal(VideoCodec.H264, harness.Publisher.CodecDiagnostics.ActiveCodec);
     }
 
     [Theory]
@@ -334,6 +341,17 @@ public sealed class VideoPublisherTests
         Assert.Same(peer, harness.Peers.Created.Single());
         Assert.False(peer.Disposed);
         Assert.Equal(1, harness.Publisher.PeerCount);
+
+        var codec = harness.Publisher.CodecDiagnostics;
+        Assert.Equal(VideoCodec.H264, codec.ActiveCodec);
+        Assert.Equal("viewer-av1-decoder-unavailable", codec.FallbackReason);
+        Assert.Equal("H264, AV1", codec.LocalCodecs);
+        Assert.Equal("viewer1=H264", codec.ViewerCodecs);
+        Assert.Equal("H264", codec.CommonCodecs);
+        Assert.Null(codec.ProfileLevel);
+        Assert.DoesNotContain(ViewerA.ToString(), codec.ToString(), StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("sdp", codec.ToString(), StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("candidate", codec.ToString(), StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

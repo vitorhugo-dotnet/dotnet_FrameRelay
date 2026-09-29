@@ -594,6 +594,28 @@ public sealed class Shell : INotifyPropertyChanged, IAsyncDisposable
         }
     }
 
+    public string CodecDiagnosticsText
+    {
+        get
+        {
+            var metrics = ViewModel.Snapshot.Metrics;
+            if (metrics is null && _composition is { } composition)
+                metrics = composition.Runtime.Snapshot.Phase switch
+                {
+                    SessionPhase.Sharing => composition.PublishHost.CurrentMetrics,
+                    SessionPhase.Watching => composition.WatchHost.CurrentMetrics,
+                    _ => null
+                };
+            if (metrics is null) return "Codec details unavailable";
+            return $"Local={metrics.LocalSupportedCodecs ?? "n/a"} | viewers={metrics.ViewerSupportedCodecs ?? "n/a"} | " +
+                   $"common={metrics.CommonSupportedCodecs ?? "n/a"} | active={metrics.NegotiatedCodec ?? metrics.Codec ?? "n/a"} " +
+                   $"profile/level={metrics.CodecProfileLevel ?? "n/a"} | implementation={metrics.VideoImplementation ?? "n/a"} " +
+                   $"acceleration={metrics.VideoAcceleration ?? "n/a"} | fallback={metrics.CodecFallbackReason ?? "none"} | " +
+                   $"encodeMs={metrics.EncodeDurationMilliseconds?.ToString("F2") ?? "n/a"} " +
+                   $"decodeMs={metrics.DecodeDurationMilliseconds?.ToString("F2") ?? "n/a"}";
+        }
+    }
+
     private string PublishStatusText(SessionSnapshot snapshot)
     {
         var host = _composition?.PublishHost;
@@ -966,6 +988,7 @@ public sealed class Shell : INotifyPropertyChanged, IAsyncDisposable
             }
             Raise(nameof(CanStartShare));
             Raise(nameof(MediaStatusText));
+            Raise(nameof(CodecDiagnosticsText));
             Raise(nameof(ShareAudioStatus));
             if (Equals(snapshot with { Metrics = null }, previous with { Metrics = null })) return;
             _logger.LogInformation(
@@ -1018,6 +1041,7 @@ public sealed class Shell : INotifyPropertyChanged, IAsyncDisposable
             };
             if (metrics is not null) runtime.UpdateMetrics(metrics);
             Raise(nameof(MediaStatusText));
+            Raise(nameof(CodecDiagnosticsText));
             Raise(nameof(ShareAudioStatus));
         });
     }

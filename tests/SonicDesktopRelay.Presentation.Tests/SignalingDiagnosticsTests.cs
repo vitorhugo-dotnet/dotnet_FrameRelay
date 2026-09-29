@@ -9,6 +9,36 @@ public sealed class SignalingDiagnosticsTests
     private static readonly Guid SessionId = Guid.Parse("6f9619ff-8b86-d011-b42d-00cf4fc964ff");
 
     [Fact]
+    public void Codec_diagnostics_metrics_preserve_negotiation_fallback_and_timing_fields()
+    {
+        var metrics = new SessionMediaMetrics(
+            Codec: "H264",
+            LocalSupportedCodecs: "H264, AV1",
+            ViewerSupportedCodecs: "viewer1=H264",
+            CommonSupportedCodecs: "H264",
+            NegotiatedCodec: "H264",
+            CodecProfileLevel: "1280x720@30",
+            VideoImplementation: "Media Foundation H.264 Encoder",
+            VideoAcceleration: "hardware",
+            CodecFallbackReason: "viewer-av1-decoder-unavailable",
+            EncodeDurationMilliseconds: 4.5,
+            DecodeDurationMilliseconds: 2.25);
+
+        var snapshot = new SessionSnapshot(
+            SessionPhase.Sharing, "AB12CD", SessionId, 1, SignalingState.Connected, null, Metrics: metrics);
+
+        Assert.Equal("H264, AV1", snapshot.Metrics!.LocalSupportedCodecs);
+        Assert.Equal("viewer1=H264", snapshot.Metrics.ViewerSupportedCodecs);
+        Assert.Equal("H264", snapshot.Metrics.CommonSupportedCodecs);
+        Assert.Equal("H264", snapshot.Metrics.NegotiatedCodec);
+        Assert.Equal("viewer-av1-decoder-unavailable", snapshot.Metrics.CodecFallbackReason);
+        Assert.Equal(4.5, snapshot.Metrics.EncodeDurationMilliseconds);
+        Assert.Equal(2.25, snapshot.Metrics.DecodeDurationMilliseconds);
+        Assert.DoesNotContain("sdp", snapshot.Metrics.ToString(), StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("candidate:", snapshot.Metrics.ToString(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task Offer_received_during_signaling_start_is_buffered_and_forwarded_after_watch_host_starts()
     {
         var from = Guid.Parse("11111111-1111-1111-1111-111111111111");

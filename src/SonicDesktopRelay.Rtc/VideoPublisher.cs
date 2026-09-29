@@ -5,6 +5,15 @@ using SonicDesktopRelay.Signaling;
 
 namespace SonicDesktopRelay.Rtc;
 
+/// <summary>Privacy-safe codec negotiation summary; viewer IDs and signaling payloads are omitted.</summary>
+public sealed record VideoCodecSessionDiagnostics(
+    VideoCodec? ActiveCodec,
+    string? FallbackReason,
+    string LocalCodecs,
+    string ViewerCodecs,
+    string CommonCodecs,
+    string? ProfileLevel);
+
 /// <summary>
 /// Owns one peer connection per viewer and feeds all of them from a single video encode and,
 /// when available, a single audio encode. Everything that scales with viewer count lives here;
@@ -31,6 +40,7 @@ public sealed class VideoPublisher(
     private readonly ConcurrentDictionary<Guid, VideoCodecCapabilities> _viewerCapabilities = new();
     private readonly SemaphoreSlim _sessionGate = new(1, 1);
     private VideoCodec? _sessionCodec = initialSessionCodec;
+    private string? _codecFallbackReason;
     private readonly VideoCodecCapabilities? _publisherVideoCapabilities = publisherVideoCapabilities;
     private VideoCodecConstraints _requiredAv1 = requiredAv1 ?? new VideoCodecConstraints("0", 4);
     private readonly object _receiverStatsGate = new();
@@ -39,6 +49,37 @@ public sealed class VideoPublisher(
     private bool _subscribed;
 
     public int PeerCount => _peers.Count;
+
+    public VideoCodecSessionDiagnostics CodecDiagnostics
+    {
+        get
+        {
+            var selection = SelectSharedCodec();
+            var localCodecs = CodecNames(_publisherVideoCapabilities?.Encoders ?? H264OnlyCapabilities.Encoders);
+            var viewerIds = _peers.Keys.Order().ToArray();
+            var viewerCodecs = string.Join("; ", viewerIds.Select((id, index) =>
+                _viewerCapabilities.TryGetValue(id, out var capabilities)
+                    ? $"viewer{index + 1}={CodecNames(capabilities.Decoders)}"
+                    : $"viewer{index + 1}=pending"));
+            var common = new HashSet<VideoCodec> { VideoCodec.H264 };
+            if (_publisherVideoCapabilities?.Encoders.Contains(VideoCodec.Av1) == true
+                && viewerIds.Length > 0
+                && viewerIds.All(id => _viewerCapabilities.TryGetValue(id, out var capabilities)
+                    && capabilities.Decoders.Contains(VideoCodec.Av1)))
+                common.Add(VideoCodec.Av1);
+            var profileLevel = _sessionCodec == VideoCodec.Av1
+                && _publisherVideoCapabilities?.EncoderConstraints.ContainsKey(VideoCodec.Av1) == true
+                    ? $"profile={_requiredAv1.Profile}, level-idx={_requiredAv1.MaxLevel}"
+                    : null;
+            return new VideoCodecSessionDiagnostics(
+                _sessionCodec,
+                _codecFallbackReason ?? (_sessionCodec == VideoCodec.H264 ? selection.FallbackReason : null),
+                localCodecs,
+                viewerCodecs,
+                CodecNames(common),
+                profileLevel);
+        }
+    }
 
     public IReadOnlyDictionary<Guid, RtcTransportDiagnostics> TransportDiagnostics => _transportDiagnostics;
 
@@ -200,6 +241,7 @@ public sealed class VideoPublisher(
             finally { peerGate.Release(); }
 
             var selection = SelectSharedCodec();
+            _codecFallbackReason = selection.Codec == VideoCodec.H264 ? selection.FallbackReason : null;
             if (_sessionCodec == VideoCodec.Av1 && selection.Codec == VideoCodec.H264)
                 await SwitchSessionToH264Async(ct);
         }
@@ -213,7 +255,9 @@ public sealed class VideoPublisher(
         try
         {
             _requiredAv1 = requiredAv1;
-            if (_sessionCodec == VideoCodec.Av1 && SelectSharedCodec().Codec == VideoCodec.H264)
+            var selection = SelectSharedCodec();
+            _codecFallbackReason = selection.Codec == VideoCodec.H264 ? selection.FallbackReason : null;
+            if (_sessionCodec == VideoCodec.Av1 && selection.Codec == VideoCodec.H264)
                 await SwitchSessionToH264Async(ct);
         }
         finally { _sessionGate.Release(); }
@@ -318,7 +362,9 @@ public sealed class VideoPublisher(
         {
             if (!_negotiationIds.TryGetValue(participantId, out currentId) || requestedId != currentId) return;
             _viewerCapabilities[participantId] = BuildViewerCapabilities(VideoCodec.H264, null);
-            if (SelectSharedCodec().Codec == VideoCodec.H264)
+            var selection = SelectSharedCodec();
+            _codecFallbackReason = selection.Codec == VideoCodec.H264 ? selection.FallbackReason : null;
+            if (selection.Codec == VideoCodec.H264)
                 await SwitchSessionToH264Async(ct);
         }
         finally { _sessionGate.Release(); }
@@ -329,6 +375,10 @@ public sealed class VideoPublisher(
             _publisherVideoCapabilities ?? H264OnlyCapabilities,
             _viewerCapabilities.Values.ToArray(),
             _requiredAv1);
+
+    private static string CodecNames(IEnumerable<VideoCodec> codecs) =>
+        string.Join(", ", new[] { VideoCodec.H264 }.Concat(codecs).Distinct().Order()
+            .Select(x => x == VideoCodec.Av1 ? "AV1" : "H264"));
 
     private static VideoCodecCapabilities BuildViewerCapabilities(
         VideoCodec negotiatedCodec,

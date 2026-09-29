@@ -1,5 +1,8 @@
 using SonicDesktopRelay.Media;
 using SonicDesktopRelay.Media.Windows;
+using SonicDesktopRelay.App;
+using SonicDesktopRelay.ApiClient;
+using System.Reflection;
 
 namespace SonicDesktopRelay.Media.Windows.Tests;
 
@@ -49,5 +52,31 @@ public sealed class NativeVideoDiagnosticsTests
         Assert.Equal("H264", diagnostics.InputFormat);
         Assert.Equal("NV12", diagnostics.OutputFormat);
         Assert.Equal(decoder.RejectionLog, diagnostics.RejectionReasons);
+    }
+
+    [Fact]
+    public async Task Publish_host_metrics_project_the_instantiated_encoder_without_transport_secrets()
+    {
+        if (!MediaFoundationH264Encoder.IsSupported) return;
+
+        using var encoder = new MediaFoundationH264Encoder();
+        encoder.Encode(new VideoFrame(640, 360, new byte[640 * 360 * 4], TimeSpan.Zero),
+            new VideoQuality(360, 30, 1_500_000));
+        await using var host = new RtcVideoPublishHost(new IceApiClient(new HttpClient()), () => null);
+        typeof(RtcVideoPublishHost).GetField("_encoder", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .SetValue(host, encoder);
+        typeof(RtcVideoPublishHost).GetProperty(nameof(RtcVideoPublishHost.EncoderName))!
+            .SetValue(host, encoder.Name);
+
+        var metrics = Assert.IsType<SonicDesktopRelay.Presentation.SessionMediaMetrics>(host.CurrentMetrics);
+
+        Assert.Equal("H264", metrics.Codec);
+        Assert.Equal("H264", metrics.NegotiatedCodec);
+        Assert.Equal("H264", metrics.LocalSupportedCodecs);
+        Assert.Equal(encoder.Diagnostics.TransformName, metrics.VideoImplementation);
+        Assert.Equal(encoder.Diagnostics.Acceleration, metrics.VideoAcceleration);
+        Assert.Null(metrics.EncodeDurationMilliseconds);
+        Assert.DoesNotContain("sdp", metrics.ToString(), StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("candidate:", metrics.ToString(), StringComparison.OrdinalIgnoreCase);
     }
 }

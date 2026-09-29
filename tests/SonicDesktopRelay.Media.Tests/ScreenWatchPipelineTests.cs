@@ -340,6 +340,18 @@ public sealed class ScreenWatchPipelineTests
         Assert.InRange(stats.TargetFramesPerSecond, 29.9, 30.1);
     }
 
+    [Fact]
+    public void Decode_duration_measures_the_instantiated_decoder_call()
+    {
+        var time = new FakeTimeProvider(Start);
+        var decoder = new FakeDecoder { DuringDecode = () => time.Advance(TimeSpan.FromMilliseconds(6)) };
+        using var pipeline = new ScreenWatchPipeline(decoder, time);
+
+        pipeline.Submit(Sample());
+
+        Assert.Equal(TimeSpan.FromMilliseconds(6), pipeline.LastDecodeDuration);
+    }
+
     private static EncodedVideoSample Sample(TimeSpan? duration = null) =>
         new(new byte[8], TimeSpan.Zero, true, 1920, 1080, duration ?? TimeSpan.Zero);
 
@@ -351,8 +363,11 @@ public sealed class ScreenWatchPipelineTests
 
         public bool Throw { get; init; }
 
+        public Action? DuringDecode { get; init; }
+
         public VideoFrame? Decode(EncodedVideoSample sample)
         {
+            DuringDecode?.Invoke();
             if (Throw) throw new InvalidOperationException("decoder failed");
             return ReturnNull ? null : new VideoFrame(sample.Width, sample.Height, new byte[16], sample.Timestamp);
         }

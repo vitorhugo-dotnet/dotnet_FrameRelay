@@ -32,6 +32,7 @@ public sealed class RtcVideoPublishHost(
     private ScreenPublishPipeline? _pipeline;
     private IVideoEncoder? _encoder;
     private VideoCodecCapabilities? _publisherVideoCapabilities;
+    private string? _codecFallbackReason;
     private IScreenCaptureSource? _capture;
     private AudioPublishPipeline? _audioPipeline;
     private IAudioCaptureSource? _audioSource;
@@ -75,18 +76,29 @@ public sealed class RtcVideoPublishHost(
     {
         get
         {
-            if (_pipeline is null) return null;
+            if (_encoder is null) return null;
             var video = VideoDiagnostics;
             var quality = EffectiveQuality;
+            var codec = _publisher?.CodecDiagnostics;
             var transport = TransportDiagnostics.Count == 0 ? null : string.Join(", ",
                 TransportDiagnostics.Values.Select(x => x.ToString()).Distinct(StringComparer.Ordinal));
             return new SessionMediaMetrics(
                 Width: video?.Width is > 0 ? video.Width : null,
                 Height: video?.Height is > 0 ? video.Height : null,
-                Codec: video?.OutputFormat ?? EncoderName,
+                Codec: codec?.ActiveCodec?.ToString() ?? (_encoder is MediaFoundationAv1Encoder ? VideoCodec.Av1 : VideoCodec.H264).ToString(),
                 Transport: transport,
                 TargetVideoBitrateBitsPerSecond: quality?.TargetBitsPerSecond,
-                TargetVideoFramesPerSecond: quality?.FramesPerSecond);
+                TargetVideoFramesPerSecond: quality?.FramesPerSecond,
+                LocalSupportedCodecs: codec?.LocalCodecs ?? "H264",
+                ViewerSupportedCodecs: string.IsNullOrEmpty(codec?.ViewerCodecs) ? "pending" : codec.ViewerCodecs,
+                CommonSupportedCodecs: codec?.CommonCodecs ?? "H264",
+                NegotiatedCodec: codec?.ActiveCodec?.ToString()
+                    ?? (_encoder is MediaFoundationAv1Encoder ? VideoCodec.Av1 : VideoCodec.H264).ToString(),
+                CodecProfileLevel: codec?.ProfileLevel,
+                VideoImplementation: video?.TransformName ?? EncoderName,
+                VideoAcceleration: video?.Acceleration,
+                CodecFallbackReason: _codecFallbackReason ?? codec?.FallbackReason,
+                EncodeDurationMilliseconds: LastEncodeDuration?.TotalMilliseconds);
         }
     }
 
@@ -203,6 +215,10 @@ public sealed class RtcVideoPublishHost(
                 () => new MediaFoundationH264Encoder());
             var encoder = encoderSelection.Encoder;
             _publisherVideoCapabilities = encoderSelection.PeerCapabilities;
+            _codecFallbackReason = encoderSelection.InitializationFailure
+                ?? (encoder is MediaFoundationH264Encoder
+                    ? av1Capabilities.RejectionReasons.GetValueOrDefault(VideoCodec.Av1)
+                    : null);
             _encoder = encoder;
             EncoderName = encoder.Name;
             EncoderRejections = (encoderSelection.InitializationFailure is { } failure
@@ -295,6 +311,7 @@ public sealed class RtcVideoPublishHost(
                         pipeline.ReplaceEncoder(h264);
                         _encoder = h264;
                         EncoderName = h264.Name;
+                        _codecFallbackReason ??= "av1-session-downgraded-to-h264";
                     }
                     return Task.CompletedTask;
                 },

@@ -63,16 +63,16 @@
 **Interfaces:**
 - Produces: `public enum VideoCodec { H264, Av1 }`.
 - Produces: `public sealed record VideoCodecConstraints(string Profile, int MaxLevel)`; AV1 uses Main profile (`"0"`) and the maximum level supported by the advertised transform/peer.
-- Produces: `public sealed record VideoCodecCapabilities(IReadOnlySet<VideoCodec> Encoders, IReadOnlySet<VideoCodec> Decoders, IReadOnlyDictionary<VideoCodec, VideoCodecConstraints> Constraints, IReadOnlyDictionary<VideoCodec, string> RejectionReasons)`.
+- Produces: `public sealed record VideoCodecCapabilities(IReadOnlySet<VideoCodec> Encoders, IReadOnlySet<VideoCodec> Decoders, IReadOnlyDictionary<VideoCodec, VideoCodecConstraints> EncoderConstraints, IReadOnlyDictionary<VideoCodec, VideoCodecConstraints> DecoderConstraints, IReadOnlyDictionary<VideoCodec, string> RejectionReasons)`.
 - Produces: `public sealed record VideoCodecSelection(VideoCodec Codec, string? FallbackReason)`.
 - Produces: `public static class VideoCodecNegotiator` with `Select(VideoCodecCapabilities publisher, IReadOnlyCollection<VideoCodecCapabilities> viewers, VideoCodecConstraints requiredAv1) -> VideoCodecSelection`.
 - Produces: `EncodedVideoSample.Codec { get; init; }`, defaulting to `VideoCodec.H264` so existing six-argument construction remains source-compatible; AV1 encoder/receive paths set `Codec = VideoCodec.Av1`.
 
-- [ ] Add tests for AV1 on publisher and all viewers, either-side H.264-only, no active viewers (select H.264 with `no-active-viewers`), mixed viewers, and stable fallback reasons.
-- [ ] Add tests for AV1 Main-profile compatibility and rejection when any peer's supported level is below the level required by the selected dimensions and frame rate.
+- [x] Add tests for AV1 on publisher and all viewers, either-side H.264-only, no active viewers (select H.264 with `no-active-viewers`), mixed viewers, and stable fallback reasons.
+- [x] Add tests for AV1 Main-profile compatibility and rejection when any peer's supported level is below the level required by the selected dimensions and frame rate.
 - [ ] Add tests that software-only AV1 capabilities are absent from the advertised capability set.
-- [ ] Implement selection so AV1 is returned only when publisher encode and every viewer decode contain AV1 Main and their maximum levels meet `requiredAv1`; otherwise return H.264 with a stable reason.
-- [ ] Keep codec values and reasons independent of Media Foundation and SIPSorcery types.
+- [x] Implement selection so AV1 is returned only when publisher encode and every viewer decode contain AV1 Main and their maximum levels meet `requiredAv1`; otherwise return H.264 with a stable reason.
+- [x] Keep codec values and reasons independent of Media Foundation and SIPSorcery types.
 
 ### Task 3: Implement Media Foundation AV1 capability probing and codecs
 
@@ -184,3 +184,4 @@
 - Preserve one reviewable commit per completed task and keep each commit limited to that task's files.
 - Do not claim AV1 support on a machine until the hardware transform, WebRTC codec path, and selected peer configuration have all succeeded.
 - If safe shared-codec transitions are not supported by the verified SIPSorcery version, stop before implementing an unsafe mixed-codec path and update the design for review.
+

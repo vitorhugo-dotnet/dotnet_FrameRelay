@@ -134,6 +134,9 @@ public readonly record struct EncodedVideoSample(
     int Height,
     TimeSpan Duration)
 {
+    /// <summary>The codec used to produce this encoded sample. Defaults to H.264 for legacy callers.</summary>
+    public VideoCodec Codec { get; init; } = VideoCodec.H264;
+
     private static readonly TimeSpan LegacyThirtyFpsDuration =
         TimeSpan.FromTicks(TimeSpan.TicksPerSecond / 30);
 

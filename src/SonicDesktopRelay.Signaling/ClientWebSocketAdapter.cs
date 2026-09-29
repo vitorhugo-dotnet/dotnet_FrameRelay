@@ -3,7 +3,7 @@ using System.Text;
 
 namespace SonicDesktopRelay.Signaling;
 
-public sealed class ClientWebSocketAdapter : IWebSocketAdapter
+public sealed class ClientWebSocketAdapter(Action<string, Exception?>? diagnostic = null) : IWebSocketAdapter
 {
     private ClientWebSocket? _socket;
 
@@ -35,14 +35,19 @@ public sealed class ClientWebSocketAdapter : IWebSocketAdapter
             {
                 result = await socket.ReceiveAsync(buffer, ct);
             }
-            catch (WebSocketException)
+            catch (WebSocketException e)
             {
                 // An abrupt close is reported the same way as a graceful one: null means
                 // "the socket is gone", and deciding what to do about it belongs upstairs.
+                diagnostic?.Invoke("signaling.websocket.receive_failed", e);
                 return null;
             }
 
-            if (result.MessageType == WebSocketMessageType.Close) return null;
+            if (result.MessageType == WebSocketMessageType.Close)
+            {
+                diagnostic?.Invoke($"signaling.websocket.close_frame status={result.CloseStatus}", null);
+                return null;
+            }
             builder.Append(Encoding.UTF8.GetString(buffer, 0, result.Count));
             if (result.EndOfMessage) return builder.ToString();
         }

@@ -1,3 +1,4 @@
+using System.Net.WebSockets;
 using SonicDesktopRelay.Core;
 
 namespace SonicDesktopRelay.Signaling;
@@ -5,7 +6,8 @@ namespace SonicDesktopRelay.Signaling;
 public sealed class SignalingConnection(
     IWebSocketAdapter socket,
     BackendSettings settings,
-    Func<CancellationToken, Task<string>> tokenProvider) : ISignalingConnection
+    Func<CancellationToken, Task<string>> tokenProvider,
+    Action<string, Exception?>? diagnostic = null) : ISignalingConnection
 {
     private readonly CancellationTokenSource _stopping = new();
     private SignalingState _state = SignalingState.Disconnected;
@@ -35,8 +37,12 @@ public sealed class SignalingConnection(
 
     private async Task ConnectAsync(CancellationToken ct)
     {
+        diagnostic?.Invoke("signaling.token.request", null);
         var token = await tokenProvider(ct);
+        diagnostic?.Invoke("signaling.token.ready", null);
+        diagnostic?.Invoke("signaling.websocket.connecting", null);
         await socket.ConnectAsync(settings.SignalingUri(_sessionId), token, ct);
+        diagnostic?.Invoke("signaling.websocket.connected", null);
     }
 
     private async Task ReceiveLoopAsync(CancellationToken ct)
@@ -55,6 +61,7 @@ public sealed class SignalingConnection(
 
             if (frame is null)
             {
+                diagnostic?.Invoke("signaling.websocket.closed", null);
                 if (!await TryReconnectAsync(ct)) return;
                 continue;
             }
@@ -81,6 +88,7 @@ public sealed class SignalingConnection(
         if (_state == SignalingState.Terminated || ct.IsCancellationRequested) return false;
 
         SetState(SignalingState.Reconnecting);
+        diagnostic?.Invoke("signaling.websocket.reconnecting", null);
         try
         {
             if (ReconnectDelay > TimeSpan.Zero) await Task.Delay(ReconnectDelay, ct);
@@ -90,6 +98,12 @@ public sealed class SignalingConnection(
         }
         catch (OperationCanceledException)
         {
+            return false;
+        }
+        catch (Exception e) when (e is HttpRequestException or WebSocketException or IOException)
+        {
+            diagnostic?.Invoke("signaling.websocket.reconnect_failed", e);
+            SetState(SignalingState.Disconnected);
             return false;
         }
     }

@@ -1,3 +1,4 @@
+using System.Net.WebSockets;
 using System.Text.Json;
 using SonicDesktopRelay.Media;
 using SonicDesktopRelay.Signaling;
@@ -14,7 +15,8 @@ public sealed class SessionRuntime(
     Func<ISignalingConnection> connectionFactory,
     IVideoPublishHost? publishHost = null,
     IVideoWatchHost? watchHost = null,
-    SignalingDiagnosticBuffer? signalingDiagnostics = null)
+    SignalingDiagnosticBuffer? signalingDiagnostics = null,
+    Action<string, Exception?>? diagnostic = null)
 {
     private const int PendingViewerSignalingCapacity = 128;
 
@@ -161,11 +163,17 @@ public sealed class SessionRuntime(
             generation = ++_sessionGeneration;
             Publish(Snapshot with { Phase = SessionPhase.Joining, Error = null });
         }
+        using var attempt = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        attempt.CancelAfter(TimeSpan.FromSeconds(60));
         try
         {
-            var sessionId = await join(ct);
+            diagnostic?.Invoke("watch.join.request", null);
+            var sessionId = await join(attempt.Token);
+            diagnostic?.Invoke($"watch.join.accepted session={sessionId}", null);
             _isOwner = false;
-            await AttachAsync(sessionId, generation, ct);
+            diagnostic?.Invoke("watch.signaling.connecting", null);
+            await AttachAsync(sessionId, generation, attempt.Token);
+            diagnostic?.Invoke("watch.signaling.connected", null);
 
             if (watchHost is not null)
             {
@@ -176,13 +184,16 @@ public sealed class SessionRuntime(
 
                 try
                 {
-                    await watchHost.StartAsync(ct);
-                    await MarkWatchHostReadyAsync(ct);
+                    diagnostic?.Invoke("watch.media.starting", null);
+                    await watchHost.StartAsync(attempt.Token);
+                    await MarkWatchHostReadyAsync(attempt.Token);
+                    diagnostic?.Invoke("watch.media.ready", null);
                 }
                 catch (Exception e) when (e is InvalidOperationException or PlatformNotSupportedException)
                 {
                     // Same reasoning as the publishing side: the socket is up but nothing can
                     // be rendered over it, and leaving the runtime in Joining would wedge it.
+                    diagnostic?.Invoke("watch.media.failed", e);
                     ClearPendingViewerSignaling();
                     await watchHost.StopAsync();
                     await FailAsync("media_unavailable");
@@ -196,7 +207,18 @@ public sealed class SessionRuntime(
         }
         catch (SessionApiFailure failure)
         {
+            diagnostic?.Invoke("watch.join.rejected", failure);
             await FailAsync(failure.Code);
+        }
+        catch (OperationCanceledException e) when (!ct.IsCancellationRequested)
+        {
+            diagnostic?.Invoke("watch.join.timeout", e);
+            await FailAsync("join_timeout");
+        }
+        catch (Exception e) when (e is HttpRequestException or WebSocketException or IOException)
+        {
+            diagnostic?.Invoke("watch.connection.failed", e);
+            await FailAsync("signaling_unavailable");
         }
     }
 

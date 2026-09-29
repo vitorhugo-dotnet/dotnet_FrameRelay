@@ -1,5 +1,6 @@
 using System.Net;
 using System.Runtime.Versioning;
+using Microsoft.Extensions.Logging;
 using SonicDesktopRelay.ApiClient;
 using SonicDesktopRelay.Core;
 using SonicDesktopRelay.Core.Identity;
@@ -44,6 +45,8 @@ public sealed class AppComposition
         ISignalingConnection? current = null;
         var iceApi = new IceApiClient(sessionHttp);
         var loggerFactory = FrameRelayLogging.Current?.LoggerFactory;
+        var connectionLogger = loggerFactory?.CreateLogger<SignalingConnection>();
+        var runtimeLogger = loggerFactory?.CreateLogger<SessionRuntime>();
         PublishHost = new RtcVideoPublishHost(iceApi, () => current, loggerFactory);
         WatchHost = new RtcVideoWatchHost(iceApi, () => current, loggerFactory);
 
@@ -52,9 +55,10 @@ public sealed class AppComposition
             () =>
             {
                 var connection = new SignalingConnection(
-                    new ClientWebSocketAdapter(),
+                    new ClientWebSocketAdapter((stage, error) => LogStage(connectionLogger, stage, error)),
                     settings,
-                    ct => Identity.GetAccessTokenAsync(deviceName, ct));
+                    ct => Identity.GetAccessTokenAsync(deviceName, ct),
+                    (stage, error) => LogStage(connectionLogger, stage, error));
                 current = new DiagnosticSignalingConnection(
                     connection,
                     signalingDiagnostics,
@@ -63,8 +67,15 @@ public sealed class AppComposition
             },
             PublishHost,
             WatchHost,
-            signalingDiagnostics);
+            signalingDiagnostics,
+            (stage, error) => LogStage(runtimeLogger, stage, error));
         runtime = Runtime;
+    }
+
+    private static void LogStage(ILogger? logger, string stage, Exception? error)
+    {
+        if (error is null) logger?.LogInformation("Connection stage: {Stage}", stage);
+        else logger?.LogWarning(error, "Connection stage failed: {Stage}", stage);
     }
 
     public BackendSettings Settings { get; }

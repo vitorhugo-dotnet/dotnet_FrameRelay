@@ -41,6 +41,9 @@ public interface IViewerPeerConnection : IAsyncDisposable
 
     RtcTransportDiagnostics? TransportDiagnostics { get; }
 
+    /// <summary>The first compatible video format selected by the completed SDP exchange.</summary>
+    VideoCodec? NegotiatedVideoCodec => null;
+
     VideoReceptionSnapshot ReceptionSnapshot => default;
 
     /// <summary>Applies the publisher's offer and produces the answer SDP.</summary>

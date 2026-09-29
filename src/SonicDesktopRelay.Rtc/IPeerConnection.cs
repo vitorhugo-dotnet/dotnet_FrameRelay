@@ -33,6 +33,9 @@ public interface IPeerConnection : IAsyncDisposable
 
     RtcTransportDiagnostics? TransportDiagnostics { get; }
 
+    /// <summary>The first compatible video format selected by the completed SDP exchange.</summary>
+    VideoCodec? NegotiatedVideoCodec => null;
+
     Task<string> CreateOfferAsync(CancellationToken ct);
 
     Task ApplyAnswerAsync(string sdp, CancellationToken ct);

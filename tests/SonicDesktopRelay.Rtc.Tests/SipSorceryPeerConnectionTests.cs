@@ -23,6 +23,7 @@ public sealed class SipSorceryPeerConnectionTests
         Assert.Contains("opus/48000", sdp, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("m=video", sdp);
         Assert.Contains("H264", sdp, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("AV1/90000", sdp, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("packetization-mode=1", sdp, StringComparison.OrdinalIgnoreCase);
         Assert.True(
             sdp.IndexOf("m=audio", StringComparison.Ordinal) <
@@ -63,6 +64,55 @@ public sealed class SipSorceryPeerConnectionTests
         Assert.Contains("H264/90000", answer, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("AV1/90000", answer, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("m=video 0", answer, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Production_peers_negotiate_av1_when_both_local_capabilities_allow_it()
+    {
+        var publisherFactory = new SipSorceryPeerConnectionFactory(Ice, CreateCapabilities(encoderAv1: true));
+        await using var publisher = publisherFactory.Create(Guid.NewGuid());
+        var offer = await publisher.CreateOfferAsync(CancellationToken.None);
+
+        var viewerFactory = new SipSorceryViewerPeerConnectionFactory(Ice, CreateCapabilities(decoderAv1: true));
+        await using var viewer = viewerFactory.Create();
+        var answer = await viewer.CreateAnswerAsync(offer, CancellationToken.None);
+        await publisher.ApplyAnswerAsync(answer, CancellationToken.None);
+
+        Assert.Contains("AV1/90000", offer, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("H264/90000", offer, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("AV1/90000", answer, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(VideoCodec.Av1, publisher.NegotiatedVideoCodec);
+        Assert.Equal(VideoCodec.Av1, viewer.NegotiatedVideoCodec);
+    }
+
+    [Fact]
+    public async Task Production_publisher_falls_back_to_h264_for_a_viewer_without_av1_decoder_capability()
+    {
+        var publisherFactory = new SipSorceryPeerConnectionFactory(Ice, CreateCapabilities(encoderAv1: true));
+        await using var publisher = publisherFactory.Create(Guid.NewGuid());
+        var offer = await publisher.CreateOfferAsync(CancellationToken.None);
+
+        var viewerFactory = new SipSorceryViewerPeerConnectionFactory(Ice);
+        await using var viewer = viewerFactory.Create();
+        var answer = await viewer.CreateAnswerAsync(offer, CancellationToken.None);
+        await publisher.ApplyAnswerAsync(answer, CancellationToken.None);
+
+        Assert.Contains("AV1/90000", offer, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("H264/90000", answer, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("AV1/90000", answer, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(VideoCodec.H264, publisher.NegotiatedVideoCodec);
+        Assert.Equal(VideoCodec.H264, viewer.NegotiatedVideoCodec);
+    }
+
+    private static VideoCodecCapabilities CreateCapabilities(bool encoderAv1 = false, bool decoderAv1 = false)
+    {
+        var encoders = encoderAv1 ? new HashSet<VideoCodec> { VideoCodec.H264, VideoCodec.Av1 } : new HashSet<VideoCodec> { VideoCodec.H264 };
+        var decoders = decoderAv1 ? new HashSet<VideoCodec> { VideoCodec.H264, VideoCodec.Av1 } : new HashSet<VideoCodec> { VideoCodec.H264 };
+        var constraints = new Dictionary<VideoCodec, VideoCodecConstraints>
+        {
+            [VideoCodec.Av1] = new("0", 13)
+        };
+        return new VideoCodecCapabilities(encoders, decoders, constraints, constraints, new Dictionary<VideoCodec, string>());
     }
 
     private static async Task<(string Offer, string Answer)> NegotiateVideoFormatsAsync(

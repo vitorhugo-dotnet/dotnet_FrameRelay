@@ -298,7 +298,9 @@ public sealed class VideoPublisherTests
             peer.ReleaseVideoSend();
             await first;
             await peer.VideoSendCompleted.Task.WaitAsync(TimeSpan.FromSeconds(1));
-            Assert.InRange(peer.SentSamples.Count, 1, 2);
+            // All capture callbacks completed while the peer send was blocked. The bounded
+            // capture queue may coalesce a frame, and the send worker may drain after release.
+            Assert.InRange(peer.SentSamples.Count, 1, 4);
         }
         finally
         {

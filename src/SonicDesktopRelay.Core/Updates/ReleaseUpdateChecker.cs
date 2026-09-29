@@ -85,30 +85,50 @@ public sealed class ReleaseUpdateChecker : IAsyncDisposable
             var repositoryName = await ResolveRepositoryNameAsync(ct).ConfigureAwait(false)
                                  ?? FallbackFullName;
             using var response = await SendJsonAsync(
-                new Uri(ApiRoot, $"repos/{repositoryName}/releases/latest"), ct).ConfigureAwait(false);
+                new Uri(ApiRoot, $"repos/{repositoryName}/releases?per_page=100"), ct).ConfigureAwait(false);
             if (!response.IsSuccessStatusCode)
                 return Publish(Failure(response.StatusCode, response));
 
             using var document = await JsonDocument.ParseAsync(
                 await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false),
                 cancellationToken: ct).ConfigureAwait(false);
-            var root = document.RootElement;
-            var tag = GetString(root, "tag_name");
-            var releaseText = GetString(root, "html_url");
-            if (root.GetPropertyOrDefault("draft") is not { ValueKind: JsonValueKind.False }
-                || root.GetPropertyOrDefault("prerelease") is not { ValueKind: JsonValueKind.False }
-                || !TryParseVersion(tag, out var available)
-                || !TryParseVersion(_installedVersion, out var installed)
-                || !Uri.TryCreate(releaseText, UriKind.Absolute, out var releaseUri)
-                || releaseUri.Scheme != Uri.UriSchemeHttps)
+            var releases = document.RootElement;
+            if (releases.ValueKind != JsonValueKind.Array
+                || !TryParseVersion(_installedVersion, out var installed))
                 return Publish(new(UpdateCheckStatus.InvalidMetadata, _installedVersion,
                     Message: "GitHub returned unexpected release metadata."));
 
-            var downloadUri = FindInstaller(root);
-            if (Compare(available, installed) <= 0)
-                return Publish(new(UpdateCheckStatus.UpToDate, _installedVersion, available.Text, releaseUri, downloadUri));
+            ParsedVersion? available = null;
+            Uri? releaseUri = null;
+            Uri? downloadUri = null;
+            foreach (var release in releases.EnumerateArray())
+            {
+                if (release.GetPropertyOrDefault("draft") is not { ValueKind: JsonValueKind.False }
+                    || release.GetPropertyOrDefault("prerelease") is not { ValueKind: JsonValueKind.False }
+                    || !TryParseVersion(GetString(release, "tag_name"), out var candidate))
+                    continue;
+
+                var releaseText = GetString(release, "html_url");
+                if (!Uri.TryCreate(releaseText, UriKind.Absolute, out var candidateUri)
+                    || candidateUri.Scheme != Uri.UriSchemeHttps)
+                    continue;
+
+                if (available is null || Compare(candidate, available.Value) > 0)
+                {
+                    available = candidate;
+                    releaseUri = candidateUri;
+                    downloadUri = FindInstaller(release);
+                }
+            }
+
+            if (available is null || releaseUri is null)
+                return Publish(new(UpdateCheckStatus.InvalidMetadata, _installedVersion,
+                    Message: "GitHub returned no stable release with a valid version."));
+
+            if (Compare(available.Value, installed) <= 0)
+                return Publish(new(UpdateCheckStatus.UpToDate, _installedVersion, available.Value.Text, releaseUri, downloadUri));
             return Publish(new(UpdateCheckStatus.UpdateAvailable, _installedVersion,
-                available.Text, releaseUri, downloadUri));
+                available.Value.Text, releaseUri, downloadUri));
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {

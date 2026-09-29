@@ -299,7 +299,8 @@ public sealed class RtcVideoPublishHost(
                     return Task.CompletedTask;
                 },
                 initialSessionCodec: encoder is MediaFoundationAv1Encoder ? VideoCodec.Av1 : VideoCodec.H264,
-                publisherVideoCapabilities: _publisherVideoCapabilities);
+                publisherVideoCapabilities: _publisherVideoCapabilities,
+                requiredAv1: RequiredAv1Workload(pipeline, capture.CurrentDimensions.Width, capture.CurrentDimensions.Height));
             _publisher.TransportDiagnosticsChanged += OnTransportDiagnosticsChanged;
             _diagnosticsTimer = TimeProvider.System.CreateTimer(
                 _ => VideoDiagnosticsChanged?.Invoke(), null,
@@ -435,6 +436,38 @@ public sealed class RtcVideoPublishHost(
             width,
             height,
             "content_size_changed");
+        if (_pipeline is { } pipeline && _publisher is { } publisher)
+            _ = UpdateRequiredAv1WorkloadAsync(publisher, pipeline, width, height);
+    }
+
+    private static VideoCodecConstraints RequiredAv1Workload(
+        ScreenPublishPipeline pipeline,
+        int sourceWidth,
+        int sourceHeight)
+    {
+        if (sourceWidth <= 0 || sourceHeight <= 0)
+            return VideoCodecNegotiator.RequiredAv1Constraints(0, 0, 0);
+        var output = pipeline.Quality.ScaleFor(sourceWidth, sourceHeight);
+        return VideoCodecNegotiator.RequiredAv1Constraints(
+            output.Width, output.Height, pipeline.Quality.FramesPerSecond);
+    }
+
+    private async Task UpdateRequiredAv1WorkloadAsync(
+        VideoPublisher publisher,
+        ScreenPublishPipeline pipeline,
+        int width,
+        int height)
+    {
+        try
+        {
+            await publisher.UpdateRequiredAv1ConstraintsAsync(
+                RequiredAv1Workload(pipeline, width, height), CancellationToken.None);
+        }
+        catch (ObjectDisposedException) { }
+        catch (Exception e)
+        {
+            _logger.LogWarning(e, "Could not re-evaluate AV1 workload after capture resize.");
+        }
     }
 
     private void OnTransportDiagnosticsChanged(Guid participantId, RtcTransportDiagnostics diagnostics)

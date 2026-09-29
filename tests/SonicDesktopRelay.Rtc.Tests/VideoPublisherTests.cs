@@ -337,6 +337,31 @@ public sealed class VideoPublisherTests
     }
 
     [Fact]
+    public async Task Answer_application_finishes_before_a_concurrent_codec_transition_reoffers()
+    {
+        var harness = await Harness.StartedAsync(VideoCodec.Av1, _ => Task.CompletedTask);
+        await harness.Publisher.AddViewerAsync(ViewerA, CancellationToken.None);
+        var peer = harness.Peers.Created[0];
+        peer.NegotiatedVideoCodec = VideoCodec.Av1;
+        peer.NegotiatedVideoConstraints = new VideoCodecConstraints("0", 4);
+        peer.BlockApplyAnswer = true;
+        var negotiationId = ReadNegotiationId(harness.Signaling.Sent.Last().Payload);
+
+        var answerTask = harness.Publisher.HandleAsync(Frame(SignalingMessageTypes.WebRtcAnswer, ViewerA,
+            $$"""{"type":"answer","sdp":"answer","negotiationId":"{{negotiationId}}"}"""), CancellationToken.None);
+        await peer.ApplyAnswerEntered.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        var fallbackTask = harness.Publisher.HandleAsync(Frame(SignalingMessageTypes.WebRtcRenegotiate, ViewerA,
+            $$"""{"reason":"av1_decoder_init_failed","negotiationId":"{{negotiationId}}"}"""), CancellationToken.None);
+
+        Assert.Equal(0, peer.H264OfferCalls);
+        peer.ReleaseApplyAnswer();
+        await Task.WhenAll(answerTask, fallbackTask);
+
+        Assert.True(peer.OperationOrder.IndexOf("apply-answer-complete")
+                    < peer.OperationOrder.IndexOf("create-h264-offer"));
+    }
+
+    [Fact]
     public async Task Relay_retry_after_downgrade_keeps_the_replacement_offer_h264_only()
     {
         var harness = await Harness.StartedAsync(VideoCodec.Av1, _ => Task.CompletedTask);
@@ -697,6 +722,12 @@ public sealed class VideoPublisherTests
         public int H264OfferCalls { get; private set; }
         public VideoCodec? NegotiatedVideoCodec { get; set; }
         public VideoCodecConstraints? NegotiatedVideoConstraints { get; set; }
+        public bool BlockApplyAnswer { get; set; }
+        public List<string> OperationOrder { get; } = [];
+        public TaskCompletionSource ApplyAnswerEntered { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private TaskCompletionSource ApplyAnswerRelease { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public Action? DuringVideoSend { get; set; }
 
@@ -726,14 +757,23 @@ public sealed class VideoPublisherTests
         public Task<string> CreateH264OfferAsync(CancellationToken ct)
         {
             H264OfferCalls++;
+            OperationOrder.Add("create-h264-offer");
             return Task.FromResult("h264-offer-sdp");
         }
 
-        public Task ApplyAnswerAsync(string sdp, CancellationToken ct)
+        public async Task ApplyAnswerAsync(string sdp, CancellationToken ct)
         {
+            OperationOrder.Add("apply-answer-start");
+            if (BlockApplyAnswer)
+            {
+                ApplyAnswerEntered.TrySetResult();
+                await ApplyAnswerRelease.Task.WaitAsync(ct);
+            }
             AppliedAnswer = sdp;
-            return Task.CompletedTask;
+            OperationOrder.Add("apply-answer-complete");
         }
+
+        public void ReleaseApplyAnswer() => ApplyAnswerRelease.TrySetResult();
 
         public Task AddIceCandidateAsync(string candidate, string? sdpMid, int? sdpMLineIndex, CancellationToken ct)
         {

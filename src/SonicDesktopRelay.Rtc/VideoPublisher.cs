@@ -32,7 +32,7 @@ public sealed class VideoPublisher(
     private readonly SemaphoreSlim _sessionGate = new(1, 1);
     private VideoCodec? _sessionCodec = initialSessionCodec;
     private readonly VideoCodecCapabilities? _publisherVideoCapabilities = publisherVideoCapabilities;
-    private readonly VideoCodecConstraints _requiredAv1 = requiredAv1 ?? new VideoCodecConstraints("0", 4);
+    private VideoCodecConstraints _requiredAv1 = requiredAv1 ?? new VideoCodecConstraints("0", 4);
     private readonly object _receiverStatsGate = new();
     private readonly TimeProvider _time = time ?? TimeProvider.System;
     private long _lastVideoSendDurationTicks;
@@ -143,23 +143,7 @@ public sealed class VideoPublisher(
         switch (envelope.Type)
         {
             case SignalingMessageTypes.WebRtcAnswer:
-                if (MatchesGeneration(from, payload)
-                    && payload.TryGetProperty("sdp", out var sdp) && sdp.GetString() is { } sdpText)
-                {
-                    await peer.ApplyAnswerAsync(sdpText, ct);
-                    if (peer.NegotiatedVideoCodec is { } negotiated)
-                    {
-                        _viewerCapabilities[from] = BuildViewerCapabilities(negotiated, peer.NegotiatedVideoConstraints);
-                        await _sessionGate.WaitAsync(ct);
-                        try
-                        {
-                            var selection = SelectSharedCodec();
-                            if (_sessionCodec == VideoCodec.Av1 && selection.Codec == VideoCodec.H264)
-                                await SwitchSessionToH264Async(ct);
-                        }
-                        finally { _sessionGate.Release(); }
-                    }
-                }
+                await HandleAnswerAsync(from, payload, ct);
                 break;
 
             case SignalingMessageTypes.WebRtcIceCandidate:
@@ -192,6 +176,47 @@ public sealed class VideoPublisher(
                 }
                 break;
         }
+    }
+
+    private async Task HandleAnswerAsync(Guid participantId, JsonElement payload, CancellationToken ct)
+    {
+        await _sessionGate.WaitAsync(ct);
+        try
+        {
+            var peerGate = _peerGates.GetOrAdd(participantId, _ => new SemaphoreSlim(1, 1));
+            await peerGate.WaitAsync(ct);
+            try
+            {
+                if (!_peers.TryGetValue(participantId, out var peer)
+                    || !MatchesGeneration(participantId, payload)
+                    || !payload.TryGetProperty("sdp", out var sdp)
+                    || sdp.ValueKind != JsonValueKind.String
+                    || sdp.GetString() is not { } sdpText) return;
+
+                await peer.ApplyAnswerAsync(sdpText, ct);
+                if (peer.NegotiatedVideoCodec is { } negotiated)
+                    _viewerCapabilities[participantId] = BuildViewerCapabilities(negotiated, peer.NegotiatedVideoConstraints);
+            }
+            finally { peerGate.Release(); }
+
+            var selection = SelectSharedCodec();
+            if (_sessionCodec == VideoCodec.Av1 && selection.Codec == VideoCodec.H264)
+                await SwitchSessionToH264Async(ct);
+        }
+        finally { _sessionGate.Release(); }
+    }
+
+    public async Task UpdateRequiredAv1ConstraintsAsync(VideoCodecConstraints requiredAv1, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(requiredAv1);
+        await _sessionGate.WaitAsync(ct);
+        try
+        {
+            _requiredAv1 = requiredAv1;
+            if (_sessionCodec == VideoCodec.Av1 && SelectSharedCodec().Codec == VideoCodec.H264)
+                await SwitchSessionToH264Async(ct);
+        }
+        finally { _sessionGate.Release(); }
     }
 
     private bool MatchesGeneration(Guid participantId, JsonElement payload)

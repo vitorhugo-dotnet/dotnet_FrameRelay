@@ -65,6 +65,46 @@ public sealed class VideoCodecNegotiatorTests
         Assert.Equal("av1-level-insufficient", result.FallbackReason);
     }
 
+    [Theory]
+    [InlineData(640, 360, 30, 1)]
+    [InlineData(1280, 720, 30, 5)]
+    [InlineData(1920, 1080, 30, 8)]
+    [InlineData(1920, 1080, 60, 9)]
+    [InlineData(3840, 2160, 60, 13)]
+    public void Required_av1_level_covers_encoded_picture_size_and_display_rate(
+        int width, int height, int fps, int expectedLevel)
+    {
+        var required = VideoCodecNegotiator.RequiredAv1Constraints(width, height, fps);
+
+        Assert.Equal("0", required.Profile);
+        Assert.Equal(expectedLevel, required.MaxLevel);
+    }
+
+    [Theory]
+    [InlineData(0, 1080, 30)]
+    [InlineData(1920, 1080, 0)]
+    [InlineData(100_000, 100_000, 120)]
+    public void Unknown_or_oversized_av1_workload_fails_closed(int width, int height, int fps)
+    {
+        var required = VideoCodecNegotiator.RequiredAv1Constraints(width, height, fps);
+
+        Assert.Equal(int.MaxValue, required.MaxLevel);
+    }
+
+    [Fact]
+    public void Probe_limited_to_level_3_falls_back_for_full_hd_30fps_workload()
+    {
+        var required = VideoCodecNegotiator.RequiredAv1Constraints(1920, 1080, 30);
+        var result = VideoCodecNegotiator.Select(
+            Capabilities(true, true, 4),
+            [Capabilities(false, true, 13)],
+            required);
+
+        Assert.Equal(8, required.MaxLevel);
+        Assert.Equal(VideoCodec.H264, result.Codec);
+        Assert.Equal("av1-level-insufficient", result.FallbackReason);
+    }
+
     private static VideoCodecCapabilities Capabilities(bool encoder, bool decoder, int level, string profile = "0", bool includeEncoderConfiguration = true) =>
         new(
             encoder ? new HashSet<VideoCodec> { VideoCodec.Av1 } : new HashSet<VideoCodec>(),

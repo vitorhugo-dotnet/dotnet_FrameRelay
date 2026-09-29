@@ -79,6 +79,62 @@ public sealed class Av1RtpAccessUnitAssemblerTests
     }
 
     [Fact]
+    public void Drops_a_gap_between_single_packet_temporal_units_and_counts_the_lost_packet()
+    {
+        var assembler = new Av1RtpAccessUnitAssembler();
+        var drops = new List<Av1AccessUnitDrop>();
+        assembler.AccessUnitDropped += drops.Add;
+        var payload = Assert.Single(AV1Packetiser.Packetize(CreateTemporalUnit(24), 1200)).Payload;
+
+        Assert.NotNull(assembler.Push(10, 100, true, payload));
+        Assert.Null(assembler.Push(12, 200, true, payload));
+
+        Assert.Contains(drops, drop => drop.Reason == "rtp-sequence-gap" && drop.Timestamp == 200);
+        Assert.Equal(1, assembler.RtpSequenceGaps);
+        Assert.Equal(1, assembler.RtpPacketsLost);
+        Assert.Equal(1, assembler.AccessUnitsReceived);
+    }
+
+    [Fact]
+    public void Drops_a_temporal_unit_when_its_first_packet_was_lost_even_if_next_obu_starts_cleanly()
+    {
+        var assembler = new Av1RtpAccessUnitAssembler();
+        var drops = new List<Av1AccessUnitDrop>();
+        assembler.AccessUnitDropped += drops.Add;
+        var first = Assert.Single(AV1Packetiser.Packetize(CreateTemporalUnit(24), 1200));
+        var firstObuPacket = Assert.Single(AV1Packetiser.Packetize(
+            CreateTemporalUnit(CreateSequenceHeader(reducedStillPictureHeader: true)), 1200));
+        var nextObuPacket = Assert.Single(AV1Packetiser.Packetize(
+            CreateTemporalUnit(CreateFrameHeader(showExistingFrame: false, frameType: 0)), 1200));
+        Assert.Equal(0, firstObuPacket.Payload[0] & 0x80);
+        Assert.Equal(0, nextObuPacket.Payload[0] & 0x80);
+
+        Assert.NotNull(assembler.Push(100, 100, true, first.Payload));
+        // Packet 101 held the first OBU with marker clear but was lost. The next OBU starts
+        // cleanly (Z=0), so only RTP sequence continuity detects the missing temporal-unit data.
+        var droppedResult = assembler.Push(102, 200, true, nextObuPacket.Payload);
+
+        Assert.Null(droppedResult);
+        Assert.Contains(drops, drop => drop.Reason == "rtp-sequence-gap" && drop.Timestamp == 200);
+        Assert.Equal(1, assembler.RtpSequenceGaps);
+        Assert.Equal(1, assembler.RtpPacketsLost);
+    }
+
+    [Fact]
+    public void Sequence_continuity_accepts_wrap_from_65535_to_zero_between_temporal_units()
+    {
+        var assembler = new Av1RtpAccessUnitAssembler();
+        var payload = Assert.Single(AV1Packetiser.Packetize(CreateTemporalUnit(24), 1200)).Payload;
+
+        Assert.NotNull(assembler.Push(ushort.MaxValue, 100, true, payload));
+        var next = assembler.Push(0, 200, true, payload);
+
+        Assert.NotNull(next);
+        Assert.Equal(0, assembler.RtpSequenceGaps);
+        Assert.Equal(0, assembler.RtpPacketsLost);
+    }
+
+    [Fact]
     public void Sequence_header_only_temporal_unit_is_not_a_frame_or_key_frame()
     {
         var assembler = new Av1RtpAccessUnitAssembler();

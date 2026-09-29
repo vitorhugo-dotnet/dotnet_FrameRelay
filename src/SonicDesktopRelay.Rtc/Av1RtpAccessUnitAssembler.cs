@@ -26,6 +26,7 @@ internal sealed class Av1RtpAccessUnitAssembler
     private readonly int _maxPacketsPerAccessUnit;
     private uint? _timestamp;
     private ushort? _lastArrivalSequence;
+    private ushort? _lastCompletedSequence;
     private int _retainedBytes;
     private uint? _discardTimestamp;
     private bool? _reducedStillPictureHeader;
@@ -60,7 +61,11 @@ internal sealed class Av1RtpAccessUnitAssembler
         lock (_gate)
         {
             RtpPacketsReceived++;
-            if (_discardTimestamp == timestamp) return null;
+            if (_discardTimestamp == timestamp)
+            {
+                AdvanceSequence(_lastCompletedSequence, sequenceNumber);
+                return null;
+            }
             if (_discardTimestamp is not null && _discardTimestamp != timestamp)
                 _discardTimestamp = null;
             if (_timestamp is { } oldTimestamp && oldTimestamp != timestamp && _packets.Count > 0)
@@ -120,6 +125,26 @@ internal sealed class Av1RtpAccessUnitAssembler
                 return null;
         }
 
+        if (_lastCompletedSequence is { } previousSequence)
+        {
+            var expectedSequence = unchecked((ushort)(previousSequence + 1));
+            if (ordered[0].SequenceNumber != expectedSequence)
+            {
+                if (IsBefore(ordered[0].SequenceNumber, expectedSequence))
+                {
+                    RtpPacketsReordered++;
+                    return DropAndReset("out-of-order-temporal-unit", timestamp, incomplete: true);
+                }
+
+                var missingPackets = unchecked((ushort)(ordered[0].SequenceNumber - expectedSequence));
+                return DropAndReset(
+                    "rtp-sequence-gap",
+                    timestamp,
+                    incomplete: true,
+                    missingPackets);
+            }
+        }
+
         var previousContinues = false;
         for (var i = 0; i < ordered.Length; i++)
         {
@@ -156,6 +181,7 @@ internal sealed class Av1RtpAccessUnitAssembler
             return DropAndReset("malformed-av1-payload", timestamp, incomplete: false);
         }
 
+        AdvanceSequence(_lastCompletedSequence, ordered[^1].SequenceNumber);
         Reset();
         if (accessUnit is null || accessUnit.Length == 0 || accessUnit.Length > _maxRetainedBytes
             || !ValidateTemporalUnit(accessUnit))
@@ -353,12 +379,21 @@ internal sealed class Av1RtpAccessUnitAssembler
         return false;
     }
 
-    private Av1AssembledAccessUnit? DropAndReset(string reason, uint timestamp, bool incomplete)
+    private Av1AssembledAccessUnit? DropAndReset(
+        string reason,
+        uint timestamp,
+        bool incomplete,
+        int? missingPackets = null)
     {
         if (reason == "rtp-sequence-gap")
         {
             RtpSequenceGaps++;
-            RtpPacketsLost += CountMissingPackets();
+            RtpPacketsLost += missingPackets ?? CountMissingPackets();
+        }
+        if (_packets.Count > 0)
+        {
+            var ordered = _packets.OrderBy(packet => packet.SequenceNumber, SequenceComparer.Instance).ToArray();
+            AdvanceSequence(_lastCompletedSequence, ordered[^1].SequenceNumber);
         }
         Reset();
         _discardTimestamp = timestamp;
@@ -394,8 +429,17 @@ internal sealed class Av1RtpAccessUnitAssembler
         _retainedBytes = 0;
     }
 
+    private void AdvanceSequence(ushort? current, ushort candidate)
+    {
+        if (current is null || IsAfter(candidate, current.Value))
+            _lastCompletedSequence = candidate;
+    }
+
     private static bool IsBefore(ushort candidate, ushort reference) =>
         unchecked((short)(candidate - reference)) < 0;
+
+    private static bool IsAfter(ushort candidate, ushort reference) =>
+        unchecked((short)(candidate - reference)) > 0;
 
     private sealed record Packet(ushort SequenceNumber, bool Marker, byte[] Payload);
 

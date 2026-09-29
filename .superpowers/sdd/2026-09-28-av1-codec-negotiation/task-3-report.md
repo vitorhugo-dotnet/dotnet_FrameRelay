@@ -40,3 +40,12 @@ The new AV1 paths contain no H.264 bitstream conversion or software fallback. Th
 
 - `dotnet build src\SonicDesktopRelay.Media.Windows\SonicDesktopRelay.Media.Windows.csproj --no-restore --verbosity:minimal` — passed, 0 warnings and 0 errors.
 - `dotnet test tests\SonicDesktopRelay.Media.Windows.Tests\SonicDesktopRelay.Media.Windows.Tests.csproj --no-restore --filter "FullyQualifiedName~MediaFoundationAv1" --logger "console;verbosity=minimal"` — 10 passed, 1 skipped, 0 failed. The skipped encoder/decoder pair integration still reports that this host has no hardware AV1 decoder.
+
+## Fix round 2: asynchronous encoder timestamps
+
+The AV1 encoder now records a bounded queue of submitted frame timestamps, durations, and dimensions. It associates delayed output with the matching `IMFSample.SampleTime`; when the transform omits that value, it uses FIFO submission order. An output carrying an unmatched explicit timestamp retains that output timestamp and uses the oldest pending frame metadata. The queue is cleared when the transform is released.
+
+Focused tracker tests cover delayed output from frame N after frame N+1 was submitted, FIFO fallback when the MFT timestamp is unavailable, and preservation of an explicit output timestamp without an exact submission match.
+
+- `dotnet build src\\SonicDesktopRelay.Media.Windows\\SonicDesktopRelay.Media.Windows.csproj --no-restore --verbosity:minimal` — passed, 0 warnings and 0 errors.
+- `dotnet test tests\\SonicDesktopRelay.Media.Windows.Tests\\SonicDesktopRelay.Media.Windows.Tests.csproj --no-restore --filter "FullyQualifiedName~MediaFoundationEncoderTimestampTrackerTests|FullyQualifiedName~MediaFoundationAv1CapabilityProbeTests|FullyQualifiedName~MediaFoundationAv1CodecTests|FullyQualifiedName~MediaFoundationAv1DecoderTests" --logger "console;verbosity=minimal"` — 13 passed, 1 expected skip, 0 failed. The skipped hardware pair integration requires a hardware AV1 decoder, which this host does not enumerate.

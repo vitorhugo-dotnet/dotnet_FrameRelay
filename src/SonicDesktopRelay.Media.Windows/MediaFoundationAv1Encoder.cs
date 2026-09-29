@@ -32,6 +32,7 @@ public sealed class MediaFoundationAv1Encoder : IVideoEncoder
     private readonly List<string> _rejections = [];
     private readonly EncoderKeyFramePolicy _keyFramePolicy = new(null);
     private readonly MediaFoundationTransformRetryPolicy _retryPolicy = new();
+    private readonly MediaFoundationEncoderTimestampTracker _timestampTracker = new();
 
     private IMFTransform? _transform;
     private MediaFoundationCodecControl? _codecControl;
@@ -306,6 +307,7 @@ public sealed class MediaFoundationAv1Encoder : IVideoEncoder
 
             _asyncInputReady = false;
             _transform!.ProcessInput(0, input, 0);
+            _timestampTracker.Submitted(new(frame.Timestamp, duration, width, height));
             if (!WaitForAsyncCredit(_asyncPump, static pump => pump.TryTakeOutput(), 250))
             {
                 _asyncPump.DrainAvailable();
@@ -314,7 +316,7 @@ public sealed class MediaFoundationAv1Encoder : IVideoEncoder
                 // transform failure; drop this output opportunity and keep the active MFT.
                 return MediaFoundationTransformRetryPolicy.ReadAsyncOutputIfReady<EncodedVideoSample>(
                     outputReady: false,
-                    () => TryReadOutput(frame.Timestamp, duration, width, height));
+                    TryReadOutput);
             }
             _asyncPump.DrainAvailable();
             if (_asyncPump.InputCredits > 0)
@@ -323,9 +325,10 @@ public sealed class MediaFoundationAv1Encoder : IVideoEncoder
         else
         {
             _transform!.ProcessInput(0, input, 0);
+            _timestampTracker.Submitted(new(frame.Timestamp, duration, width, height));
         }
 
-        return TryReadOutput(frame.Timestamp, duration, width, height);
+        return TryReadOutput();
     }
 
     private static bool IsHardTransformFailure(Exception exception) =>
@@ -458,13 +461,11 @@ public sealed class MediaFoundationAv1Encoder : IVideoEncoder
         }
     }
 
-    private EncodedVideoSample? TryReadOutput(
-        TimeSpan timestamp,
-        TimeSpan duration,
-        int width,
-        int height)
+    private EncodedVideoSample? TryReadOutput()
     {
         var transform = _transform!;
+        var width = _width;
+        var height = _height;
         var streamInfo = transform.GetOutputStreamInfo(0);
         var providesSamples =
             (streamInfo.Flags & (int)OutputStreamInfoFlags.OutputStreamProvidesSamples) != 0;
@@ -527,7 +528,33 @@ public sealed class MediaFoundationAv1Encoder : IVideoEncoder
                 encodedSample.GetUInt32(SampleAttributeKeys.CleanPoint, out var clean).Success
                 && clean != 0;
 
-            return new EncodedVideoSample(bytes, timestamp, cleanPoint, width, height, duration)
+            long sampleTime = 0;
+            var hasMftTimestamp = true;
+            try
+            {
+                sampleTime = encodedSample.SampleTime;
+            }
+            catch (Exception exception) when (exception is SharpGenException or COMException)
+            {
+                hasMftTimestamp = false;
+            }
+
+            var timing = _timestampTracker.ForOutput(
+                hasMftTimestamp,
+                hasMftTimestamp ? TimeSpan.FromTicks(sampleTime) : default);
+            if (timing is null)
+            {
+                _rejections.Add("AV1 encoder produced an output sample without a timestamp or pending input timing.");
+                return null;
+            }
+
+            return new EncodedVideoSample(
+                bytes,
+                timing.Value.Timestamp,
+                cleanPoint,
+                timing.Value.Width,
+                timing.Value.Height,
+                timing.Value.Duration)
             {
                 Codec = VideoCodec.Av1
             };
@@ -575,6 +602,7 @@ public sealed class MediaFoundationAv1Encoder : IVideoEncoder
 
     private void ReleaseTransform()
     {
+        _timestampTracker.Clear();
         _keyFramePolicy.UpdateControl(null);
         _codecControl?.Dispose();
         _codecControl = null;
@@ -612,5 +640,58 @@ public sealed class MediaFoundationAv1Encoder : IVideoEncoder
             _converter.Dispose();
             _runtimeLease.Dispose();
         }
+    }
+}
+
+internal readonly record struct MediaFoundationEncoderTiming(
+    TimeSpan Timestamp,
+    TimeSpan Duration,
+    int Width,
+    int Height);
+
+/// <summary>Maps delayed AV1 encoder output to the input frame that produced it.</summary>
+internal sealed class MediaFoundationEncoderTimestampTracker
+{
+    private const int MaxPendingTimings = 120;
+    private readonly Queue<MediaFoundationEncoderTiming> _pending = new();
+
+    internal void Submitted(MediaFoundationEncoderTiming timing)
+    {
+        if (_pending.Count == MaxPendingTimings)
+            _pending.Dequeue();
+        _pending.Enqueue(timing);
+    }
+
+    internal MediaFoundationEncoderTiming? ForOutput(bool hasMftTimestamp, TimeSpan mftTimestamp)
+    {
+        if (hasMftTimestamp)
+        {
+            var submitted = RemoveMatchingSubmission(mftTimestamp)
+                ?? (_pending.Count > 0 ? _pending.Dequeue() : null);
+            return submitted is { } timing ? timing with { Timestamp = mftTimestamp } : null;
+        }
+
+        return _pending.Count > 0 ? _pending.Dequeue() : null;
+    }
+
+    internal void Clear() => _pending.Clear();
+
+    private MediaFoundationEncoderTiming? RemoveMatchingSubmission(TimeSpan timestamp)
+    {
+        var count = _pending.Count;
+        MediaFoundationEncoderTiming? match = null;
+        for (var index = 0; index < count; index++)
+        {
+            var candidate = _pending.Dequeue();
+            if (match is null && candidate.Timestamp == timestamp)
+            {
+                match = candidate;
+                continue;
+            }
+
+            _pending.Enqueue(candidate);
+        }
+
+        return match;
     }
 }

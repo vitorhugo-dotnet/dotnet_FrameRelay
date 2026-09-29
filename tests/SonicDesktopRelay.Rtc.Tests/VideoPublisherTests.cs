@@ -14,6 +14,94 @@ public sealed class VideoPublisherTests
     private static readonly MonitorInfo Monitor = new("\\\\.\\DISPLAY1", "Primary", 1920, 1080, true);
 
     [Fact]
+    public async Task Runtime_av1_encoder_failure_reoffers_same_peer_then_resumes_video_and_audio()
+    {
+        var capture = new FakeCapture();
+        var av1 = new ThrowingEncoder("av1");
+        var h264 = new FakeEncoder();
+        await using var pipeline = new ScreenPublishPipeline(capture, av1);
+        var audioCapture = new FakeAudioCapture();
+        await using var audioPipeline = new AudioPublishPipeline(
+            audioCapture, new FakeAudioEncoder(), new MediaSessionClock(TimeProvider.System));
+        var peers = new FakePeerFactory();
+        var signaling = new FakeSignaling { BlockH264Offers = true };
+        var downgradeCalls = 0;
+        await using var publisher = new VideoPublisher(
+            pipeline, peers, signaling, audioPipeline,
+            downgradeEncoderToH264: _ =>
+            {
+                downgradeCalls++;
+                pipeline.ReplaceEncoder(h264);
+                return Task.CompletedTask;
+            },
+            initialSessionCodec: VideoCodec.Av1,
+            publisherVideoCapabilities: new VideoCodecCapabilities(
+                new HashSet<VideoCodec> { VideoCodec.H264, VideoCodec.Av1 },
+                new HashSet<VideoCodec>(),
+                new Dictionary<VideoCodec, VideoCodecConstraints>
+                {
+                    [VideoCodec.Av1] = new("0", 4)
+                },
+                new Dictionary<VideoCodec, VideoCodecConstraints>(),
+                new Dictionary<VideoCodec, string>()));
+        var recovery = new TaskCompletionSource<Task>(TaskCreationOptions.RunContinuationsAsynchronously);
+        pipeline.Failed += error =>
+            recovery.TrySetResult(publisher.HandleRuntimeEncoderFailureAsync(error, CancellationToken.None));
+
+        await audioPipeline.StartAsync(CancellationToken.None);
+        await pipeline.StartAsync(Monitor, CancellationToken.None);
+        await publisher.AddViewerAsync(ViewerA, CancellationToken.None);
+        var peer = peers.Created.Single();
+        peer.NegotiatedVideoCodec = VideoCodec.Av1;
+        peer.NegotiatedVideoConstraints = new VideoCodecConstraints("0", 4);
+        var negotiationId = ReadNegotiationId(signaling.Sent.Last().Payload);
+        await publisher.HandleAsync(Frame(SignalingMessageTypes.WebRtcAnswer, ViewerA,
+            $$"""{"type":"answer","sdp":"answer","negotiationId":"{{negotiationId}}"}"""),
+            CancellationToken.None);
+
+        capture.Emit();
+        var recoveryTask = await recovery.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        await signaling.H264OfferEntered.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        capture.Emit();
+        await Task.Delay(50);
+
+        Assert.Equal(0, h264.EncodeCalls);
+        Assert.Equal(1, downgradeCalls);
+        Assert.Equal(1, peer.H264OfferCalls);
+        Assert.False(peer.Disposed);
+        Assert.Equal(VideoCodec.H264, publisher.CodecDiagnostics.ActiveCodec);
+        Assert.Equal("av1-runtime-encoder-failure", publisher.CodecDiagnostics.FallbackReason);
+        Assert.DoesNotContain("AV1", publisher.CodecDiagnostics.LocalCodecs);
+
+        signaling.ReleaseH264Offers();
+        await recoveryTask.WaitAsync(TimeSpan.FromSeconds(1));
+        capture.Emit();
+        Assert.True(SpinWait.SpinUntil(() => h264.EncodeCalls == 1, TimeSpan.FromSeconds(1)));
+
+        audioCapture.Emit();
+        Assert.True(SpinWait.SpinUntil(() => peer.SentAudioSamples.Count == 1, TimeSpan.FromSeconds(1)));
+        Assert.Same(peer, peers.Created.Single());
+        Assert.False(peer.Disposed);
+        Assert.Contains(signaling.Sent, sent => sent.Type == SignalingMessageTypes.WebRtcOffer
+            && sent.To == ViewerA);
+
+        h264.Throw = true;
+        capture.Emit();
+        Assert.True(SpinWait.SpinUntil(
+            () => pipeline.LastFailure?.Contains("injected H264 runtime failure", StringComparison.Ordinal) == true,
+            TimeSpan.FromSeconds(1)));
+        capture.Emit();
+        audioCapture.Emit();
+        await Task.Delay(50);
+        Assert.Equal(2, h264.EncodeCalls);
+        Assert.Equal(1, downgradeCalls);
+        Assert.Equal(1, peer.H264OfferCalls);
+        Assert.Equal(2, peer.SentAudioSamples.Count);
+        Assert.False(peer.Disposed);
+
+    }
+
+    [Fact]
     public async Task Adding_a_viewer_creates_one_peer_and_sends_it_an_offer()
     {
         var harness = await Harness.StartedAsync();
@@ -669,10 +757,12 @@ public sealed class VideoPublisherTests
         public int EncodeCalls { get; private set; }
         public int KeyFrameRequests { get; private set; }
         public bool NextIsKeyFrame { get; set; } = true;
+        public bool Throw { get; set; }
 
         public EncodedVideoSample? Encode(VideoFrame frame, VideoQuality quality)
         {
             EncodeCalls++;
+            if (Throw) throw new InvalidOperationException("injected H264 runtime failure");
             var isKeyFrame = NextIsKeyFrame;
             NextIsKeyFrame = false;
             return new EncodedVideoSample(new byte[8], frame.Timestamp, isKeyFrame, frame.Width, frame.Height);
@@ -683,6 +773,15 @@ public sealed class VideoPublisherTests
             KeyFrameRequests++;
             NextIsKeyFrame = true;
         }
+        public void Dispose() { }
+    }
+
+    private sealed class ThrowingEncoder(string name) : IVideoEncoder
+    {
+        public string Name { get; } = name;
+        public EncodedVideoSample? Encode(VideoFrame frame, VideoQuality quality) =>
+            throw new InvalidOperationException("injected AV1 runtime failure");
+        public void RequestKeyFrame() { }
         public void Dispose() { }
     }
 
@@ -844,6 +943,9 @@ public sealed class VideoPublisherTests
     private sealed class FakeSignaling : ISignalingConnection
     {
         public List<(string Type, Guid? To, object? Payload)> Sent { get; } = [];
+        public bool BlockH264Offers { get; set; }
+        public TaskCompletionSource H264OfferEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private TaskCompletionSource H264OfferRelease { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public SignalingState State => SignalingState.Connected;
 
         public event Action<SignalingEnvelope>? FrameReceived
@@ -860,11 +962,18 @@ public sealed class VideoPublisherTests
 
         public Task StartAsync(Guid sessionId, CancellationToken ct) => Task.CompletedTask;
 
-        public Task SendAsync(string type, Guid? to, object? payload, CancellationToken ct)
+        public async Task SendAsync(string type, Guid? to, object? payload, CancellationToken ct)
         {
             Sent.Add((type, to, payload));
-            return Task.CompletedTask;
+            if (BlockH264Offers && type == SignalingMessageTypes.WebRtcOffer
+                && payload?.GetType().GetProperty("sdp")?.GetValue(payload) as string == "h264-offer-sdp")
+            {
+                H264OfferEntered.TrySetResult();
+                await H264OfferRelease.Task.WaitAsync(ct);
+            }
         }
+
+        public void ReleaseH264Offers() => H264OfferRelease.TrySetResult();
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }

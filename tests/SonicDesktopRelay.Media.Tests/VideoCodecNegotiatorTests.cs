@@ -33,6 +33,22 @@ public sealed class VideoCodecNegotiatorTests
     }
 
     [Fact]
+    public void Uses_specific_publisher_av1_rejection_when_encoder_is_unavailable()
+    {
+        var publisher = Capabilities(false, false, 0) with
+        {
+            RejectionReasons = new Dictionary<VideoCodec, string>
+            {
+                [VideoCodec.Av1] = "av1-runtime-encoder-failure"
+            }
+        };
+
+        var result = VideoCodecNegotiator.Select(publisher, [Capabilities(false, true, 5)], Required);
+
+        Assert.Equal("av1-runtime-encoder-failure", result.FallbackReason);
+    }
+
+    [Fact]
     public void Keeps_h264_when_any_viewer_has_no_av1_decoder()
     {
         var result = VideoCodecNegotiator.Select(Capabilities(true, true, 5), [Capabilities(false, true, 5), Capabilities(false, false, 0)], Required);

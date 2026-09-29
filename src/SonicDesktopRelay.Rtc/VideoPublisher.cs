@@ -41,7 +41,7 @@ public sealed class VideoPublisher(
     private readonly SemaphoreSlim _sessionGate = new(1, 1);
     private VideoCodec? _sessionCodec = initialSessionCodec;
     private string? _codecFallbackReason;
-    private readonly VideoCodecCapabilities? _publisherVideoCapabilities = publisherVideoCapabilities;
+    private VideoCodecCapabilities? _publisherVideoCapabilities = publisherVideoCapabilities;
     private VideoCodecConstraints _requiredAv1 = requiredAv1 ?? new VideoCodecConstraints("0", 4);
     private readonly object _receiverStatsGate = new();
     private readonly TimeProvider _time = time ?? TimeProvider.System;
@@ -261,6 +261,36 @@ public sealed class VideoPublisher(
             _codecFallbackReason = selection.Codec == VideoCodec.H264 ? selection.FallbackReason : null;
             if (_sessionCodec == VideoCodec.Av1 && selection.Codec == VideoCodec.H264)
                 await SwitchSessionToH264Async(ct);
+        }
+        finally { _sessionGate.Release(); }
+    }
+
+    /// <summary>Falls back the shared session after a runtime AV1 encoder failure.</summary>
+    public async Task HandleRuntimeEncoderFailureAsync(Exception error, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(error);
+        await _sessionGate.WaitAsync(ct);
+        try
+        {
+            if (_sessionCodec != VideoCodec.Av1) return;
+
+            _codecFallbackReason = "av1-runtime-encoder-failure";
+            if (_publisherVideoCapabilities is { } capabilities)
+            {
+                var rejectionReasons = capabilities.RejectionReasons.ToDictionary();
+                rejectionReasons[VideoCodec.Av1] = "av1-runtime-encoder-failure";
+                _publisherVideoCapabilities = capabilities with
+                {
+                    Encoders = capabilities.Encoders.Where(codec => codec != VideoCodec.Av1).ToHashSet(),
+                    EncoderConstraints = capabilities.EncoderConstraints
+                        .Where(pair => pair.Key != VideoCodec.Av1)
+                        .ToDictionary(pair => pair.Key, pair => pair.Value),
+                    RejectionReasons = rejectionReasons
+                };
+            }
+
+            await SwitchSessionToH264Async(ct);
+            pipeline.ResumeAfterEncoderReplacement();
         }
         finally { _sessionGate.Release(); }
     }

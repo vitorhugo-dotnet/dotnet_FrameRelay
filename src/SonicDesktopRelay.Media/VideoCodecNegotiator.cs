@@ -52,7 +52,10 @@ public static class VideoCodecNegotiator
         if (viewers.Count == 0)
             return H264("no-active-viewers");
         if (!publisher.Encoders.Contains(VideoCodec.Av1))
-            return H264("publisher-av1-encoder-unavailable");
+            return H264(publisher.RejectionReasons.TryGetValue(VideoCodec.Av1, out var rejectionReason)
+                && !string.IsNullOrWhiteSpace(rejectionReason)
+                    ? rejectionReason
+                    : "publisher-av1-encoder-unavailable");
         if (viewers.Any(viewer => !viewer.Decoders.Contains(VideoCodec.Av1)))
             return H264("viewer-av1-decoder-unavailable");
 

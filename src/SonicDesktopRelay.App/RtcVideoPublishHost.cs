@@ -253,11 +253,10 @@ public sealed class RtcVideoPublishHost(
                 TimeProvider.System,
                 loggerFactory?.CreateLogger<ScreenPublishPipeline>(),
                 profile);
+            pipeline.Failed += OnVideoPipelineFailed;
             // Transfer ownership before capture startup: if the native capture path throws,
             // DisposeStackAsync can still release the capture source and Media Foundation MFT.
             _pipeline = pipeline;
-
-            await pipeline.StartAsync(target, ct);
 
             AudioPublishPipeline? audioPipeline = null;
             IAudioCaptureSource? audioSource;
@@ -336,6 +335,9 @@ public sealed class RtcVideoPublishHost(
             _diagnosticsTimer = TimeProvider.System.CreateTimer(
                 _ => VideoDiagnosticsChanged?.Invoke(), null,
                 TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
+
+            // Install the publisher failure path before capture can emit the first frame.
+            await pipeline.StartAsync(target, ct);
 
             var transformInfo = encoder switch
             {
@@ -452,6 +454,32 @@ public sealed class RtcVideoPublishHost(
     private void OnAudioPipelineFailed(Exception error)
         => _audioPipelineFailure ??= error.Message;
 
+    private void OnVideoPipelineFailed(Exception error)
+    {
+        if (_encoder is MediaFoundationAv1Encoder && _publisher is { } publisher)
+        {
+            _ = RecoverAv1EncoderFailureAsync(publisher, error);
+            return;
+        }
+
+        _logger.LogError(error,
+            "Video encoder failed; the video pipeline is stopped. hresult=0x{HResult:X8}", error.HResult);
+    }
+
+    private async Task RecoverAv1EncoderFailureAsync(VideoPublisher publisher, Exception error)
+    {
+        try
+        {
+            await publisher.HandleRuntimeEncoderFailureAsync(error, CancellationToken.None);
+        }
+        catch (Exception recoveryError)
+        {
+            _logger.LogError(recoveryError,
+                "AV1 runtime failure could not recover the video session to H.264. hresult=0x{HResult:X8}",
+                recoveryError.HResult);
+        }
+    }
+
     private void OnCaptureTargetClosed(string reason)
     {
         _logger.LogWarning("Capture target closed. close_reason={CloseReason}", reason);
@@ -557,6 +585,7 @@ public sealed class RtcVideoPublishHost(
 
         if (_pipeline is not null)
         {
+            _pipeline.Failed -= OnVideoPipelineFailed;
             // Disposing the pipeline disposes the capture source and the encoder with it, so
             // the GPU encode session is released the moment the share stops.
             await _pipeline.DisposeAsync();

@@ -34,7 +34,8 @@ public sealed class ScreenPublishPipeline : IAsyncDisposable
     private readonly Dictionary<Guid, ReceptionEvidence> _receptionBySource = [];
     private readonly VideoFrameEncodeQueue _encodeQueue;
 
-    private bool _running;
+    private volatile bool _running;
+    private bool _captureStarted;
     private long _framesCaptured;
     private long _encodedAccessUnits;
     private long _keyframesProduced;
@@ -130,17 +131,41 @@ public sealed class ScreenPublishPipeline : IAsyncDisposable
     {
         if (_running) return;
         _capture.FrameCaptured += OnFrame;
-        await _capture.StartAsync(target, Quality, ct);
+        if (!_captureStarted)
+        {
+            try
+            {
+                await _capture.StartAsync(target, Quality, ct);
+                _captureStarted = true;
+            }
+            catch
+            {
+                _capture.FrameCaptured -= OnFrame;
+                throw;
+            }
+        }
         _running = true;
+    }
+
+    /// <summary>Reattaches frame processing after the encoder has been replaced.</summary>
+    public void ResumeAfterEncoderReplacement()
+    {
+        if (_running) return;
+        if (!_captureStarted)
+            throw new InvalidOperationException("Capture must be started before the pipeline can resume.");
+
+        _capture.FrameCaptured += OnFrame;
+        _running = true;
+        RequestKeyFrame(KeyFrameRequestReason.QualityChange);
     }
 
     public async Task StopAsync()
     {
-        var wasRunning = _running;
         _running = false;
-        if (wasRunning)
+        _capture.FrameCaptured -= OnFrame;
+        if (_captureStarted)
         {
-            _capture.FrameCaptured -= OnFrame;
+            _captureStarted = false;
             await _capture.StopAsync();
         }
 

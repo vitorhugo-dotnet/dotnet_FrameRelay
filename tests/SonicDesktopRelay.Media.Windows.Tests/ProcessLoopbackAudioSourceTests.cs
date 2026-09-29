@@ -103,12 +103,12 @@ public sealed class ProcessLoopbackAudioSourceTests
         public Exception? Failure { get; init; }
         public FakeClient? Client { get; private set; }
         public (uint, bool, int, int, int, int) Parameters { get; private set; }
-        public IProcessLoopbackClient Create(uint targetPid, bool includeProcessTree, int sampleRate, int channels, int bitsPerSample, int frameSamples)
+        public Task<IProcessLoopbackClient> CreateAsync(uint targetPid, bool includeProcessTree, int sampleRate, int channels, int bitsPerSample, int frameSamples)
         {
             CreateCalls++;
             Parameters = (targetPid, includeProcessTree, sampleRate, channels, bitsPerSample, frameSamples);
             if (Failure is not null) throw Failure;
-            return Client = new FakeClient();
+            return Task.FromResult<IProcessLoopbackClient>(Client = new FakeClient());
         }
     }
 

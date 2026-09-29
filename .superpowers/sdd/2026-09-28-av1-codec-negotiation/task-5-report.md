@@ -20,4 +20,6 @@ Answer processing now takes locks in session-then-peer order, applies the answer
 
 Fix round 2 focused verification: workload/policy tests 16 passed; RTC publisher/SIPSorcery tests 41 passed; App build 0 warnings/errors. A parallel test/build attempt first hit MSBuild shared-output file locks; sequential reruns passed. No full suites run.
 
+Fix round 3 computes AV1 workload constraints from `ScreenPublishPipeline.MaximumQuality` (`VideoQuality.InitialFor` the configured profile), not the currently adapted quality rung. This is the pipeline's recovery ceiling, so an immediate quality upgrade cannot produce frames larger/faster than the constraints already sent to codec selection. Capture resize still recalculates against the new source dimensions. Focused App fallback/workload tests passed 2/2, Media quality recovery tests passed 4/4, and the App build succeeded with 0 warnings/errors.
+
 Remaining review concern: the plan-listed `VideoPublisherCodecNegotiationTests.cs` does not exist in this checkout. Existing selection policy and SDP capability tests are in earlier task test files; this task adds focused transition, late-viewer, decoder-failure, signaling validation, and same-peer renegotiation tests. No full test suite was run.

@@ -77,6 +77,9 @@ public sealed class ScreenPublishPipeline : IAsyncDisposable
 
     public VideoQuality Quality { get; private set; }
 
+    /// <summary>The configured upper bound used when reception recovers.</summary>
+    public VideoQuality MaximumQuality => VideoQuality.InitialFor(_profile);
+
     public string EncoderName { get { lock (_encoderGate) return _encoder.Name; } }
 
     /// <summary>Atomically replaces the encoder at the serial encode boundary.</summary>

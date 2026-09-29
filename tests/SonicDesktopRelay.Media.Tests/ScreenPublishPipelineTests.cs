@@ -37,6 +37,7 @@ public sealed class ScreenPublishPipelineTests
         await using var pipeline = new ScreenPublishPipeline(capture, new FakeEncoder(),
             time: time, logger: logger, profile: profile);
         await pipeline.StartAsync(Monitor, CancellationToken.None);
+        Assert.Equal(VideoQuality.InitialFor(profile), pipeline.MaximumQuality);
         var viewer = Guid.NewGuid();
         var expected = new List<VideoQuality> { pipeline.Quality };
 
@@ -59,6 +60,7 @@ public sealed class ScreenPublishPipelineTests
             time.Advance(TimeSpan.FromSeconds(2.5));
             Report(true);
             Assert.Equal(expected[^1].Reduced(profile), pipeline.Quality);
+            Assert.Equal(VideoQuality.InitialFor(profile), pipeline.MaximumQuality);
             expected.Add(pipeline.Quality);
         }
 
@@ -74,6 +76,7 @@ public sealed class ScreenPublishPipelineTests
         }
 
         Assert.Equal(VideoQuality.InitialFor(profile), pipeline.Quality);
+        Assert.Equal(VideoQuality.InitialFor(profile), pipeline.MaximumQuality);
         Assert.Contains(fps, capture.FrameRateUpdates);
         Assert.Contains(logger.Events, entry => entry["QualityEvent"] as string == "video.quality.recovered"
             && entry["EvidenceSource"] as string == (receiverStats ? "video.receiver_stats" : "video-rtcp")

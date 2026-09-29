@@ -300,7 +300,10 @@ public sealed class RtcVideoPublishHost(
                 },
                 initialSessionCodec: encoder is MediaFoundationAv1Encoder ? VideoCodec.Av1 : VideoCodec.H264,
                 publisherVideoCapabilities: _publisherVideoCapabilities,
-                requiredAv1: RequiredAv1Workload(pipeline, capture.CurrentDimensions.Width, capture.CurrentDimensions.Height));
+                requiredAv1: RequiredAv1Workload(
+                    pipeline.MaximumQuality,
+                    capture.CurrentDimensions.Width,
+                    capture.CurrentDimensions.Height));
             _publisher.TransportDiagnosticsChanged += OnTransportDiagnosticsChanged;
             _diagnosticsTimer = TimeProvider.System.CreateTimer(
                 _ => VideoDiagnosticsChanged?.Invoke(), null,
@@ -440,16 +443,16 @@ public sealed class RtcVideoPublishHost(
             _ = UpdateRequiredAv1WorkloadAsync(publisher, pipeline, width, height);
     }
 
-    private static VideoCodecConstraints RequiredAv1Workload(
-        ScreenPublishPipeline pipeline,
+    internal static VideoCodecConstraints RequiredAv1Workload(
+        VideoQuality maximumQuality,
         int sourceWidth,
         int sourceHeight)
     {
         if (sourceWidth <= 0 || sourceHeight <= 0)
             return VideoCodecNegotiator.RequiredAv1Constraints(0, 0, 0);
-        var output = pipeline.Quality.ScaleFor(sourceWidth, sourceHeight);
+        var output = maximumQuality.ScaleFor(sourceWidth, sourceHeight);
         return VideoCodecNegotiator.RequiredAv1Constraints(
-            output.Width, output.Height, pipeline.Quality.FramesPerSecond);
+            output.Width, output.Height, maximumQuality.FramesPerSecond);
     }
 
     private async Task UpdateRequiredAv1WorkloadAsync(
@@ -461,7 +464,7 @@ public sealed class RtcVideoPublishHost(
         try
         {
             await publisher.UpdateRequiredAv1ConstraintsAsync(
-                RequiredAv1Workload(pipeline, width, height), CancellationToken.None);
+                RequiredAv1Workload(pipeline.MaximumQuality, width, height), CancellationToken.None);
         }
         catch (ObjectDisposedException) { }
         catch (Exception e)

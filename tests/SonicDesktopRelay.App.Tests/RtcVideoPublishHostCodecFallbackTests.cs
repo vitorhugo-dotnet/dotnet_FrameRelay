@@ -32,6 +32,21 @@ public sealed class RtcVideoPublishHostCodecFallbackTests
         Assert.Contains("injected AV1 initialization failure", result.InitializationFailure);
     }
 
+    [Fact]
+    public void Required_av1_workload_covers_recovery_ceiling_while_current_quality_is_degraded()
+    {
+        var profile = new VideoPublishProfile(1080, 60);
+        var recoveredQuality = VideoQuality.InitialFor(profile);
+        var degradedQuality = new VideoQuality(360, 15, 600_000);
+
+        var required = RtcVideoPublishHost.RequiredAv1Workload(recoveredQuality, 1920, 1080);
+        var degradedOnly = RtcVideoPublishHost.RequiredAv1Workload(degradedQuality, 1920, 1080);
+
+        Assert.Equal(new VideoCodecConstraints("0", 9), required);
+        Assert.Equal(new VideoCodecConstraints("0", 1), degradedOnly);
+        Assert.True(required.MaxLevel > degradedOnly.MaxLevel);
+    }
+
     private sealed class FakeEncoder(string name) : IVideoEncoder
     {
         public string Name { get; } = name;

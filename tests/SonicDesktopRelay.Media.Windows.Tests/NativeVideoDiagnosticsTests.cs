@@ -79,4 +79,37 @@ public sealed class NativeVideoDiagnosticsTests
         Assert.DoesNotContain("sdp", metrics.ToString(), StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("candidate:", metrics.ToString(), StringComparison.OrdinalIgnoreCase);
     }
+
+    [Fact]
+    public async Task Watch_host_metrics_leave_codec_unknown_without_negotiation_or_decoded_frames()
+    {
+        if (!MediaFoundationH264Decoder.IsSupported) return;
+
+        var h264 = new MediaFoundationH264Decoder();
+        var capabilities = new VideoCodecCapabilities(
+            new HashSet<VideoCodec>(), new HashSet<VideoCodec>(),
+            new Dictionary<VideoCodec, VideoCodecConstraints>(),
+            new Dictionary<VideoCodec, VideoCodecConstraints>(),
+            new Dictionary<VideoCodec, string>());
+        var decoderType = typeof(RtcVideoWatchHost).GetNestedType("CodecSwitchingDecoder", BindingFlags.NonPublic)!;
+        var decoder = (IVideoDecoder)Activator.CreateInstance(
+            decoderType,
+            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+            binder: null,
+            args: [h264, (Func<MediaFoundationAv1Decoder>)(() => new MediaFoundationAv1Decoder()), capabilities],
+            culture: null)!;
+        var pipeline = new ScreenWatchPipeline(decoder, TimeProvider.System);
+        await using var host = new RtcVideoWatchHost(new IceApiClient(new HttpClient()), () => null);
+        typeof(RtcVideoWatchHost).GetField("_decoder", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .SetValue(host, decoder);
+        typeof(RtcVideoWatchHost).GetField("_pipeline", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .SetValue(host, pipeline);
+
+        var metrics = Assert.IsType<SonicDesktopRelay.Presentation.SessionMediaMetrics>(host.CurrentMetrics);
+
+        Assert.Equal("H264", metrics.LocalSupportedCodecs);
+        Assert.Null(metrics.Codec);
+        Assert.Null(metrics.NegotiatedCodec);
+        Assert.Null(metrics.CommonSupportedCodecs);
+    }
 }

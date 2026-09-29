@@ -352,6 +352,9 @@ public sealed class VideoPublisherTests
         Assert.DoesNotContain(ViewerA.ToString(), codec.ToString(), StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("sdp", codec.ToString(), StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("candidate", codec.ToString(), StringComparison.OrdinalIgnoreCase);
+
+        await harness.Publisher.RemoveViewerAsync(ViewerA);
+        Assert.Equal("no-active-viewers", harness.Publisher.CodecDiagnostics.FallbackReason);
     }
 
     [Fact]

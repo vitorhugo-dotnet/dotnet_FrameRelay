@@ -76,6 +76,9 @@ public sealed class VideoSubscriber(
     /// </summary>
     public Guid? PublisherId { get; private set; }
 
+    /// <summary>The codec selected by completed SDP negotiation, or null before negotiation.</summary>
+    public VideoCodec? NegotiatedVideoCodec => _peer?.NegotiatedVideoCodec;
+
     /// <summary>
     /// Raised when offer/answer negotiation has definitively failed. The message contains only
     /// an actionable stage/reason; SDP, candidates and credentials are deliberately excluded.

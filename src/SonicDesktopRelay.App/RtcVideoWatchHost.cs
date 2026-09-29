@@ -57,19 +57,21 @@ public sealed class RtcVideoWatchHost(
             if (_pipeline is not { } pipeline || _decoder is not { } decoder) return null;
             var video = VideoDiagnostics;
             var stats = pipeline.LatestStatsSnapshot;
+            var negotiatedCodec = _subscriber?.NegotiatedVideoCodec;
+            var activeCodec = pipeline.DecodedFrames > 0 ? decoder.ActiveCodec : (VideoCodec?)null;
             return new SessionMediaMetrics(
                 Width: video?.Width is > 0 ? video.Width : null,
                 Height: video?.Height is > 0 ? video.Height : null,
                 VideoBitrateBitsPerSecond: stats?.VideoBitrateBitsPerSecond,
                 VideoFramesPerSecond: stats is { IntervalMilliseconds: > 0 }
                     ? stats.DecodedFrames * 1000d / stats.IntervalMilliseconds : null,
-                Codec: decoder.ActiveCodec.ToString(),
+                Codec: activeCodec?.ToString(),
                 Transport: TransportDiagnostics?.ToString(),
                 LocalSupportedCodecs: _decoderVideoCapabilities?.Decoders.Contains(VideoCodec.Av1) == true
                     ? "H264, AV1" : "H264",
-                CommonSupportedCodecs: decoder.ActiveCodec == VideoCodec.Av1 ? "AV1" : "H264",
-                NegotiatedCodec: decoder.ActiveCodec.ToString(),
-                CodecProfileLevel: decoder.ActiveCodec == VideoCodec.Av1
+                CommonSupportedCodecs: negotiatedCodec?.ToString(),
+                NegotiatedCodec: negotiatedCodec?.ToString(),
+                CodecProfileLevel: negotiatedCodec == VideoCodec.Av1
                     && _decoderVideoCapabilities?.DecoderConstraints.TryGetValue(VideoCodec.Av1, out var constraints) == true
                         ? $"profile={constraints.Profile}, level-idx={constraints.MaxLevel}"
                         : null,

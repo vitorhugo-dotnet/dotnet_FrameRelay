@@ -73,7 +73,9 @@ public sealed class VideoPublisher(
                     : null;
             return new VideoCodecSessionDiagnostics(
                 _sessionCodec,
-                _codecFallbackReason ?? (_sessionCodec == VideoCodec.H264 ? selection.FallbackReason : null),
+                _sessionCodec == VideoCodec.H264
+                    ? selection.FallbackReason ?? _codecFallbackReason
+                    : null,
                 localCodecs,
                 viewerCodecs,
                 CodecNames(common),

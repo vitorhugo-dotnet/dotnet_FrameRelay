@@ -5,7 +5,7 @@ namespace SonicDesktopRelay.Media.Windows;
 
 internal interface IProcessLoopbackClientFactory
 {
-    IProcessLoopbackClient Create(uint targetPid, bool includeProcessTree, int sampleRate, int channels, int bitsPerSample, int frameSamples);
+    Task<IProcessLoopbackClient> CreateAsync(uint targetPid, bool includeProcessTree, int sampleRate, int channels, int bitsPerSample, int frameSamples);
 }
 
 internal interface IProcessLoopbackClient : IAsyncDisposable
@@ -29,6 +29,7 @@ public sealed class ProcessLoopbackAudioSource : IAudioCaptureSource
     private readonly bool _isSupported;
     private readonly PcmFrameAccumulator _accumulator = new(SampleRate, Channels, BitsPerSample, FrameSamples);
     private readonly object _gate = new();
+    private readonly SemaphoreSlim _lifecycleGate = new(1, 1);
     private IProcessLoopbackClient? _client;
     private bool _acceptAudio;
         private bool _disposed;
@@ -51,37 +52,60 @@ public sealed class ProcessLoopbackAudioSource : IAudioCaptureSource
     public string ActivationResult { get; private set; } = "not-started";
     public event Action<AudioFrame>? AudioCaptured;
 
-    public Task StartAsync(CancellationToken ct)
+    public async Task StartAsync(CancellationToken ct)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         ct.ThrowIfCancellationRequested();
-        lock (_gate)
+        await _lifecycleGate.WaitAsync(ct).ConfigureAwait(false);
+        try
         {
-            if (_client is not null) return Task.CompletedTask;
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            lock (_gate)
+                if (_client is not null) return;
+
             if (!_isSupported)
             {
                 DegradedReason = "Per-process audio capture requires Windows build 20348 or later.";
                 ActivationResult = "unsupported_os";
-                return Task.CompletedTask;
+                return;
             }
 
             IProcessLoopbackClient client;
             try
             {
-                client = _factory.Create(_target.ProcessId, true, SampleRate, Channels, BitsPerSample, FrameSamples);
+                client = await _factory.CreateAsync(_target.ProcessId, true, SampleRate, Channels, BitsPerSample, FrameSamples)
+                    .ConfigureAwait(false);
             }
             catch (Exception e) when (e is not OperationCanceledException)
             {
                 DegradedReason = $"Per-process audio capture is unavailable: {e.Message}";
                 ActivationResult = "activation_failed";
-                return Task.CompletedTask;
+                return;
             }
 
-            _client = client;
-            _acceptAudio = true;
-            _accumulator.Reset();
-            client.DataAvailable += OnDataAvailable;
-            client.Stopped += OnStopped;
+            var disposedDuringActivation = false;
+            lock (_gate)
+            {
+                if (_disposed)
+                {
+                    disposedDuringActivation = true;
+                }
+                else
+                {
+                    _client = client;
+                    _acceptAudio = true;
+                    _accumulator.Reset();
+                    client.DataAvailable += OnDataAvailable;
+                    client.Stopped += OnStopped;
+                }
+            }
+
+            if (disposedDuringActivation)
+            {
+                await client.DisposeAsync().ConfigureAwait(false);
+                throw new ObjectDisposedException(nameof(ProcessLoopbackAudioSource));
+            }
+
             try
             {
                 client.Start();
@@ -93,35 +117,50 @@ public sealed class ProcessLoopbackAudioSource : IAudioCaptureSource
             {
                 DegradedReason = $"Per-process audio capture failed to start: {e.Message}";
                 ActivationResult = "start_failed";
-                _acceptAudio = false;
-                client.DataAvailable -= OnDataAvailable;
-                client.Stopped -= OnStopped;
-                _client = null;
-                _ = client.DisposeAsync();
+                lock (_gate)
+                {
+                    _acceptAudio = false;
+                    client.DataAvailable -= OnDataAvailable;
+                    client.Stopped -= OnStopped;
+                    _client = null;
+                }
+                await client.DisposeAsync().ConfigureAwait(false);
             }
         }
-        return Task.CompletedTask;
+        finally
+        {
+            _lifecycleGate.Release();
+        }
     }
 
     public async Task StopAsync()
     {
-        IProcessLoopbackClient? client;
-        lock (_gate)
+        await _lifecycleGate.WaitAsync().ConfigureAwait(false);
+        try
         {
-            client = _client;
-            _client = null;
-            _acceptAudio = false;
-            IsAvailable = false;
-            _accumulator.Reset();
-            if (client is not null)
+            IProcessLoopbackClient? client;
+            lock (_gate)
             {
-                client.DataAvailable -= OnDataAvailable;
-                client.Stopped -= OnStopped;
+                client = _client;
+                _client = null;
+                _acceptAudio = false;
+                IsAvailable = false;
+                _accumulator.Reset();
+                if (client is not null)
+                {
+                    client.DataAvailable -= OnDataAvailable;
+                    client.Stopped -= OnStopped;
+                }
             }
+
+            if (client is null) return;
+            try { client.Stop(); }
+            finally { await client.DisposeAsync().ConfigureAwait(false); }
         }
-        if (client is null) return;
-        try { client.Stop(); }
-        finally { await client.DisposeAsync().ConfigureAwait(false); }
+        finally
+        {
+            _lifecycleGate.Release();
+        }
     }
 
     private void OnDataAvailable(ReadOnlySpan<byte> data)

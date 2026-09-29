@@ -60,8 +60,8 @@ public sealed class PublisherCaptureSelectionTests
 
     private sealed class NeverStartingFactory : IProcessLoopbackClientFactory
     {
-        public IProcessLoopbackClient Create(uint targetPid, bool includeProcessTree, int sampleRate, int channels, int bitsPerSample, int frameSamples)
-            => throw new InvalidOperationException("Must not activate in source-selection test.");
+        public Task<IProcessLoopbackClient> CreateAsync(uint targetPid, bool includeProcessTree, int sampleRate, int channels, int bitsPerSample, int frameSamples)
+            => Task.FromException<IProcessLoopbackClient>(new InvalidOperationException("Must not activate in source-selection test."));
     }
 
     private sealed class FakeVideoSource : IScreenCaptureSource

@@ -47,6 +47,7 @@ public sealed class MediaFoundationAv1Decoder : IVideoDecoder
     private readonly List<string> _rejections = [];
     private readonly MediaFoundationTransformRetryPolicy _retryPolicy = new();
     private readonly ILogger<MediaFoundationAv1Decoder> _logger;
+    private readonly MediaFoundationOutputTimestampTracker _timestampTracker = new();
 
     private IMFTransform? _transform;
     private int _visibleWidth;
@@ -70,7 +71,7 @@ public sealed class MediaFoundationAv1Decoder : IVideoDecoder
 
         try
         {
-            SelectCandidate();
+            SelectCandidate(640, 360);
             _logger.LogInformation(
                 "Media Foundation AV1 decoder selected. transform={TransformName} clsid={TransformClsid} acceleration={Acceleration}",
                 TransformInfo?.Name ?? Name,
@@ -151,7 +152,7 @@ public sealed class MediaFoundationAv1Decoder : IVideoDecoder
                 stage = "select-transform";
                 MediaFoundationTransformRetryPolicy.EnsureCandidateSelected(
                     () => _transform is not null,
-                    SelectCandidate);
+                    () => SelectCandidate(sample.Width, sample.Height));
 
                 var hasTransportGeometry = HasKnownDimensions(sample.Width, sample.Height);
                 if (!_configured ||
@@ -176,21 +177,24 @@ public sealed class MediaFoundationAv1Decoder : IVideoDecoder
                     IsHardTransformFailure,
                     () =>
                     {
+                        stage = "select-fallback-transform";
                         var failed = TransformInfo;
                         _retryPolicy.ExcludeFailed(failed?.Clsid ?? Guid.Empty);
                         _rejections.Add($"{failed?.Name ?? "active decoder"} ({failed?.Clsid}): runtime transform failure; selecting another candidate.");
                         ReleaseTransform();
-                        SelectCandidate();
                         _configured = false;
-                        Reconfigure(sample.Width, sample.Height);
+                        _timestampTracker.Clear();
+                        SelectCandidate(sample.Width, sample.Height);
+                        stage = "process-input";
                         return DecodeWithCurrentTransform(sample);
                     });
             }
             catch (Exception e) when (
-                e is SharpGenException
-                    or COMException
-                    or InvalidOperationException
-                    or ArgumentException)
+                stage is not ("select-transform" or "select-fallback-transform" or "reconfigure")
+                    && (e is SharpGenException
+                        or COMException
+                        or InvalidOperationException
+                        or ArgumentException))
             {
                 LastFailure = $"{stage}: {e.GetType().Name} (0x{e.HResult:X8}): {e.Message}";
                 _logger.LogWarning(
@@ -228,11 +232,13 @@ public sealed class MediaFoundationAv1Decoder : IVideoDecoder
         }
     }
 
-    private void SelectCandidate()
+    private void SelectCandidate(int width, int height)
     {
+        _configured = false;
+        _timestampTracker.Clear();
         Exception? lastError = null;
 
-        if (TryCandidates(HardwareFlags, isHardware: true, ref lastError))
+        if (TryCandidates(HardwareFlags, isHardware: true, width, height, ref lastError))
             return;
 
         var rejected = _rejections.Count == 0
@@ -242,7 +248,12 @@ public sealed class MediaFoundationAv1Decoder : IVideoDecoder
             "No Media Foundation AV1 decoder could be activated. Rejections: " + rejected);
     }
 
-    private bool TryCandidates(uint flags, bool isHardware, ref Exception? lastError)
+    private bool TryCandidates(
+        uint flags,
+        bool isHardware,
+        int width,
+        int height,
+        ref Exception? lastError)
     {
         var input = AV1RegistrationType();
         using var candidates = MediaFactory.MFTEnumEx(
@@ -283,6 +294,8 @@ public sealed class MediaFoundationAv1Decoder : IVideoDecoder
                     // otherwise usable decoder.
                 }
 
+                ConfigureTransform(transform, width, height);
+
                 _transform = transform;
                 transform = null;
                 Name = string.IsNullOrWhiteSpace(friendlyName)
@@ -298,6 +311,7 @@ public sealed class MediaFoundationAv1Decoder : IVideoDecoder
                     or COMException)
             {
                 lastError = e;
+                _configured = false;
                 _rejections.Add($"{friendlyName}: {e.Message}");
             }
             finally
@@ -313,7 +327,8 @@ public sealed class MediaFoundationAv1Decoder : IVideoDecoder
     {
         using var input = CreateInputSample(sample);
         _transform!.ProcessInput(0, input, 0);
-        return DrainOutput(sample.Timestamp);
+        _timestampTracker.Submitted(sample.Timestamp);
+        return DrainOutput();
     }
 
     private static bool IsHardTransformFailure(Exception exception) =>
@@ -321,17 +336,27 @@ public sealed class MediaFoundationAv1Decoder : IVideoDecoder
 
     private void Reconfigure(int width, int height)
     {
-        var hasTransportGeometry = HasKnownDimensions(width, height);
-
         if (_configured)
         {
-            // A transport that knows the new size can force a fresh decoder immediately.
-            // RTP does not carry dimensions, so dimensionless sessions stay on the same MFT
-            // and let a new AV1 sequence header trigger MF_E_TRANSFORM_STREAM_CHANGE instead.
             ReleaseTransform();
-            SelectCandidate();
+            _configured = false;
+            _timestampTracker.Clear();
+            SelectCandidate(width, height);
+            return;
         }
 
+        if (_transform is null)
+        {
+            SelectCandidate(width, height);
+            return;
+        }
+
+        ConfigureTransform(_transform, width, height);
+    }
+
+    private void ConfigureTransform(IMFTransform transform, int width, int height)
+    {
+        var hasTransportGeometry = HasKnownDimensions(width, height);
         using var inputType = MediaFactory.MFCreateMediaType();
         if (hasTransportGeometry)
         {
@@ -347,7 +372,7 @@ public sealed class MediaFoundationAv1Decoder : IVideoDecoder
             inputType.Set(MediaTypeAttributeKeys.Mpeg2Profile, 0u).CheckError();
         }
 
-        _transform!.SetInputType(0, inputType, 0);
+        transform.SetInputType(0, inputType, 0);
 
         _transportGeometryKnown = hasTransportGeometry;
         _visibleWidth = hasTransportGeometry ? width : 0;
@@ -361,25 +386,25 @@ public sealed class MediaFoundationAv1Decoder : IVideoDecoder
 
         // With a partial AV1 input type Media Foundation initially exposes a placeholder
         // output type. Its geometry is intentionally ignored until a sequence header causes a stream change.
-        SelectNv12OutputType(requireGeometry: hasTransportGeometry);
+        SelectNv12OutputType(transform, requireGeometry: hasTransportGeometry);
 
-        _transform.ProcessMessage(
+        transform.ProcessMessage(
             TMessageType.MessageNotifyBeginStreaming,
             UIntPtr.Zero);
-        _transform.ProcessMessage(
+        transform.ProcessMessage(
             TMessageType.MessageNotifyStartOfStream,
             UIntPtr.Zero);
         _configured = true;
     }
 
-    private void SelectNv12OutputType(bool requireGeometry)
+    private void SelectNv12OutputType(IMFTransform transform, bool requireGeometry)
     {
         for (var index = 0; ; index++)
         {
             IMFMediaType available;
             try
             {
-                available = _transform!.GetOutputAvailableType(0, index);
+                available = transform.GetOutputAvailableType(0, index);
             }
             catch (SharpGenException e) when (e.HResult == NoMoreTypesHResult)
             {
@@ -392,7 +417,7 @@ public sealed class MediaFoundationAv1Decoder : IVideoDecoder
                 if (available.GetGUID(MediaTypeAttributeKeys.Subtype) != VideoFormatGuids.NV12)
                     continue;
 
-                _transform!.SetOutputType(0, available, 0);
+                transform.SetOutputType(0, available, 0);
                 if (requireGeometry)
                     ReadOutputGeometry(available);
                 return;
@@ -503,7 +528,7 @@ public sealed class MediaFoundationAv1Decoder : IVideoDecoder
         }
     }
 
-    private VideoFrame? DrainOutput(TimeSpan timestamp)
+    private VideoFrame? DrainOutput()
     {
         VideoFrame? last = null;
 
@@ -588,7 +613,7 @@ public sealed class MediaFoundationAv1Decoder : IVideoDecoder
 
                     // The AV1 sequence header is authoritative for coded geometry. The fresh output type carries the
                     // actual frame size (and may carry a new size later in the same session).
-                    SelectNv12OutputType(requireGeometry: true);
+                    SelectNv12OutputType(_transform!, requireGeometry: true);
 
                     _logger.LogInformation(
                         "AV1 decoder output stream change applied. newVisible={VisibleWidth}x{VisibleHeight} newCoded={CodedWidth}x{CodedHeight} stride={Stride}",
@@ -623,7 +648,10 @@ public sealed class MediaFoundationAv1Decoder : IVideoDecoder
 
                 // Convert before cleanup. In caller-allocated mode, output.Sample may be a
                 // second managed wrapper around the same native IMFSample reference.
-                last = ConvertOutput(decodedSample, timestamp) ?? last;
+                if (TryReadOutputTimestamp(decodedSample, out var outputTimestamp))
+                    last = ConvertOutput(decodedSample, outputTimestamp) ?? last;
+                else
+                    _logger.LogWarning("AV1 decoder output had no timestamp and no submitted timestamp was available; dropping the frame.");
             }
             finally
             {
@@ -636,6 +664,25 @@ public sealed class MediaFoundationAv1Decoder : IVideoDecoder
         }
 
         return last;
+    }
+
+    private bool TryReadOutputTimestamp(IMFSample sample, out TimeSpan timestamp)
+    {
+        long sampleTime = 0;
+        var hasMftTimestamp = true;
+        try
+        {
+            sampleTime = sample.SampleTime;
+        }
+        catch (Exception exception) when (exception is SharpGenException or COMException)
+        {
+            hasMftTimestamp = false;
+        }
+        var resolved = _timestampTracker.ForOutput(
+            hasMftTimestamp,
+            hasMftTimestamp ? TimeSpan.FromTicks(sampleTime) : default);
+        timestamp = resolved.GetValueOrDefault();
+        return resolved.HasValue;
     }
 
     private void LogOutputSampleAllocation(
@@ -880,6 +927,52 @@ public sealed class MediaFoundationAv1Decoder : IVideoDecoder
             ReleaseTransform();
             _bgra = [];
             _runtimeLease.Dispose();
+        }
+    }
+}
+
+/// <summary>Associates delayed decoder output with submitted presentation timestamps.</summary>
+internal sealed class MediaFoundationOutputTimestampTracker
+{
+    private const int MaxPendingTimestamps = 120;
+    private readonly Queue<TimeSpan> _pending = new();
+
+    internal void Submitted(TimeSpan timestamp)
+    {
+        if (_pending.Count == MaxPendingTimestamps)
+            _pending.Dequeue();
+        _pending.Enqueue(timestamp);
+    }
+
+    internal TimeSpan? ForOutput(bool hasMftTimestamp, TimeSpan mftTimestamp)
+    {
+        if (hasMftTimestamp)
+        {
+            RemoveMatchingSubmission(mftTimestamp);
+            return mftTimestamp;
+        }
+
+        return _pending.Count > 0 ? _pending.Dequeue() : null;
+    }
+
+    internal void Clear() => _pending.Clear();
+
+    private void RemoveMatchingSubmission(TimeSpan timestamp)
+    {
+        if (_pending.Count == 0)
+            return;
+
+        var count = _pending.Count;
+        var removed = false;
+        for (var index = 0; index < count; index++)
+        {
+            var candidate = _pending.Dequeue();
+            if (!removed && candidate == timestamp)
+            {
+                removed = true;
+                continue;
+            }
+            _pending.Enqueue(candidate);
         }
     }
 }

@@ -27,3 +27,16 @@ The current AV1 decoder deliberately rejects asynchronous MFTs because no decode
 ## Self-review
 
 The new AV1 paths contain no H.264 bitstream conversion or software fallback. The encoder's AV1 bytes are kept as emitted by the AV1 MFT. The decoder copies only the generic stride, output allocation, stream-change, and BGRA normalization logic from the H.264 implementation; codec-specific negotiation uses AV1 subtype/profile. The principal limitation is lack of an AV1 hardware decoder on the validation host and no support for asynchronous AV1 decoders yet.
+
+## Review follow-up (fix round 1)
+
+- Decoder candidate selection now configures AV1 profile 0 input and a concrete NV12 output for the requested dimensions before making the transform active. An activation or media-type/stream-start failure is recorded, disposed, and advances to the next candidate.
+- Resolution changes and runtime fallback select/configure a candidate for the new size. Selection/configuration failures are surfaced to the caller rather than swallowed as packet loss or retried on the same transform.
+- Input presentation time is written to the submitted `IMFSample`. Decoded frames use the output sample's Media Foundation time when available. If an MFT omits output time, a bounded FIFO maps the oldest still-pending submitted time; this fallback assumes output order for untimestamped samples. Timestamp metadata from the MFT takes precedence, including reordered outputs.
+- Encoder candidate `transform.Attributes` is now disposed deterministically.
+- Added tests proving a failed decoder configuration advances to and disposes candidates, and timestamp tests for reordered explicit output time, FIFO fallback, and queue clearing on reconfiguration.
+
+### Fix-round verification
+
+- `dotnet build src\SonicDesktopRelay.Media.Windows\SonicDesktopRelay.Media.Windows.csproj --no-restore --verbosity:minimal` — passed, 0 warnings and 0 errors.
+- `dotnet test tests\SonicDesktopRelay.Media.Windows.Tests\SonicDesktopRelay.Media.Windows.Tests.csproj --no-restore --filter "FullyQualifiedName~MediaFoundationAv1" --logger "console;verbosity=minimal"` — 10 passed, 1 skipped, 0 failed. The skipped encoder/decoder pair integration still reports that this host has no hardware AV1 decoder.

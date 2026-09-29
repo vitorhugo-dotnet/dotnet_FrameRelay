@@ -215,7 +215,7 @@ public sealed class MediaFoundationAv1Encoder : IVideoEncoder
             {
                 transform = activation.ActivateObject<IMFTransform>();
 
-                var attributes = transform.Attributes;
+                using var attributes = transform.Attributes;
                 var isAsync = attributes.GetUInt32(TransformAttributeKeys.TransformAsync, out var asyncValue).Success
                               && asyncValue != 0;
 

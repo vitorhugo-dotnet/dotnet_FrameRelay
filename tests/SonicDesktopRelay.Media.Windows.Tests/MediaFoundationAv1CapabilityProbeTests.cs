@@ -62,6 +62,24 @@ public sealed class MediaFoundationAv1CapabilityProbeTests
     }
 
     [Fact]
+    public void Decoder_configuration_failure_advances_to_the_next_candidate()
+    {
+        var rejected = new Candidate(Av1TransformDirection.Decoder, isHardware: true, fail: true);
+        var accepted = new Candidate(Av1TransformDirection.Decoder, isHardware: true);
+        var catalog = new Catalog(
+            new Candidate(Av1TransformDirection.Encoder, isHardware: true),
+            rejected,
+            accepted);
+
+        var capabilities = new MediaFoundationAv1CapabilityProbe().Detect(catalog);
+
+        Assert.Contains(VideoCodec.Av1, capabilities.Decoders);
+        Assert.Contains("test MFT rejected media type", capabilities.RejectionReasons[VideoCodec.Av1]);
+        Assert.True(rejected.Disposed);
+        Assert.True(accepted.Disposed);
+    }
+
+    [Fact]
     public void Async_decoder_without_an_event_pump_is_rejected_and_candidates_are_disposed()
     {
         var encoder = new Candidate(Av1TransformDirection.Encoder, isHardware: true);

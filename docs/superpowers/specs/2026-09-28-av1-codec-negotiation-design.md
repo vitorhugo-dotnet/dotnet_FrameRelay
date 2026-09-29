@@ -11,7 +11,7 @@ This design assumes one shared encoded video stream per publishing session. If a
 - `RtcVideoPublishHost` owns one `MediaFoundationH264Encoder`; `ScreenPublishPipeline` encodes once and `VideoPublisher` fans the same access units out to one `IPeerConnection` per viewer.
 - The publisher offer and viewer answer each register H.264 only. `SipSorceryViewerPeerConnection` consumes RTP packets through `H264RtpAccessUnitAssembler` before forwarding encoded samples to the decoder pipeline.
 - `RtcVideoWatchHost` creates `MediaFoundationH264Decoder` directly. Encoder and decoder contracts are codec-neutral, but the native implementations, diagnostics, and RTP receive path are H.264-specific.
-- The RTC project pins SIPSorcery 10.0.16. AV1 RTP/SDP support must be verified against the package actually selected before implementation; upstream AV1 work is newer than the currently pinned version. Do not infer AV1 WebRTC support from Media Foundation codec presence alone.
+- The RTC project pins SIPSorcery 10.0.16. SIPSorcery 10.0.11 added AV1 video codec support, so the pinned version includes that baseline. Verify the exact AV1 offer, answer, packetization, and depacketization APIs used by this project before implementation; do not infer AV1 WebRTC support from Media Foundation codec presence alone.
 - The shared-stream architecture means a single offer/answer cannot independently select AV1 for one viewer and H.264 for another without adding per-codec encode pipelines. This design chooses the common codec for all active viewers to preserve bounded queues and one capture/encode path.
 
 ## Capability model

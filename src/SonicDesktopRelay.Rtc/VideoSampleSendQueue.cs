@@ -99,7 +99,7 @@ internal sealed class VideoSampleSendQueue : IAsyncDisposable
         if (signal) SignalWorker();
     }
 
-    public void ResetForCodecTransition()
+    public void ResetForCodecTransition(bool requestKeyFrame = true)
     {
         lock (_gate)
         {
@@ -108,7 +108,7 @@ internal sealed class VideoSampleSendQueue : IAsyncDisposable
             _pending = null;
             _awaitingKeyFrame = true;
         }
-        _requestKeyFrame();
+        if (requestKeyFrame) _requestKeyFrame();
     }
 
     private async Task RunAsync()

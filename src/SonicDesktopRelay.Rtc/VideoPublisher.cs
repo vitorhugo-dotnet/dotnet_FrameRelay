@@ -254,7 +254,11 @@ public sealed class VideoPublisher(
             if (_sessionCodec == VideoCodec.H264
                 && _peers.TryGetValue(participantId, out var answeredPeer)
                 && answeredPeer.NegotiatedVideoCodec == VideoCodec.H264)
+            {
+                if (_videoQueues.TryGetValue(participantId, out var answeredVideoQueue))
+                    answeredVideoQueue.ResetForCodecTransition(requestKeyFrame: false);
                 pipeline.RequestKeyFrame(KeyFrameRequestReason.QualityChange);
+            }
         }
         finally { _sessionGate.Release(); }
     }

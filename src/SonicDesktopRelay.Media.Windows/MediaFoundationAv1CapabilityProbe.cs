@@ -15,9 +15,9 @@ public sealed class MediaFoundationAv1CapabilityProbe
     private const int ProbeWidth = 640;
     private const int ProbeHeight = 360;
     private const int ProbeFps = 30;
-    // AV1 seq_level_idx 4 is Level 3.0. Keep the capability contract bounded to the
-    // configuration exercised by this probe because MFTs do not expose a maximum level API.
-    private const int ProbedMaximumLevel = 4;
+    // 640x360 at 30 fps requires AV1 seq_level_idx 1. Keep the capability contract bounded to
+    // the workload exercised by this probe because MFTs do not expose a maximum level API.
+    private const int ProbedMaximumLevel = 1;
     private const int NoMoreTypesHResult = unchecked((int)0xC00D36B9);
 
     public VideoCodecCapabilities Detect() => Detect(new NativeTransformCatalog());

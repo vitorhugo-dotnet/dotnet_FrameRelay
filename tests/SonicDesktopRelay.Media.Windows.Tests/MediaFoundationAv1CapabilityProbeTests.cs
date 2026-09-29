@@ -43,8 +43,8 @@ public sealed class MediaFoundationAv1CapabilityProbeTests
         Assert.Contains(VideoCodec.Av1, capabilities.Decoders);
         Assert.Equal("0", capabilities.EncoderConstraints[VideoCodec.Av1].Profile);
         Assert.Equal("0", capabilities.DecoderConstraints[VideoCodec.Av1].Profile);
-        Assert.Equal(4, capabilities.EncoderConstraints[VideoCodec.Av1].MaxLevel);
-        Assert.Equal(4, capabilities.DecoderConstraints[VideoCodec.Av1].MaxLevel);
+        Assert.Equal(1, capabilities.EncoderConstraints[VideoCodec.Av1].MaxLevel);
+        Assert.Equal(1, capabilities.DecoderConstraints[VideoCodec.Av1].MaxLevel);
     }
 
     [Fact]

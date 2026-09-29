@@ -22,3 +22,14 @@ Result: Passed, 31/31 tests, 0 failed, 0 skipped. `git diff --check` passed.
 ## Boundary
 
 AV1 remains disabled in the existing application composition unless a caller supplies validated local capabilities. The Media Foundation capability probe and codecs are Task 3 and are not implemented in this scoped change. No dependency changes were made.
+
+## Review fix round 1
+
+- Replaced the RTP `N` bit keyframe shortcut with AV1 OBU parsing. The assembler tracks `reduced_still_picture_header` from the sequence header's initial syntax bits and clears that state when an RTP coded-video-sequence start is signaled.
+- Frame presence now comes only from OBU_FRAME_HEADER (3) or OBU_FRAME (6). Keyframe classification uses the reduced-header mode or, for normal mode, `show_existing_frame` followed by `frame_type`; absent sequence state is conservatively non-key.
+- Added focused tests for sequence-header plus frame-header in one temporal unit, a keyframe in a later unit using cached sequence state, and a sequence-header-only temporal unit. Also covered a frame header with absent sequence state.
+- Focused validation command:
+
+  `dotnet test tests\SonicDesktopRelay.Rtc.Tests\SonicDesktopRelay.Rtc.Tests.csproj --no-restore --filter "FullyQualifiedName~Av1RtpAccessUnitAssemblerTests|FullyQualifiedName~SipSorceryPeerConnectionTests|FullyQualifiedName~SipSorceryViewerPeerConnectionTests" --logger "console;verbosity=minimal"`
+
+  Result: Passed, 35/35 tests, 0 failed, 0 skipped.

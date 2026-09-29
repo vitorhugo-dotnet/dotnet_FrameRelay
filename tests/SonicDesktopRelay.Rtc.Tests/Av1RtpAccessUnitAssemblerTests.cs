@@ -16,7 +16,8 @@ public sealed class Av1RtpAccessUnitAssemblerTests
 
         Assert.NotNull(result);
         Assert.Equal(expected, result.Value.Data);
-        Assert.True(result.Value.IsKeyFrame);
+        Assert.False(result.Value.IsKeyFrame);
+        Assert.False(result.Value.HasVcl);
     }
 
     [Fact]
@@ -34,7 +35,77 @@ public sealed class Av1RtpAccessUnitAssemblerTests
 
         Assert.NotNull(result);
         Assert.Equal(expected, result.Value.Data);
+        Assert.False(result.Value.HasVcl);
+        Assert.False(result.Value.IsKeyFrame);
         Assert.True(assembler.RtpPacketsReordered > 0);
+    }
+
+    [Fact]
+    public void Sequence_header_followed_by_frame_header_classifies_key_frame()
+    {
+        var assembler = new Av1RtpAccessUnitAssembler();
+        var temporalUnit = CreateTemporalUnit(
+            CreateSequenceHeader(reducedStillPictureHeader: false),
+            CreateFrameHeader(showExistingFrame: false, frameType: 0));
+
+        var result = PushSinglePacket(assembler, temporalUnit, sequence: 1, timestamp: 1);
+
+        Assert.NotNull(result);
+        Assert.True(result.Value.HasVcl);
+        Assert.True(result.Value.IsKeyFrame);
+    }
+
+    [Fact]
+    public void Key_frame_header_in_a_later_temporal_unit_uses_cached_sequence_header_mode()
+    {
+        var assembler = new Av1RtpAccessUnitAssembler();
+        var first = PushSinglePacket(
+            assembler,
+            CreateTemporalUnit(CreateSequenceHeader(reducedStillPictureHeader: false)),
+            sequence: 1,
+            timestamp: 1);
+        var second = PushSinglePacket(
+            assembler,
+            CreateTemporalUnit(CreateFrameHeader(showExistingFrame: false, frameType: 0)),
+            sequence: 2,
+            timestamp: 2);
+
+        Assert.NotNull(first);
+        Assert.False(first.Value.HasVcl);
+        Assert.False(first.Value.IsKeyFrame);
+        Assert.NotNull(second);
+        Assert.True(second.Value.HasVcl);
+        Assert.True(second.Value.IsKeyFrame);
+    }
+
+    [Fact]
+    public void Sequence_header_only_temporal_unit_is_not_a_frame_or_key_frame()
+    {
+        var assembler = new Av1RtpAccessUnitAssembler();
+        var result = PushSinglePacket(
+            assembler,
+            CreateTemporalUnit(CreateSequenceHeader(reducedStillPictureHeader: true)),
+            sequence: 1,
+            timestamp: 1);
+
+        Assert.NotNull(result);
+        Assert.False(result.Value.HasVcl);
+        Assert.False(result.Value.IsKeyFrame);
+    }
+
+    [Fact]
+    public void Frame_header_without_sequence_state_is_not_assumed_to_be_a_key_frame()
+    {
+        var assembler = new Av1RtpAccessUnitAssembler();
+        var result = PushSinglePacket(
+            assembler,
+            CreateTemporalUnit(CreateFrameHeader(showExistingFrame: false, frameType: 0)),
+            sequence: 1,
+            timestamp: 1);
+
+        Assert.NotNull(result);
+        Assert.True(result.Value.HasVcl);
+        Assert.False(result.Value.IsKeyFrame);
     }
 
     [Fact]
@@ -96,4 +167,34 @@ public sealed class Av1RtpAccessUnitAssemblerTests
         for (var i = 2; i < obu.Length; i++) obu[i] = (byte)(i & 0x7f);
         return obu;
     }
+
+    private static Av1AssembledAccessUnit? PushSinglePacket(
+        Av1RtpAccessUnitAssembler assembler,
+        byte[] temporalUnit,
+        ushort sequence,
+        uint timestamp)
+    {
+        var packets = AV1Packetiser.Packetize(temporalUnit, 1200);
+        var result = (Av1AssembledAccessUnit?)null;
+        foreach (var packet in packets)
+            result = assembler.Push(sequence++, timestamp, packet.IsLast, packet.Payload) ?? result;
+        return result;
+    }
+
+    private static byte[] CreateSequenceHeader(bool reducedStillPictureHeader)
+    {
+        var syntax = reducedStillPictureHeader ? (byte)0x08 : (byte)0x00;
+        return CreateObu(1, [syntax]);
+    }
+
+    private static byte[] CreateFrameHeader(bool showExistingFrame, int frameType)
+    {
+        var syntax = (byte)((showExistingFrame ? 1 : 0) << 7 | (frameType & 0x03) << 5);
+        return CreateObu(3, [syntax]);
+    }
+
+    private static byte[] CreateObu(int type, byte[] payload) =>
+        [(byte)((type << 3) | 0x02), (byte)payload.Length, .. payload];
+
+    private static byte[] CreateTemporalUnit(params byte[][] obus) => obus.SelectMany(obu => obu).ToArray();
 }

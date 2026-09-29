@@ -28,6 +28,7 @@ internal sealed class Av1RtpAccessUnitAssembler
     private ushort? _lastArrivalSequence;
     private int _retainedBytes;
     private uint? _discardTimestamp;
+    private bool? _reducedStillPictureHeader;
 
     public Av1RtpAccessUnitAssembler(
         int maxRetainedBytes = DefaultMaxRetainedBytes,
@@ -135,7 +136,7 @@ internal sealed class Av1RtpAccessUnitAssembler
             return DropAndReset("incomplete-fragmented-obu", timestamp, incomplete: true);
 
         byte[]? accessUnit = null;
-        var isKeyFrame = false;
+        var startsNewSequence = (ordered[0].Payload[0] & 0x08) != 0;
         var depacketiser = new AV1Depacketiser();
         try
         {
@@ -146,8 +147,7 @@ internal sealed class Av1RtpAccessUnitAssembler
                     packet.SequenceNumber,
                     timestamp,
                     packet.Marker ? 1 : 0,
-                    out var packetStartsSequence);
-                isKeyFrame |= packetStartsSequence;
+                    out _);
                 if (result is not null) accessUnit = result.ToArray();
             }
         }
@@ -161,8 +161,115 @@ internal sealed class Av1RtpAccessUnitAssembler
             || !ValidateTemporalUnit(accessUnit))
             return DropAndReset("malformed-av1-payload", timestamp, incomplete: false);
 
+        var (hasFrame, isKeyFrame) = InspectFrame(accessUnit, startsNewSequence);
         AccessUnitsReceived++;
-        return new Av1AssembledAccessUnit(accessUnit, timestamp, isKeyFrame, HasVcl: true);
+        return new Av1AssembledAccessUnit(accessUnit, timestamp, isKeyFrame, hasFrame);
+    }
+
+    private (bool HasFrame, bool IsKeyFrame) InspectFrame(byte[] temporalUnit, bool startsNewSequence)
+    {
+        if (startsNewSequence)
+            _reducedStillPictureHeader = null;
+
+        var hasFrame = false;
+        var isKeyFrame = false;
+        foreach (var obu in AV1Packetiser.ParseObus(temporalUnit))
+        {
+            switch (AV1Packetiser.GetObuType(obu))
+            {
+                case AV1Packetiser.AV1ObuType.SequenceHeader:
+                    _reducedStillPictureHeader = TryReadReducedStillPictureHeader(obu, out var reduced)
+                        ? reduced
+                        : null;
+                    break;
+
+                case AV1Packetiser.AV1ObuType.FrameHeader:
+                case AV1Packetiser.AV1ObuType.Frame:
+                    hasFrame = true;
+                    isKeyFrame |= IsKeyFrameObu(obu, _reducedStillPictureHeader);
+                    break;
+            }
+        }
+
+        return (hasFrame, isKeyFrame);
+    }
+
+    private static bool TryReadReducedStillPictureHeader(byte[] obu, out bool reduced)
+    {
+        reduced = false;
+        if (!TryGetObuPayload(obu, out var payload) || payload.IsEmpty)
+            return false;
+
+        // seq_profile (3 bits), still_picture (1 bit), reduced_still_picture_header (1 bit).
+        reduced = (payload[0] & 0x08) != 0;
+        return true;
+    }
+
+    private static bool IsKeyFrameObu(byte[] obu, bool? reducedStillPictureHeader)
+    {
+        if (reducedStillPictureHeader is not { } reduced || !TryGetObuPayload(obu, out var payload))
+            return false;
+        if (reduced)
+            return true;
+
+        var bits = new Av1BitReader(payload);
+        if (!bits.TryReadBit(out var showExistingFrame) || showExistingFrame)
+            return false;
+
+        // frame_type is the next two bits after show_existing_frame; KEY_FRAME is zero.
+        return bits.TryReadBits(2, out var frameType) && frameType == 0;
+    }
+
+    private static bool TryGetObuPayload(byte[] obu, out ReadOnlySpan<byte> payload)
+    {
+        payload = default;
+        if (obu.Length == 0) return false;
+
+        var offset = 1;
+        if ((obu[0] & 0x04) != 0) offset++;
+        if ((obu[0] & 0x02) != 0)
+        {
+            if (!AV1Packetiser.TryReadLeb128(obu, ref offset, out var size, out _)
+                || size < 0 || size > obu.Length - offset)
+                return false;
+            payload = obu.AsSpan(offset, size);
+            return true;
+        }
+
+        payload = obu.AsSpan(offset);
+        return true;
+    }
+
+    private ref struct Av1BitReader
+    {
+        private readonly ReadOnlySpan<byte> _data;
+        private int _position;
+
+        public Av1BitReader(ReadOnlySpan<byte> data)
+        {
+            _data = data;
+            _position = 0;
+        }
+
+        public bool TryReadBit(out bool value)
+        {
+            value = false;
+            if (_position >= _data.Length * 8) return false;
+            value = (_data[_position / 8] & (1 << (7 - (_position % 8)))) != 0;
+            _position++;
+            return true;
+        }
+
+        public bool TryReadBits(int count, out int value)
+        {
+            value = 0;
+            for (var i = 0; i < count; i++)
+            {
+                if (!TryReadBit(out var bit)) return false;
+                value = (value << 1) | (bit ? 1 : 0);
+            }
+            return true;
+        }
     }
 
     private static bool ValidateObuElements(byte[] payload)

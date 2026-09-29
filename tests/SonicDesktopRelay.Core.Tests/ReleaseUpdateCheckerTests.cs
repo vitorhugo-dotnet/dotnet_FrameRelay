@@ -11,7 +11,7 @@ public sealed class ReleaseUpdateCheckerTests
     {
         var handler = new QueueHandler(
             Json(HttpStatusCode.OK, """{"id":1344024708,"node_id":"R_kgDOUBwwhA","name":"FrameRelay","full_name":"new-owner/new-name","owner":{"id":65777252,"node_id":"MDQ6VXNlcjY1Nzc3MjUy","login":"new-owner"}}"""),
-            Json(HttpStatusCode.OK, """{"tag_name":"v1.2.0","draft":false,"prerelease":false,"html_url":"https://github.com/new-owner/new-name/releases/tag/v1.2.0","assets":[{"name":"FrameRelay-win-x64-v1.2.0.msi","browser_download_url":"https://example.test/installer.msi"}]}"""));
+            Json(HttpStatusCode.OK, ReleaseListJson("""{"tag_name":"v1.2.0","draft":false,"prerelease":false,"html_url":"https://github.com/new-owner/new-name/releases/tag/v1.2.0","assets":[{"name":"FrameRelay-win-x64-v1.2.0.msi","browser_download_url":"https://example.test/installer.msi"}]}""")));
         await using var checker = new ReleaseUpdateChecker(new HttpClient(handler), "1.0.0");
 
         var result = await checker.CheckAsync();
@@ -19,7 +19,21 @@ public sealed class ReleaseUpdateCheckerTests
         Assert.Equal(UpdateCheckStatus.UpdateAvailable, result.Status);
         Assert.Equal("1.2.0", result.AvailableVersion);
         Assert.Equal("https://example.test/installer.msi", result.DownloadUri?.ToString());
-        Assert.Equal("https://api.github.com/repos/new-owner/new-name/releases/latest", handler.Requests[1].RequestUri!.ToString());
+        Assert.Equal("https://api.github.com/repos/new-owner/new-name/releases?per_page=100", handler.Requests[1].RequestUri!.ToString());
+    }
+
+    [Fact]
+    public async Task Development_marker_is_skipped_in_favor_of_latest_stable_semver_release()
+    {
+        var releases = ReleaseListJson(
+            """{"tag_name":"dev-285","draft":false,"prerelease":false,"html_url":"https://github.com/releases/tag/dev-285"}""",
+            """{"tag_name":"v1.2.0","draft":false,"prerelease":false,"html_url":"https://github.com/releases/tag/v1.2.0"}""");
+        await using var checker = CreateChecker("1.0.0", releases);
+
+        var result = await checker.CheckAsync();
+
+        Assert.Equal(UpdateCheckStatus.UpdateAvailable, result.Status);
+        Assert.Equal("1.2.0", result.AvailableVersion);
     }
 
     [Fact]
@@ -109,7 +123,9 @@ public sealed class ReleaseUpdateCheckerTests
     }
 
     private static string ReleaseJson(string tag) =>
-        $$"""{"tag_name":"{{tag}}","draft":false,"prerelease":false,"html_url":"https://github.com/releases"}""";
+        ReleaseListJson($$"""{"tag_name":"{{tag}}","draft":false,"prerelease":false,"html_url":"https://github.com/releases"}""");
+
+    private static string ReleaseListJson(params string[] releases) => $"[{string.Join(',', releases)}]";
 
     private static HttpResponseMessage Json(HttpStatusCode status, string body) => new(status)
     { Content = new StringContent(body, Encoding.UTF8, "application/json") };

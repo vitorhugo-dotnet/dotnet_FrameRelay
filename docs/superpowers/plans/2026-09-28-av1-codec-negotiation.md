@@ -46,10 +46,10 @@
 **Interfaces:**
 - Produces: verified SIPSorcery 10.0.16 AV1 `VideoFormat`/RTP send and receive API details for later tasks. Keep version 10.0.16 unless a required API is demonstrably missing. Do not add a separate software codec package.
 
-- [ ] Inspect the resolved SIPSorcery package metadata/source for AV1 SDP registration, RTP packetization, and low-level RTP receive support.
-- [ ] Confirm no dependency update is needed for AV1 in version 10.0.16, which includes AV1 support introduced in 10.0.11.
-- [ ] Add a focused offer characterization test that proves AV1 and H.264 are both advertised when AV1 is enabled and H.264 remains present when it is disabled.
-- [ ] Add a viewer-answer characterization test for AV1 intersection and H.264-only fallback.
+- [x] Inspect the resolved SIPSorcery package metadata/source for AV1 SDP registration, RTP packetization, and low-level RTP receive support.
+- [x] Confirm no dependency update is needed for AV1 in version 10.0.16, which includes AV1 support introduced in 10.0.11.
+- [x] Add a focused offer characterization test that proves AV1 and H.264 are both advertised when AV1 is enabled and H.264 remains present when it is disabled.
+- [x] Add a viewer-answer characterization test for AV1 intersection and H.264-only fallback.
 
 ### Task 2: Add codec-neutral capability and shared-session selection policy
 

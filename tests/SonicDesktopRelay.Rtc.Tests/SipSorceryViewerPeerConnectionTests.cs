@@ -1,4 +1,7 @@
 using SonicDesktopRelay.Rtc;
+using SIPSorcery.Net;
+using SIPSorcery.Media;
+using SIPSorceryMedia.Abstractions;
 using System.Collections.Concurrent;
 using Xunit;
 
@@ -62,6 +65,40 @@ public sealed class SipSorceryViewerPeerConnectionTests
         Assert.Contains("m=video", answer);
         Assert.Contains("H264", answer, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("a=recvonly", answer);
+    }
+
+    [Fact]
+    public async Task H264_only_viewer_accepts_an_offer_that_also_advertises_av1()
+    {
+        var publisherOffer = await CreateAv1AndH264OfferAsync();
+        var factory = new SipSorceryViewerPeerConnectionFactory(Ice);
+        await using var peer = factory.Create();
+
+        var answer = await peer.CreateAnswerAsync(publisherOffer, CancellationToken.None);
+
+        Assert.Contains("AV1/90000", publisherOffer, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("H264/90000", answer, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("AV1/90000", answer, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("a=recvonly", answer, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static async Task<string> CreateAv1AndH264OfferAsync()
+    {
+        using var publisher = new RTCPeerConnection();
+        publisher.addTrack(new MediaStreamTrack(
+            AudioCommonlyUsedFormats.OpusWebRTC,
+            MediaStreamStatusEnum.SendOnly));
+        publisher.addTrack(new MediaStreamTrack(
+            new List<VideoFormat>
+            {
+                new VideoFormat(VideoCodecsEnum.AV1, 97, 90_000),
+                new VideoFormat(VideoCodecsEnum.H264, 96, 90_000, "packetization-mode=1")
+            },
+            MediaStreamStatusEnum.SendOnly));
+
+        var offer = publisher.createOffer();
+        await publisher.setLocalDescription(offer);
+        return offer.sdp;
     }
 
     [Fact]

@@ -1,6 +1,7 @@
 using SonicDesktopRelay.Media;
 using SonicDesktopRelay.Rtc;
 using SIPSorcery.Net;
+using SIPSorceryMedia.Abstractions;
 using Xunit;
 
 namespace SonicDesktopRelay.Rtc.Tests;
@@ -27,6 +28,61 @@ public sealed class SipSorceryPeerConnectionTests
             sdp.IndexOf("m=audio", StringComparison.Ordinal) <
             sdp.IndexOf("m=video", StringComparison.Ordinal));
         Assert.Equal(2, sdp.Split("a=sendonly", StringSplitOptions.None).Length - 1);
+    }
+
+    [Fact]
+    public async Task Sipsorcery_negotiates_av1_and_keeps_h264_available_as_fallback()
+    {
+        var (offer, answer) = await NegotiateVideoFormatsAsync(
+            [
+                new VideoFormat(VideoCodecsEnum.AV1, 97, 90_000),
+                new VideoFormat(VideoCodecsEnum.H264, 96, 90_000, "packetization-mode=1")
+            ],
+            [
+                new VideoFormat(VideoCodecsEnum.AV1, 97, 90_000),
+                new VideoFormat(VideoCodecsEnum.H264, 96, 90_000, "packetization-mode=1")
+            ]);
+
+        Assert.Contains("AV1/90000", offer, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("H264/90000", offer, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("AV1/90000", answer, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("H264/90000", answer, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Sipsorcery_h264_only_answer_keeps_video_when_offer_also_has_av1()
+    {
+        var (offer, answer) = await NegotiateVideoFormatsAsync(
+            [
+                new VideoFormat(VideoCodecsEnum.AV1, 97, 90_000),
+                new VideoFormat(VideoCodecsEnum.H264, 96, 90_000, "packetization-mode=1")
+            ],
+            [new VideoFormat(VideoCodecsEnum.H264, 96, 90_000, "packetization-mode=1")]);
+
+        Assert.Contains("AV1/90000", offer, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("H264/90000", answer, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("AV1/90000", answer, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("m=video 0", answer, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static async Task<(string Offer, string Answer)> NegotiateVideoFormatsAsync(
+        IReadOnlyList<VideoFormat> publisherFormats,
+        IReadOnlyList<VideoFormat> viewerFormats)
+    {
+        using var publisher = new RTCPeerConnection();
+        using var viewer = new RTCPeerConnection();
+        publisher.addTrack(new MediaStreamTrack(publisherFormats.ToList(), MediaStreamStatusEnum.SendOnly));
+        viewer.addTrack(new MediaStreamTrack(viewerFormats.ToList(), MediaStreamStatusEnum.RecvOnly));
+
+        var offer = publisher.createOffer();
+        await publisher.setLocalDescription(offer);
+        Assert.Equal(SetDescriptionResultEnum.OK, viewer.setRemoteDescription(
+            new RTCSessionDescriptionInit { type = RTCSdpType.offer, sdp = offer.sdp }));
+
+        var answer = viewer.createAnswer();
+        await viewer.setLocalDescription(answer);
+
+        return (offer.sdp, answer.sdp);
     }
 
     [Fact]

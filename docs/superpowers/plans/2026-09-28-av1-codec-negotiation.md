@@ -70,7 +70,7 @@
 
 - [x] Add tests for AV1 on publisher and all viewers, either-side H.264-only, no active viewers (select H.264 with `no-active-viewers`), mixed viewers, and stable fallback reasons.
 - [x] Add tests for AV1 Main-profile compatibility and rejection when any peer's supported level is below the level required by the selected dimensions and frame rate.
-- [ ] Add tests that software-only AV1 capabilities are absent from the advertised capability set.
+- [x] Add tests that software-only AV1 capabilities are absent from the advertised capability set.
 - [x] Implement selection so AV1 is returned only when publisher encode and every viewer decode contain AV1 Main and their maximum levels meet `requiredAv1`; otherwise return H.264 with a stable reason.
 - [x] Keep codec values and reasons independent of Media Foundation and SIPSorcery types.
 
@@ -89,12 +89,12 @@
 - Consumes: `VideoCodecCapabilities`, `IVideoEncoder`, and `IVideoDecoder` from Task 2/current media contracts.
 - Produces: `MediaFoundationAv1CapabilityProbe.Detect()` returning AV1 encode/decode capability, hardware classification, and rejection reasons; `MediaFoundationAv1Encoder : IVideoEncoder`; `MediaFoundationAv1Decoder : IVideoDecoder`.
 
-- [ ] Add injectable transform-enumeration tests for absent AV1, software-only AV1, hardware AV1, and transform activation/configuration failure.
-- [ ] Implement probe using Media Foundation encoder and decoder categories independently; release every rejected/temporary COM transform and activation object.
-- [ ] Implement AV1 encoder output using the same `EncodedVideoSample` dimensions, keyframe, and duration contract used by H.264.
-- [ ] Implement AV1 decoder input using the same `VideoFrame` contract used by H.264.
-- [ ] Reuse the existing asynchronous MFT pump and bounded frame handling where compatible; keep blocking initialization outside the capture callback.
-- [ ] Add hardware integration coverage that skips with a concrete reason when the host exposes no usable hardware AV1 transforms.
+- [x] Add injectable transform-enumeration tests for absent AV1, software-only AV1, hardware AV1, and transform activation/configuration failure.
+- [x] Implement probe using Media Foundation encoder and decoder categories independently; release every rejected/temporary COM transform and activation object.
+- [x] Implement AV1 encoder output using the same `EncodedVideoSample` dimensions, keyframe, and duration contract used by H.264.
+- [x] Implement AV1 decoder input using the same `VideoFrame` contract used by H.264 for synchronous hardware MFTs; async decoder MFTs are rejected until an event-pump path is implemented.
+- [x] Reuse the existing asynchronous MFT pump and bounded frame handling where compatible; keep blocking initialization outside the capture callback.
+- [x] Add hardware integration coverage that skips with a concrete reason when the host exposes no usable hardware AV1 transforms.
 
 ### Task 4: Add AV1 WebRTC negotiation and RTP access-unit handling
 
@@ -112,11 +112,11 @@
 - Consumes: the verified AV1 SIPSorcery format and packet APIs from Task 1 and codec values/capabilities from Task 2.
 - Produces: codec-aware peer construction and a viewer receive path that emits validated `EncodedVideoSample` values tagged with the negotiated codec.
 
-- [ ] Add RTP assembly tests for single-packet frames, fragmented frames, sequence gaps, reordering, malformed payloads, and bounded retained bytes.
-- [ ] Add SDP tests for AV1+H.264 offers, AV1-only-capable viewer intersection, and H.264-only viewer intersection.
-- [ ] Register AV1 only when the local peer's hardware capability and the verified SIPSorcery AV1 path are both available; keep H.264 in the offer.
-- [ ] Route AV1 packets through an AV1-specific assembler and H.264 packets through the existing H.264 assembler, selected from the negotiated payload format.
-- [ ] Emit the negotiated codec and avoid forwarding access units until negotiation is complete.
+- [x] Add RTP assembly tests for single-packet frames, fragmented frames, sequence gaps, reordering, malformed payloads, and bounded retained bytes.
+- [x] Add SDP tests for AV1+H.264 offers, AV1-only-capable viewer intersection, and H.264-only viewer intersection.
+- [x] Register AV1 only when the local peer's hardware capability and the verified SIPSorcery AV1 path are both available; keep H.264 in the offer.
+- [x] Route AV1 packets through an AV1-specific assembler and H.264 packets through the existing H.264 assembler, selected from the negotiated payload format.
+- [x] Emit the negotiated codec and avoid forwarding access units until negotiation is complete.
 
 ### Task 5: Coordinate one codec across viewers and fall back without ending the session
 
@@ -136,14 +136,14 @@
 - Consumes: `VideoCodecNegotiator.Select`, codec-aware peer results, and the AV1 Media Foundation implementations.
 - Produces: a publisher session whose encoder codec matches every active peer. A viewer reporting AV1 decoder initialization failure sends the existing `webrtc.renegotiate` message with `reason: "av1_decoder_init_failed"` and its current `negotiationId`; the publisher validates it and downgrades the whole session to H.264. A late viewer that changes the common codec to H.264 follows the same transition.
 
-- [ ] Add policy integration tests for AV1/AV1, AV1 publisher with H.264-only viewer, H.264-only publisher with AV1 viewer, mixed viewers, profile/level mismatch, and late incompatible viewer arrival.
-- [ ] Add a failure-injection test proving AV1 encoder initialization failure starts the H.264 session and retains the session.
-- [ ] Add a failure-injection test proving viewer AV1 decoder initialization failure reports incompatibility and causes shared-session H.264 fallback.
-- [ ] Add a signaling test proving stale negotiation IDs and unrecognized codec-fallback reasons cannot trigger a session downgrade.
-- [ ] Implement serialized viewer add/remove and codec transition coordination. Discard old-codec queued samples, keep queue limits unchanged, and request a clean keyframe after a transition.
-- [ ] Re-offer H.264 to every current viewer using the verified SIPSorcery renegotiation API; keep each viewer's `VideoSubscriber` peer alive when renegotiation succeeds.
-- [ ] If existing signaling rejects the codec-fallback reason or SIPSorcery cannot renegotiate to H.264 safely, stop and revise the design/protocol before implementing fallback.
-- [ ] Keep audio pipelines alive throughout a video codec transition.
+- [x] Add policy integration tests for AV1/AV1, AV1 publisher with H.264-only viewer, H.264-only publisher with AV1 viewer, mixed viewers, profile/level mismatch, and late incompatible viewer arrival.
+- [x] Add a failure-injection test proving AV1 encoder initialization failure starts the H.264 session and retains the session.
+- [x] Add a failure-injection test proving viewer AV1 decoder initialization failure reports incompatibility and causes shared-session H.264 fallback.
+- [x] Add a signaling test proving stale negotiation IDs and unrecognized codec-fallback reasons cannot trigger a session downgrade.
+- [x] Implement serialized viewer add/remove and codec transition coordination. Discard old-codec queued samples, keep queue limits unchanged, and request a clean keyframe after a transition.
+- [x] Re-offer H.264 to every current viewer using the verified SIPSorcery renegotiation API; keep each viewer's `VideoSubscriber` peer alive when renegotiation succeeds.
+- [x] If existing signaling rejects the codec-fallback reason or SIPSorcery cannot renegotiate to H.264 safely, stop and revise the design/protocol before implementing fallback.
+- [x] Keep audio pipelines alive throughout a video codec transition.
 
 ### Task 6: Surface codec decision and failure reason in diagnostics
 
@@ -159,10 +159,10 @@
 **Interfaces:**
 - Produces: immutable diagnostics fields for local codecs, each remote viewer's codecs, the common codec set, negotiated codec/profile/level, encoder/decoder implementation, acceleration path, and fallback reason, projected through the existing sampled diagnostics flow.
 
-- [ ] Add presentation tests for AV1 selected, H.264 fallback with reason, and no active stream.
-- [ ] Add host diagnostics tests confirming the active encoder/decoder name and acceleration come from the instantiated codec, not a fresh probe.
-- [ ] Project local/per-viewer remote codecs, common codecs, selected profile/level, acceleration, and fallback reason into the diagnostics page without exposing SDP/ICE secrets.
-- [ ] Include encode/decode duration in sampled metrics and preserve the current low-frequency UI update cadence.
+- [x] Add presentation tests for AV1 selected, H.264 fallback with reason, and no active stream.
+- [x] Add host diagnostics tests confirming the active encoder/decoder name and acceleration come from the instantiated codec, not a fresh probe.
+- [x] Project local/per-viewer remote codecs, common codecs, selected profile/level, acceleration, and fallback reason into the diagnostics page without exposing SDP/ICE secrets.
+- [x] Include encode/decode duration in sampled metrics and preserve the current low-frequency UI update cadence.
 
 ### Task 7: Record equivalent-workload performance comparison and complete focused validation
 
@@ -174,14 +174,13 @@
 - Consumes: diagnostics and timing counters produced by Task 6.
 - Produces: a reproducible benchmark procedure and measured table comparing AV1 and H.264 under identical screen-sharing settings, including bitrate, encode/decode time, dropped frames, and latency when available.
 
-- [ ] Record Windows OS/build, hardware, codec transform, profile, dimensions, frame rate, duration, and visual-quality target for each run.
-- [ ] Compare AV1 and H.264 under identical workloads; report missing metrics as unavailable rather than inferring them.
-- [ ] Add regression coverage for existing H.264 offer/answer, encode/decode, and RTP integrity behavior alongside the AV1 cases.
-- [ ] Provide the exact targeted test commands in the PR description; execute them only if the user authorizes test execution.
+- [x] Record Windows OS/build, hardware, codec transform, profile, dimensions, frame rate, and duration for each run; document that a visual-quality target was unavailable for this synthetic encoder-only comparison.
+- [x] Compare AV1 and H.264 under identical workloads; report missing metrics as unavailable rather than inferring them.
+- [x] Add regression coverage for existing H.264 offer/answer, encode/decode, and RTP integrity behavior alongside the AV1 cases.
+- [x] Provide the exact targeted test commands in the PR description; execute them only if the user authorizes test execution.
 
 ## Execution Notes
 
 - Preserve one reviewable commit per completed task and keep each commit limited to that task's files.
 - Do not claim AV1 support on a machine until the hardware transform, WebRTC codec path, and selected peer configuration have all succeeded.
 - If safe shared-codec transitions are not supported by the verified SIPSorcery version, stop before implementing an unsafe mixed-codec path and update the design for review.
-

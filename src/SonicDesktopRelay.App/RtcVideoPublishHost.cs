@@ -30,7 +30,8 @@ public sealed class RtcVideoPublishHost(
         new Dictionary<Guid, RtcTransportDiagnostics>();
 
     private ScreenPublishPipeline? _pipeline;
-    private MediaFoundationH264Encoder? _encoder;
+    private IVideoEncoder? _encoder;
+    private VideoCodecCapabilities? _publisherVideoCapabilities;
     private IScreenCaptureSource? _capture;
     private AudioPublishPipeline? _audioPipeline;
     private IAudioCaptureSource? _audioSource;
@@ -44,11 +45,21 @@ public sealed class RtcVideoPublishHost(
 
     public string? EncoderName { get; private set; }
 
-    public NativeVideoDiagnostics? VideoDiagnostics => _encoder?.Diagnostics;
+    public NativeVideoDiagnostics? VideoDiagnostics => _encoder switch
+    {
+        MediaFoundationH264Encoder h264 => h264.Diagnostics,
+        MediaFoundationAv1Encoder av1 => av1.Diagnostics,
+        _ => null
+    };
 
     public VideoQuality? EffectiveQuality => _pipeline?.Quality;
 
-    public string KeyFrameMode => _encoder?.KeyFrameMode ?? "not-started";
+    public string KeyFrameMode => _encoder switch
+    {
+        MediaFoundationH264Encoder h264 => h264.KeyFrameMode,
+        MediaFoundationAv1Encoder av1 => av1.KeyFrameMode,
+        _ => "not-started"
+    };
 
     public TimeSpan? LastEncodeDuration => _pipeline?.LastEncodeDuration;
 
@@ -185,10 +196,23 @@ public sealed class RtcVideoPublishHost(
             var ice = await LoadIceAsync(ct);
 
             var clock = new MediaSessionClock(TimeProvider.System);
-            var encoder = new MediaFoundationH264Encoder();
+            var av1Capabilities = new MediaFoundationAv1CapabilityProbe().Detect();
+            var encoderSelection = CreateVideoEncoder(
+                av1Capabilities,
+                () => new MediaFoundationAv1Encoder(),
+                () => new MediaFoundationH264Encoder());
+            var encoder = encoderSelection.Encoder;
+            _publisherVideoCapabilities = encoderSelection.PeerCapabilities;
             _encoder = encoder;
             EncoderName = encoder.Name;
-            EncoderRejections = encoder.RejectionLog;
+            EncoderRejections = (encoderSelection.InitializationFailure is { } failure
+                ? new[] { failure }
+                : Array.Empty<string>()).Concat(encoder switch
+            {
+                MediaFoundationH264Encoder h264 => h264.RejectionLog,
+                MediaFoundationAv1Encoder av1 => av1.RejectionLog,
+                _ => []
+            }).ToArray();
 
             var capture = _captureSelection.CreateVideo(target);
             _capture = capture;
@@ -260,23 +284,41 @@ public sealed class RtcVideoPublishHost(
 
             _publisher = new VideoPublisher(
                 pipeline,
-                new SipSorceryPeerConnectionFactory(ice),
+                new SipSorceryPeerConnectionFactory(ice, _publisherVideoCapabilities),
                 connection,
-                audioPipeline);
+                audioPipeline,
+                downgradeEncoderToH264: _ =>
+                {
+                    if (_encoder is not MediaFoundationH264Encoder)
+                    {
+                        var h264 = new MediaFoundationH264Encoder();
+                        pipeline.ReplaceEncoder(h264);
+                        _encoder = h264;
+                        EncoderName = h264.Name;
+                    }
+                    return Task.CompletedTask;
+                },
+                initialSessionCodec: encoder is MediaFoundationAv1Encoder ? VideoCodec.Av1 : VideoCodec.H264);
             _publisher.TransportDiagnosticsChanged += OnTransportDiagnosticsChanged;
             _diagnosticsTimer = TimeProvider.System.CreateTimer(
                 _ => VideoDiagnosticsChanged?.Invoke(), null,
                 TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
 
+            var transformInfo = encoder switch
+            {
+                MediaFoundationH264Encoder h264 => h264.TransformInfo,
+                MediaFoundationAv1Encoder av1 => av1.TransformInfo,
+                _ => null
+            };
             _logger.LogInformation(
                 "Publisher media stack started. encoder={EncoderName} transform={TransformName} acceleration={Acceleration} capture_source_type={CaptureSourceType} target_title={TargetTitle} target_process={TargetProcess} target_pid={TargetPid} dimensions_width={Width} dimensions_height={Height}",
                 encoder.Name,
-                encoder.TransformInfo?.Name ?? encoder.Name,
-                encoder.TransformInfo?.IsHardware == true ? "hardware" : "software",
+                transformInfo?.Name ?? encoder.Name,
+                transformInfo?.IsHardware == true ? "hardware" : "software",
                 target is CaptureTarget.Window ? "window" : "monitor",
                 target is CaptureTarget.Window targetWindow ? targetWindow.Info.Title : null,
                 target is CaptureTarget.Window processWindow ? processWindow.Info.ProcessName : null,
-                target is CaptureTarget.Window pidWindow ? pidWindow.Info.ProcessId : null,
+                target is CaptureTarget.Window pidWindow ? (uint?)pidWindow.Info.ProcessId : null,
                 capture.CurrentDimensions.Width,
                 capture.CurrentDimensions.Height);
 
@@ -314,6 +356,36 @@ public sealed class RtcVideoPublishHost(
         {
             _gate.Release();
         }
+    }
+
+    internal static (IVideoEncoder Encoder, VideoCodecCapabilities? PeerCapabilities, string? InitializationFailure)
+        CreateVideoEncoder(
+            VideoCodecCapabilities av1Capabilities,
+            Func<IVideoEncoder> createAv1,
+            Func<IVideoEncoder> createH264)
+    {
+        if (av1Capabilities.Encoders.Contains(VideoCodec.Av1))
+        {
+            try
+            {
+                return (createAv1(), av1Capabilities, null);
+            }
+            catch (Exception e) when (e is not OperationCanceledException)
+            {
+                var rejectionReasons = av1Capabilities.RejectionReasons.ToDictionary();
+                var reason = $"AV1 encoder initialization failed: {e.Message}";
+                rejectionReasons[VideoCodec.Av1] = reason;
+                av1Capabilities = av1Capabilities with
+                {
+                    Encoders = new HashSet<VideoCodec>(),
+                    EncoderConstraints = new Dictionary<VideoCodec, VideoCodecConstraints>(),
+                    RejectionReasons = rejectionReasons
+                };
+                return (createH264(), null, reason);
+            }
+        }
+
+        return (createH264(), null, null);
     }
 
     public async Task StopAsync()

@@ -27,6 +27,25 @@ public sealed class VideoSubscriberTests
     }
 
     [Fact]
+    public async Task Av1_decoder_initialization_failure_requests_h264_with_current_negotiation_id_once()
+    {
+        var harness = new Harness();
+        var negotiationId = Guid.NewGuid();
+        await harness.OfferAsync(negotiationId);
+
+        harness.Pipeline.Pipeline.Submit(new EncodedVideoSample(
+            new byte[8], TimeSpan.Zero, true, 1920, 1080) { Codec = VideoCodec.Av1 });
+        harness.Pipeline.Pipeline.Submit(new EncodedVideoSample(
+            new byte[8], TimeSpan.Zero, true, 1920, 1080) { Codec = VideoCodec.Av1 });
+
+        var sent = Assert.Single(harness.Signaling.Sent,
+            x => x.Type == SignalingMessageTypes.WebRtcRenegotiate);
+        var payload = JsonSerializer.SerializeToElement(sent.Payload);
+        Assert.Equal("av1_decoder_init_failed", payload.GetProperty("reason").GetString());
+        Assert.Equal(negotiationId, payload.GetProperty("negotiationId").GetGuid());
+    }
+
+    [Fact]
     public async Task A_failed_direct_preconnect_peer_requests_one_relay_replacement()
     {
         var harness = new Harness();
@@ -526,8 +545,12 @@ public sealed class VideoSubscriberTests
     {
         public string Name => "fake";
 
-        public VideoFrame? Decode(EncodedVideoSample sample) =>
-            new(sample.Width, sample.Height, new byte[16], sample.Timestamp);
+        public VideoFrame? Decode(EncodedVideoSample sample)
+        {
+            if (sample.Codec == VideoCodec.Av1)
+                throw new InvalidOperationException("Injected AV1 decoder initialization failure.");
+            return new(sample.Width, sample.Height, new byte[16], sample.Timestamp);
+        }
 
         public void Dispose()
         {

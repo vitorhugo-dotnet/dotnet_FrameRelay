@@ -42,4 +42,8 @@
     <ProjectReference Include="..\SonicDesktopRelay.Signaling\SonicDesktopRelay.Signaling.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="SonicDesktopRelay.App.Tests" />
+  </ItemGroup>
+
 </Project>

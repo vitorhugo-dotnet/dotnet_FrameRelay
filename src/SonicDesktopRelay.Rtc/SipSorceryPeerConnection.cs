@@ -17,6 +17,7 @@ public sealed class SipSorceryPeerConnection : IPeerConnection
     private readonly RTCPeerConnection _connection;
     private readonly uint _audioSsrc;
     private readonly uint _videoSsrc;
+    private readonly MediaStreamTrack _videoTrack;
     private readonly VideoCodecCapabilities? _localVideoCapabilities;
     private readonly object _gate = new();
     private RtcTransportDiagnostics? _transportDiagnostics;
@@ -54,9 +55,9 @@ public sealed class SipSorceryPeerConnection : IPeerConnection
         // packetization-mode=1 is what every browser and native decoder expects for H.264 over
         // WebRTC; without it a viewer negotiates single-NAL mode and chokes on the first frame
         // larger than an MTU.
-        var videoTrack = new MediaStreamTrack(CreateLocalVideoFormats(), MediaStreamStatusEnum.SendOnly);
-        _videoSsrc = videoTrack.Ssrc;
-        _connection.addTrack(videoTrack);
+        _videoTrack = new MediaStreamTrack(CreateLocalVideoFormats(), MediaStreamStatusEnum.SendOnly);
+        _videoSsrc = _videoTrack.Ssrc;
+        _connection.addTrack(_videoTrack);
 
         _connection.onicecandidate += candidate =>
         {
@@ -111,6 +112,24 @@ public sealed class SipSorceryPeerConnection : IPeerConnection
 
     public async Task<string> CreateOfferAsync(CancellationToken ct)
     {
+        var offer = _connection.createOffer();
+        await _connection.setLocalDescription(offer).WaitAsync(ct);
+        return offer.sdp;
+    }
+
+    public async Task<string> CreateH264OfferAsync(CancellationToken ct)
+    {
+        lock (_gate)
+        {
+            if (_closed) throw new ObjectDisposedException(nameof(SipSorceryPeerConnection));
+            if (!_videoTrack.RestrictCapabilities(new VideoFormat(
+                    VideoCodecsEnum.H264, H264PayloadId, 90_000, "packetization-mode=1")))
+                throw new InvalidOperationException("H.264 was not present in the existing video track capabilities.");
+            _negotiated = false;
+            _negotiatedVideoCodec = null;
+            _negotiatedVideoPayloadId = null;
+        }
+
         var offer = _connection.createOffer();
         await _connection.setLocalDescription(offer).WaitAsync(ct);
         return offer.sdp;

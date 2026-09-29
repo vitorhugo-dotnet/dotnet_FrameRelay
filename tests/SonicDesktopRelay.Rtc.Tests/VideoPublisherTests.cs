@@ -241,6 +241,61 @@ public sealed class VideoPublisherTests
     }
 
     [Fact]
+    public async Task H264_fallback_renegotiates_the_existing_peer_and_rejects_stale_or_unknown_reasons()
+    {
+        var downgradeCalls = 0;
+        var harness = await Harness.StartedAsync(VideoCodec.Av1, _ => { downgradeCalls++; return Task.CompletedTask; });
+        await harness.Publisher.AddViewerAsync(ViewerA, CancellationToken.None);
+        var peer = harness.Peers.Created[0];
+        peer.NegotiatedVideoCodec = VideoCodec.H264;
+        var negotiationId = ReadNegotiationId(harness.Signaling.Sent.Last().Payload);
+
+        await harness.Publisher.HandleAsync(Frame(SignalingMessageTypes.WebRtcRenegotiate, ViewerA,
+            $$"""{"reason":"av1_decoder_init_failed","negotiationId":"{{Guid.NewGuid()}}"}"""), CancellationToken.None);
+        await harness.Publisher.HandleAsync(Frame(SignalingMessageTypes.WebRtcRenegotiate, ViewerA,
+            $$"""{"reason":"unknown","negotiationId":"{{negotiationId}}"}"""), CancellationToken.None);
+        Assert.Equal(0, downgradeCalls);
+
+        await harness.Publisher.HandleAsync(Frame(SignalingMessageTypes.WebRtcAnswer, ViewerA,
+            $$"""{"type":"answer","sdp":"answer","negotiationId":"{{negotiationId}}"}"""), CancellationToken.None);
+
+        Assert.Equal(1, downgradeCalls);
+        Assert.Same(peer, harness.Peers.Created.Single());
+        Assert.Equal(1, peer.H264OfferCalls);
+        Assert.Equal(1, harness.Publisher.PeerCount);
+    }
+
+    [Fact]
+    public async Task A_late_H264_viewer_downgrades_the_shared_session_and_reoffers_all_peers()
+    {
+        var harness = await Harness.StartedAsync(VideoCodec.Av1, _ => Task.CompletedTask);
+        await harness.Publisher.AddViewerAsync(ViewerA, CancellationToken.None);
+        var first = harness.Peers.Created[0];
+        first.NegotiatedVideoCodec = VideoCodec.Av1;
+        var firstId = ReadNegotiationId(harness.Signaling.Sent.Last().Payload);
+        await harness.Publisher.HandleAsync(Frame(SignalingMessageTypes.WebRtcAnswer, ViewerA,
+            $$"""{"type":"answer","sdp":"answer","negotiationId":"{{firstId}}"}"""), CancellationToken.None);
+
+        await harness.Publisher.AddViewerAsync(ViewerB, CancellationToken.None);
+        var second = harness.Peers.Created[1];
+        second.NegotiatedVideoCodec = VideoCodec.H264;
+        var secondId = ReadNegotiationId(harness.Signaling.Sent.Last().Payload);
+        await harness.Publisher.HandleAsync(Frame(SignalingMessageTypes.WebRtcAnswer, ViewerB,
+            $$"""{"type":"answer","sdp":"answer","negotiationId":"{{secondId}}"}"""), CancellationToken.None);
+
+        Assert.Equal(1, first.H264OfferCalls);
+        Assert.Equal(1, second.H264OfferCalls);
+        Assert.Same(first, harness.Peers.Created[0]);
+        Assert.Same(second, harness.Peers.Created[1]);
+    }
+
+    private static Guid ReadNegotiationId(object? payload)
+    {
+        var json = System.Text.Json.JsonSerializer.SerializeToElement(payload);
+        return json.GetProperty("negotiationId").GetGuid();
+    }
+
+    [Fact]
     public async Task An_ice_candidate_is_routed_to_its_peer()
     {
         var harness = await Harness.StartedAsync();
@@ -423,7 +478,13 @@ public sealed class VideoPublisherTests
         public required FakeSignaling Signaling { get; init; }
         public required VideoPublisher Publisher { get; init; }
 
-        public static async Task<Harness> StartedAsync(TimeProvider? time = null)
+        public static async Task<Harness> StartedAsync(TimeProvider? time = null) =>
+            await StartedAsync(VideoCodec.H264, null, time);
+
+        public static async Task<Harness> StartedAsync(
+            VideoCodec initialCodec,
+            Func<CancellationToken, Task>? downgrade = null,
+            TimeProvider? time = null)
         {
             var effectiveTime = time ?? TimeProvider.System;
             var capture = new FakeCapture();
@@ -437,7 +498,8 @@ public sealed class VideoPublisherTests
                 new MediaSessionClock(effectiveTime));
             var peers = new FakePeerFactory();
             var signaling = new FakeSignaling();
-            var publisher = new VideoPublisher(pipeline, peers, signaling, audioPipeline, effectiveTime);
+            var publisher = new VideoPublisher(pipeline, peers, signaling, audioPipeline, effectiveTime,
+                downgradeEncoderToH264: downgrade, initialSessionCodec: initialCodec);
             await pipeline.StartAsync(Monitor, CancellationToken.None);
             await audioPipeline.StartAsync(CancellationToken.None);
             return new Harness
@@ -552,6 +614,8 @@ public sealed class VideoPublisherTests
         public List<string> RemoteCandidates { get; } = [];
         public string? AppliedAnswer { get; private set; }
         public bool Disposed { get; private set; }
+        public int H264OfferCalls { get; private set; }
+        public VideoCodec? NegotiatedVideoCodec { get; set; }
 
         public Action? DuringVideoSend { get; set; }
 
@@ -577,6 +641,12 @@ public sealed class VideoPublisherTests
         public RtcTransportDiagnostics? TransportDiagnostics { get; private set; }
 
         public Task<string> CreateOfferAsync(CancellationToken ct) => Task.FromResult("offer-sdp");
+
+        public Task<string> CreateH264OfferAsync(CancellationToken ct)
+        {
+            H264OfferCalls++;
+            return Task.FromResult("h264-offer-sdp");
+        }
 
         public Task ApplyAnswerAsync(string sdp, CancellationToken ct)
         {

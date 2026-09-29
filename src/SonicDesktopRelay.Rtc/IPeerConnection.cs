@@ -38,6 +38,9 @@ public interface IPeerConnection : IAsyncDisposable
 
     Task<string> CreateOfferAsync(CancellationToken ct);
 
+    Task<string> CreateH264OfferAsync(CancellationToken ct) =>
+        throw new NotSupportedException("This peer does not support same-connection H.264 renegotiation.");
+
     Task ApplyAnswerAsync(string sdp, CancellationToken ct);
 
     Task AddIceCandidateAsync(string candidate, string? sdpMid, int? sdpMLineIndex, CancellationToken ct);

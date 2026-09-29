@@ -56,6 +56,8 @@ public sealed class ScreenWatchPipeline(
 
     public event Action? KeyFrameNeeded;
 
+    public event Action? Av1DecoderInitializationFailed;
+
     public WatchState State => _state;
 
     public string DecoderName => decoder.Name;
@@ -180,6 +182,11 @@ public sealed class ScreenWatchPipeline(
                 sample.Data.Length,
                 sample.IsKeyFrame);
 
+            if (sample.Codec == VideoCodec.Av1)
+            {
+                Av1DecoderInitializationFailed?.Invoke();
+                return;
+            }
             SetState(WatchState.Failed);
             return;
         }

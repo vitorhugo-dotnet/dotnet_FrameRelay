@@ -37,6 +37,8 @@ public sealed class VideoSubscriber(
     private bool _everConnected;
     private bool _fallbackStarted;
     private CancellationTokenSource? _fallbackCancellation;
+    private int _av1FailureReported;
+    private bool _codecFailureHooked;
 
     public VideoSubscriber(ScreenWatchPipeline pipeline, IViewerPeerConnectionFactory peers,
         ISignalingConnection signaling, TimeProvider? time = null)
@@ -88,6 +90,11 @@ public sealed class VideoSubscriber(
 
     public async Task HandleAsync(SignalingEnvelope envelope, CancellationToken ct)
     {
+        if (!_codecFailureHooked)
+        {
+            pipeline.Av1DecoderInitializationFailed += OnAv1DecoderInitializationFailed;
+            _codecFailureHooked = true;
+        }
         if (Volatile.Read(ref _statsDisposed) != 0) return;
         if (Interlocked.Exchange(ref _statsStarted, 1) == 0)
         {
@@ -205,6 +212,7 @@ public sealed class VideoSubscriber(
                 _fallbackCancellation?.Dispose();
                 _fallbackCancellation = new CancellationTokenSource();
             }
+            if (_negotiationId != negotiationId) Interlocked.Exchange(ref _av1FailureReported, 0);
             _negotiationId = negotiationId;
 
             // A later offer is a renegotiation and must land on the same peer. While the new
@@ -509,6 +517,27 @@ public sealed class VideoSubscriber(
 
     private void OnKeyFrameNeeded() => _peer?.RequestKeyFrame();
 
+    private void OnAv1DecoderInitializationFailed()
+    {
+        if (Interlocked.Exchange(ref _av1FailureReported, 1) != 0
+            || PublisherId is not { } publisher
+            || _negotiationId is not { } negotiationId) return;
+        _ = SendAv1DecoderFailureAsync(publisher, negotiationId);
+    }
+
+    private async Task SendAv1DecoderFailureAsync(Guid publisher, Guid negotiationId)
+    {
+        try
+        {
+            await signaling.SendAsync(SignalingMessageTypes.WebRtcRenegotiate, publisher,
+                new { reason = "av1_decoder_init_failed", negotiationId }, CancellationToken.None);
+        }
+        catch (Exception e)
+        {
+            EmitDiagnostic("viewer.av1_decoder_fallback.send_failed", exceptionType: e.GetType().Name, message: e.Message);
+        }
+    }
+
     public async ValueTask DisposeAsync()
     {
         if (Interlocked.Exchange(ref _statsDisposed, 1) == 0)
@@ -539,6 +568,7 @@ public sealed class VideoSubscriber(
         }
 
         if (_keyFrameHooked) pipeline.KeyFrameNeeded -= OnKeyFrameNeeded;
+        if (_codecFailureHooked) pipeline.Av1DecoderInitializationFailed -= OnAv1DecoderInitializationFailed;
         if (peer is not null) await peer.DisposeAsync();
     }
 

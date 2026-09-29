@@ -13,6 +13,7 @@ namespace SonicDesktopRelay.Media.Windows;
 [SupportedOSPlatform("windows10.0.19041.0")]
 public sealed class MediaFoundationAv1Encoder : IVideoEncoder
 {
+    private const int MaxPendingEncodedSamples = 120;
     private const uint MftEnumFlagHardware = 0x00000004;
     private const uint MftEnumFlagSortAndFilter = 0x00000040;
 
@@ -33,6 +34,7 @@ public sealed class MediaFoundationAv1Encoder : IVideoEncoder
     private readonly EncoderKeyFramePolicy _keyFramePolicy = new(null);
     private readonly MediaFoundationTransformRetryPolicy _retryPolicy = new();
     private readonly MediaFoundationEncoderTimestampTracker _timestampTracker = new();
+    private readonly Queue<EncodedVideoSample> _pendingOutputs = new();
 
     private IMFTransform? _transform;
     private MediaFoundationCodecControl? _codecControl;
@@ -302,7 +304,10 @@ public sealed class MediaFoundationAv1Encoder : IVideoEncoder
         if (_asyncPump is not null)
         {
             if (!_asyncInputReady
-                && !WaitForAsyncCredit(_asyncPump, static pump => pump.TryTakeInput(), 500))
+                && !WaitForAsyncCredit(
+                    _asyncPump,
+                    pump => pump.TryTakeInputWhileDrainingOutputs(QueueAvailableOutput),
+                    500))
                 throw new InvalidOperationException("Hardware AV1 encoder did not request another input sample.");
 
             _asyncInputReady = false;
@@ -312,11 +317,11 @@ public sealed class MediaFoundationAv1Encoder : IVideoEncoder
             {
                 _asyncPump.DrainAvailable();
                 _asyncInputReady = _asyncPump.InputCredits > 0 && _asyncPump.TryTakeInput();
+                while (_asyncPump.TryTakeOutput())
+                    QueueAvailableOutput();
                 // Async MFT output may legitimately lag its input. A wait timeout is not a
                 // transform failure; drop this output opportunity and keep the active MFT.
-                return MediaFoundationTransformRetryPolicy.ReadAsyncOutputIfReady<EncodedVideoSample>(
-                    outputReady: false,
-                    TryReadOutput);
+                return DequeuePendingOutput();
             }
             _asyncPump.DrainAvailable();
             if (_asyncPump.InputCredits > 0)
@@ -328,8 +333,30 @@ public sealed class MediaFoundationAv1Encoder : IVideoEncoder
             _timestampTracker.Submitted(new(frame.Timestamp, duration, width, height));
         }
 
-        return TryReadOutput();
+        var output = TryReadOutput();
+        if (_pendingOutputs.Count == 0)
+            return output;
+
+        if (output is { } currentOutput)
+            EnqueueOutput(currentOutput);
+        return DequeuePendingOutput();
     }
+
+    private void QueueAvailableOutput()
+    {
+        if (TryReadOutput() is { } output)
+            EnqueueOutput(output);
+    }
+
+    private void EnqueueOutput(EncodedVideoSample output)
+    {
+        if (_pendingOutputs.Count == MaxPendingEncodedSamples)
+            _pendingOutputs.Dequeue();
+        _pendingOutputs.Enqueue(output);
+    }
+
+    private EncodedVideoSample? DequeuePendingOutput() =>
+        _pendingOutputs.Count > 0 ? _pendingOutputs.Dequeue() : null;
 
     private static bool IsHardTransformFailure(Exception exception) =>
         exception is SharpGenException or COMException or InvalidOperationException;
@@ -603,6 +630,7 @@ public sealed class MediaFoundationAv1Encoder : IVideoEncoder
     private void ReleaseTransform()
     {
         _timestampTracker.Clear();
+        _pendingOutputs.Clear();
         _keyFramePolicy.UpdateControl(null);
         _codecControl?.Dispose();
         _codecControl = null;

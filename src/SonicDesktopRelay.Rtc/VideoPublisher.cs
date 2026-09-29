@@ -38,6 +38,7 @@ public sealed class VideoPublisher(
     private readonly ConcurrentDictionary<Guid, byte> _fallbackUsed = new();
     private readonly ConcurrentDictionary<Guid, SemaphoreSlim> _peerGates = new();
     private readonly ConcurrentDictionary<Guid, VideoCodecCapabilities> _viewerCapabilities = new();
+    private readonly ConcurrentDictionary<Guid, VideoCodec> _negotiatedCodecs = new();
     private readonly SemaphoreSlim _sessionGate = new(1, 1);
     private VideoCodec? _sessionCodec = initialSessionCodec;
     private string? _codecFallbackReason;
@@ -55,6 +56,7 @@ public sealed class VideoPublisher(
         get
         {
             var selection = SelectSharedCodec();
+            var activeCodec = GetActiveNegotiatedCodec();
             var localCodecs = CodecNames(_publisherVideoCapabilities?.Encoders ?? H264OnlyCapabilities.Encoders);
             var viewerIds = _peers.Keys.Order().ToArray();
             var viewerCodecs = string.Join("; ", viewerIds.Select((id, index) =>
@@ -67,12 +69,12 @@ public sealed class VideoPublisher(
                 && viewerIds.All(id => _viewerCapabilities.TryGetValue(id, out var capabilities)
                     && capabilities.Decoders.Contains(VideoCodec.Av1)))
                 common.Add(VideoCodec.Av1);
-            var profileLevel = _sessionCodec == VideoCodec.Av1
+            var profileLevel = activeCodec == VideoCodec.Av1
                 && _publisherVideoCapabilities?.EncoderConstraints.ContainsKey(VideoCodec.Av1) == true
                     ? $"profile={_requiredAv1.Profile}, level-idx={_requiredAv1.MaxLevel}"
                     : null;
             return new VideoCodecSessionDiagnostics(
-                _sessionCodec,
+                activeCodec,
                 _sessionCodec == VideoCodec.H264
                     ? selection.FallbackReason ?? _codecFallbackReason
                     : null,
@@ -84,6 +86,21 @@ public sealed class VideoPublisher(
     }
 
     public IReadOnlyDictionary<Guid, RtcTransportDiagnostics> TransportDiagnostics => _transportDiagnostics;
+
+    private VideoCodec? GetActiveNegotiatedCodec()
+    {
+        if (_peers.IsEmpty) return null;
+
+        VideoCodec? activeCodec = null;
+        foreach (var participantId in _peers.Keys)
+        {
+            if (!_negotiatedCodecs.TryGetValue(participantId, out var negotiatedCodec)) return null;
+            if (activeCodec is { } currentCodec && currentCodec != negotiatedCodec) return null;
+            activeCodec = negotiatedCodec;
+        }
+
+        return activeCodec;
+    }
 
     public TimeSpan? LastVideoSendDuration
     {
@@ -167,6 +184,7 @@ public sealed class VideoPublisher(
             _transportDiagnostics.TryRemove(participantId, out _);
             _negotiationIds.TryRemove(participantId, out _);
             _viewerCapabilities.TryRemove(participantId, out _);
+            _negotiatedCodecs.TryRemove(participantId, out _);
             _fallbackIds.TryRemove(participantId, out _);
             if (_videoQueues.TryRemove(participantId, out var queue))
                 await queue.DisposeAsync();
@@ -242,7 +260,15 @@ public sealed class VideoPublisher(
 
                 await peer.ApplyAnswerAsync(sdpText, ct);
                 if (peer.NegotiatedVideoCodec is { } negotiated)
+                {
+                    _negotiatedCodecs[participantId] = negotiated;
                     _viewerCapabilities[participantId] = BuildViewerCapabilities(negotiated, peer.NegotiatedVideoConstraints);
+                }
+                else
+                {
+                    _negotiatedCodecs.TryRemove(participantId, out _);
+                    _viewerCapabilities.TryRemove(participantId, out _);
+                }
             }
             finally { peerGate.Release(); }
 
@@ -454,6 +480,7 @@ public sealed class VideoPublisher(
             await downgradeEncoderToH264(ct);
 
         _sessionCodec = VideoCodec.H264;
+        _negotiatedCodecs.Clear();
         foreach (var queue in _videoQueues.Values) queue.ResetForCodecTransition();
 
         foreach (var participantId in _peers.Keys.Order())

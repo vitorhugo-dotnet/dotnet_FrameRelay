@@ -352,6 +352,26 @@ public sealed class ScreenWatchPipelineTests
         Assert.Equal(TimeSpan.FromMilliseconds(6), pipeline.LastDecodeDuration);
     }
 
+    [Fact]
+    public void Recoverable_av1_initialization_failure_clears_after_h264_fallback_decodes()
+    {
+        var decoder = new FakeDecoder { ThrowAv1 = true };
+        using var pipeline = new ScreenWatchPipeline(decoder, new FakeTimeProvider(Start));
+        var recoveryRequested = false;
+        pipeline.Av1DecoderInitializationFailed += () => recoveryRequested = true;
+
+        pipeline.Submit(Sample() with { Codec = VideoCodec.Av1 });
+
+        Assert.True(recoveryRequested);
+        Assert.Equal(WatchState.Waiting, pipeline.State);
+        Assert.Contains("decoder failed", pipeline.LastFailure);
+
+        pipeline.Submit(Sample());
+
+        Assert.Equal(WatchState.Receiving, pipeline.State);
+        Assert.Null(pipeline.LastFailure);
+    }
+
     private static EncodedVideoSample Sample(TimeSpan? duration = null) =>
         new(new byte[8], TimeSpan.Zero, true, 1920, 1080, duration ?? TimeSpan.Zero);
 
@@ -363,11 +383,15 @@ public sealed class ScreenWatchPipelineTests
 
         public bool Throw { get; init; }
 
+        public bool ThrowAv1 { get; init; }
+
         public Action? DuringDecode { get; init; }
 
         public VideoFrame? Decode(EncodedVideoSample sample)
         {
             DuringDecode?.Invoke();
+            if (ThrowAv1 && sample.Codec == VideoCodec.Av1)
+                throw new InvalidOperationException("AV1 decoder failed");
             if (Throw) throw new InvalidOperationException("decoder failed");
             return ReturnNull ? null : new VideoFrame(sample.Width, sample.Height, new byte[16], sample.Timestamp);
         }

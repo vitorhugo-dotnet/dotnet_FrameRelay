@@ -70,7 +70,7 @@ public sealed class VideoPublisherTests
         Assert.Equal(1, downgradeCalls);
         Assert.Equal(1, peer.H264OfferCalls);
         Assert.False(peer.Disposed);
-        Assert.Equal(VideoCodec.H264, publisher.CodecDiagnostics.ActiveCodec);
+        Assert.Null(publisher.CodecDiagnostics.ActiveCodec);
         Assert.Equal("av1-runtime-encoder-failure", publisher.CodecDiagnostics.FallbackReason);
         Assert.DoesNotContain("AV1", publisher.CodecDiagnostics.LocalCodecs);
 
@@ -426,8 +426,10 @@ public sealed class VideoPublisherTests
     public async Task A_late_H264_viewer_downgrades_the_shared_session_and_reoffers_all_peers()
     {
         var harness = await Harness.StartedAsync(VideoCodec.Av1, _ => Task.CompletedTask);
+        Assert.Null(harness.Publisher.CodecDiagnostics.ActiveCodec);
         await harness.Publisher.AddViewerAsync(ViewerA, CancellationToken.None);
         var first = harness.Peers.Created[0];
+        Assert.Null(harness.Publisher.CodecDiagnostics.ActiveCodec);
         first.NegotiatedVideoCodec = VideoCodec.Av1;
         first.NegotiatedVideoConstraints = new VideoCodecConstraints("0", 4);
         var firstId = ReadNegotiationId(harness.Signaling.Sent.Last().Payload);
@@ -443,7 +445,22 @@ public sealed class VideoPublisherTests
         await harness.Publisher.AddViewerAsync(ViewerB, CancellationToken.None);
         var second = harness.Peers.Created[1];
         second.NegotiatedVideoCodec = VideoCodec.H264;
-        var secondId = ReadNegotiationId(harness.Signaling.Sent.Last().Payload);
+        var secondInitialId = ReadNegotiationId(harness.Signaling.Sent.Last(sent =>
+            sent.Type == SignalingMessageTypes.WebRtcOffer && sent.To == ViewerB).Payload);
+        await harness.Publisher.HandleAsync(Frame(SignalingMessageTypes.WebRtcAnswer, ViewerB,
+            $$"""{"type":"answer","sdp":"answer","negotiationId":"{{secondInitialId}}"}"""), CancellationToken.None);
+        Assert.Null(harness.Publisher.CodecDiagnostics.ActiveCodec);
+
+        first.NegotiatedVideoCodec = VideoCodec.H264;
+        var firstH264Id = ReadNegotiationId(harness.Signaling.Sent.Last(sent =>
+            sent.Type == SignalingMessageTypes.WebRtcOffer && sent.To == ViewerA).Payload);
+        await harness.Publisher.HandleAsync(Frame(SignalingMessageTypes.WebRtcAnswer, ViewerA,
+            $$"""{"type":"answer","sdp":"h264-answer","negotiationId":"{{firstH264Id}}"}"""), CancellationToken.None);
+        Assert.Null(harness.Publisher.CodecDiagnostics.ActiveCodec);
+
+        second.NegotiatedVideoCodec = VideoCodec.H264;
+        var secondId = ReadNegotiationId(harness.Signaling.Sent.Last(sent =>
+            sent.Type == SignalingMessageTypes.WebRtcOffer && sent.To == ViewerB).Payload);
         await harness.Publisher.HandleAsync(Frame(SignalingMessageTypes.WebRtcAnswer, ViewerB,
             $$"""{"type":"answer","sdp":"answer","negotiationId":"{{secondId}}"}"""), CancellationToken.None);
 
@@ -451,6 +468,24 @@ public sealed class VideoPublisherTests
         Assert.Equal(1, second.H264OfferCalls);
         Assert.Same(first, harness.Peers.Created[0]);
         Assert.Same(second, harness.Peers.Created[1]);
+        Assert.Equal(VideoCodec.H264, harness.Publisher.CodecDiagnostics.ActiveCodec);
+    }
+
+    [Fact]
+    public async Task Pending_h264_offer_has_no_active_codec_until_answer_is_applied()
+    {
+        var harness = await Harness.StartedAsync(VideoCodec.H264);
+        Assert.Null(harness.Publisher.CodecDiagnostics.ActiveCodec);
+
+        await harness.Publisher.AddViewerAsync(ViewerA, CancellationToken.None);
+        var peer = harness.Peers.Created.Single();
+        Assert.Null(harness.Publisher.CodecDiagnostics.ActiveCodec);
+
+        peer.NegotiatedVideoCodec = VideoCodec.H264;
+        var negotiationId = ReadNegotiationId(harness.Signaling.Sent.Last().Payload);
+        await harness.Publisher.HandleAsync(Frame(SignalingMessageTypes.WebRtcAnswer, ViewerA,
+            $$"""{"type":"answer","sdp":"answer","negotiationId":"{{negotiationId}}"}"""), CancellationToken.None);
+
         Assert.Equal(VideoCodec.H264, harness.Publisher.CodecDiagnostics.ActiveCodec);
     }
 
@@ -497,6 +532,12 @@ public sealed class VideoPublisherTests
         Assert.Same(peer, harness.Peers.Created.Single());
         Assert.False(peer.Disposed);
         Assert.Equal(1, harness.Publisher.PeerCount);
+        Assert.Null(harness.Publisher.CodecDiagnostics.ActiveCodec);
+        Assert.Equal("viewer-av1-decoder-unavailable", harness.Publisher.CodecDiagnostics.FallbackReason);
+        var h264NegotiationId = ReadNegotiationId(harness.Signaling.Sent.Last().Payload);
+        peer.NegotiatedVideoCodec = VideoCodec.H264;
+        await harness.Publisher.HandleAsync(Frame(SignalingMessageTypes.WebRtcAnswer, ViewerA,
+            $$"""{"type":"answer","sdp":"h264-answer","negotiationId":"{{h264NegotiationId}}"}"""), CancellationToken.None);
 
         var codec = harness.Publisher.CodecDiagnostics;
         Assert.Equal(VideoCodec.H264, codec.ActiveCodec);

@@ -85,20 +85,22 @@ public sealed class RtcVideoPublishHost(
             var metrics = new SessionMediaMetrics(
                 Width: video?.Width is > 0 ? video.Width : null,
                 Height: video?.Height is > 0 ? video.Height : null,
-                Codec: codec?.ActiveCodec?.ToString() ?? (_encoder is MediaFoundationAv1Encoder ? VideoCodec.Av1 : VideoCodec.H264).ToString(),
+                Codec: null,
                 Transport: transport,
                 TargetVideoBitrateBitsPerSecond: quality?.TargetBitsPerSecond,
                 TargetVideoFramesPerSecond: quality?.FramesPerSecond,
                 LocalSupportedCodecs: codec?.LocalCodecs ?? "H264",
                 ViewerSupportedCodecs: string.IsNullOrEmpty(codec?.ViewerCodecs) ? "pending" : codec.ViewerCodecs,
                 CommonSupportedCodecs: codec?.CommonCodecs ?? "H264",
-                NegotiatedCodec: codec?.ActiveCodec?.ToString()
-                    ?? (_encoder is MediaFoundationAv1Encoder ? VideoCodec.Av1 : VideoCodec.H264).ToString(),
+                NegotiatedCodec: null,
                 CodecProfileLevel: codec?.ProfileLevel,
                 VideoImplementation: video?.TransformName ?? EncoderName,
                 VideoAcceleration: video?.Acceleration,
                 EncodeDurationMilliseconds: LastEncodeDuration?.TotalMilliseconds);
-            return ApplyCodecFallbackReason(metrics, codec?.FallbackReason, _codecFallbackReason);
+            return ApplyCodecFallbackReason(
+                ApplyNegotiatedCodec(metrics, codec?.ActiveCodec),
+                codec?.FallbackReason,
+                _codecFallbackReason);
         }
     }
 
@@ -111,6 +113,15 @@ public sealed class RtcVideoPublishHost(
             CodecFallbackReason = string.IsNullOrWhiteSpace(publisherFallbackReason)
                 ? hostFallbackReason
                 : publisherFallbackReason
+        };
+
+    internal static SessionMediaMetrics ApplyNegotiatedCodec(
+        SessionMediaMetrics metrics,
+        VideoCodec? negotiatedCodec) =>
+        metrics with
+        {
+            Codec = negotiatedCodec?.ToString(),
+            NegotiatedCodec = negotiatedCodec?.ToString()
         };
 
     public long FramesCaptured => _pipeline?.FramesCaptured ?? 0;

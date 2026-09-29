@@ -216,6 +216,7 @@ public sealed class ScreenWatchPipeline(
             return;
         }
 
+        LastFailure = null;
         _lastFrameAt = time.GetUtcNow();
         lock (_statsGate)
             Interlocked.Increment(ref _decodedFrames);

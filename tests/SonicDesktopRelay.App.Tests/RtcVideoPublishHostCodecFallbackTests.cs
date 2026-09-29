@@ -65,6 +65,22 @@ public sealed class RtcVideoPublishHostCodecFallbackTests
         Assert.Equal("av1-encoder-initialization-failed", hostFallback.CodecFallbackReason);
     }
 
+    [Fact]
+    public void Current_metrics_report_only_the_publisher_negotiated_codec()
+    {
+        var pending = RtcVideoPublishHost.ApplyNegotiatedCodec(new SessionMediaMetrics(), null);
+        Assert.Null(pending.Codec);
+        Assert.Null(pending.NegotiatedCodec);
+
+        var h264 = RtcVideoPublishHost.ApplyNegotiatedCodec(new SessionMediaMetrics(), VideoCodec.H264);
+        Assert.Equal("H264", h264.Codec);
+        Assert.Equal("H264", h264.NegotiatedCodec);
+
+        var av1 = RtcVideoPublishHost.ApplyNegotiatedCodec(new SessionMediaMetrics(), VideoCodec.Av1);
+        Assert.Equal("Av1", av1.Codec);
+        Assert.Equal("Av1", av1.NegotiatedCodec);
+    }
+
     private sealed class FakeEncoder(string name) : IVideoEncoder
     {
         public string Name { get; } = name;

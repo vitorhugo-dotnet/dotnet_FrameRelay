@@ -32,7 +32,8 @@ public sealed class RtcVideoWatchHost(
     private readonly Lock _playbackGate = new();
 
     private ScreenWatchPipeline? _pipeline;
-    private MediaFoundationH264Decoder? _decoder;
+    private CodecSwitchingDecoder? _decoder;
+    private VideoCodecCapabilities? _decoderVideoCapabilities;
     private AudioWatchPipeline? _audioPipeline;
     private WasapiAudioSink? _audioSink;
     private float _playbackVolume = 1f;
@@ -42,7 +43,7 @@ public sealed class RtcVideoWatchHost(
     private ITimer? _watchdog;
     private string? _audioPipelineFailure;
 
-    public string? DecoderName { get; private set; }
+    public string? DecoderName => _decoder?.Name;
 
     public NativeVideoDiagnostics? VideoDiagnostics => _decoder?.Diagnostics;
 
@@ -53,17 +54,34 @@ public sealed class RtcVideoWatchHost(
     {
         get
         {
-            if (_pipeline is not { } pipeline) return null;
+            if (_pipeline is not { } pipeline || _decoder is not { } decoder) return null;
             var video = VideoDiagnostics;
             var stats = pipeline.LatestStatsSnapshot;
+            var negotiatedCodec = _subscriber?.NegotiatedVideoCodec;
+            var activeCodec = pipeline.DecodedFrames > 0 ? decoder.ActiveCodec : (VideoCodec?)null;
             return new SessionMediaMetrics(
                 Width: video?.Width is > 0 ? video.Width : null,
                 Height: video?.Height is > 0 ? video.Height : null,
                 VideoBitrateBitsPerSecond: stats?.VideoBitrateBitsPerSecond,
                 VideoFramesPerSecond: stats is { IntervalMilliseconds: > 0 }
                     ? stats.DecodedFrames * 1000d / stats.IntervalMilliseconds : null,
-                Codec: DecoderName,
-                Transport: TransportDiagnostics?.ToString());
+                Codec: activeCodec?.ToString(),
+                Transport: TransportDiagnostics?.ToString(),
+                LocalSupportedCodecs: _decoderVideoCapabilities?.Decoders.Contains(VideoCodec.Av1) == true
+                    ? "H264, AV1" : "H264",
+                CommonSupportedCodecs: negotiatedCodec?.ToString(),
+                NegotiatedCodec: negotiatedCodec?.ToString(),
+                CodecProfileLevel: negotiatedCodec == VideoCodec.Av1
+                    && _decoderVideoCapabilities?.DecoderConstraints.TryGetValue(VideoCodec.Av1, out var constraints) == true
+                        ? $"profile={constraints.Profile}, level-idx={constraints.MaxLevel}"
+                        : null,
+                VideoImplementation: video?.TransformName ?? DecoderName,
+                VideoAcceleration: video?.Acceleration,
+                CodecFallbackReason: decoder.FallbackReason
+                    ?? (_decoderVideoCapabilities?.Decoders.Contains(VideoCodec.Av1) == false
+                        ? _decoderVideoCapabilities.RejectionReasons.GetValueOrDefault(VideoCodec.Av1)
+                        : null),
+                DecodeDurationMilliseconds: pipeline.LastDecodeDuration?.TotalMilliseconds);
         }
     }
 
@@ -179,10 +197,13 @@ public sealed class RtcVideoWatchHost(
                              ?? throw new InvalidOperationException(
                                  "Signaling must be connected before watching starts.");
 
-            var decoder = new MediaFoundationH264Decoder(
-                loggerFactory?.CreateLogger<MediaFoundationH264Decoder>());
+            var av1Capabilities = new MediaFoundationAv1CapabilityProbe().Detect();
+            _decoderVideoCapabilities = av1Capabilities;
+            var decoder = new CodecSwitchingDecoder(
+                new MediaFoundationH264Decoder(loggerFactory?.CreateLogger<MediaFoundationH264Decoder>()),
+                () => new MediaFoundationAv1Decoder(loggerFactory?.CreateLogger<MediaFoundationAv1Decoder>()),
+                av1Capabilities);
             _decoder = decoder;
-            DecoderName = decoder.Name;
             DecoderRejections = decoder.RejectionLog;
 
             var pipeline = new ScreenWatchPipeline(
@@ -234,7 +255,7 @@ public sealed class RtcVideoWatchHost(
             var subscriber = new VideoSubscriber(
                 pipeline,
                 audioPipeline,
-                new SipSorceryViewerPeerConnectionFactory(await LoadIceAsync(ct)),
+                new SipSorceryViewerPeerConnectionFactory(await LoadIceAsync(ct), av1Capabilities),
                 connection);
 
             // The pipeline deliberately holds no clock of its own; something outside has to
@@ -335,6 +356,63 @@ public sealed class RtcVideoWatchHost(
 
     private void OnWebRtcDiagnostic(ViewerNegotiationDiagnosticEntry entry) =>
         WebRtcDiagnosticAdded?.Invoke(entry);
+
+    private sealed class CodecSwitchingDecoder(
+        MediaFoundationH264Decoder h264,
+        Func<MediaFoundationAv1Decoder> createAv1,
+        VideoCodecCapabilities capabilities) : IVideoDecoder
+    {
+        private MediaFoundationAv1Decoder? _av1;
+        private VideoCodec _activeCodec = VideoCodec.H264;
+        private bool _av1InitializationFailed;
+
+        public string Name => _activeCodec == VideoCodec.Av1 ? _av1?.Name ?? "AV1 decoder unavailable" : h264.Name;
+
+        public VideoCodec ActiveCodec => _activeCodec;
+
+        public string? FallbackReason => _av1InitializationFailed ? "av1-decoder-initialization-failed" : null;
+
+        public NativeVideoDiagnostics Diagnostics => _activeCodec == VideoCodec.Av1 && _av1 is not null
+            ? _av1.Diagnostics
+            : h264.Diagnostics;
+
+        public string? LastFailure => _activeCodec == VideoCodec.Av1 ? _av1?.LastFailure : h264.LastFailure;
+
+        public IReadOnlyList<string> RejectionLog => h264.RejectionLog.Concat(
+            capabilities.RejectionReasons.TryGetValue(VideoCodec.Av1, out var reason) ? new[] { reason } : []).ToArray();
+
+        public MediaFoundationTransformInfo? TransformInfo =>
+            _activeCodec == VideoCodec.Av1 ? _av1?.TransformInfo : h264.TransformInfo;
+
+        public VideoFrame? Decode(EncodedVideoSample sample)
+        {
+            if (sample.Codec == VideoCodec.H264)
+            {
+                _activeCodec = VideoCodec.H264;
+                return h264.Decode(sample);
+            }
+            if (sample.Codec != VideoCodec.Av1 || !capabilities.Decoders.Contains(VideoCodec.Av1))
+                throw new NotSupportedException($"No decoder is available for {sample.Codec}.");
+            if (_av1InitializationFailed) return null;
+            try
+            {
+                _av1 ??= createAv1();
+                _activeCodec = VideoCodec.Av1;
+                return _av1.Decode(sample);
+            }
+            catch
+            {
+                _av1InitializationFailed = true;
+                throw;
+            }
+        }
+
+        public void Dispose()
+        {
+            _av1?.Dispose();
+            h264.Dispose();
+        }
+    }
 
     private void OnTransportDiagnosticsChanged(RtcTransportDiagnostics diagnostics)
     {

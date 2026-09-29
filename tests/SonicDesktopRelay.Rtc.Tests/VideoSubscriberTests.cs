@@ -13,6 +13,21 @@ public sealed class VideoSubscriberTests
     private static readonly DateTimeOffset Start = new(2026, 8, 23, 12, 0, 0, TimeSpan.Zero);
 
     [Fact]
+    public async Task Negotiated_video_codec_is_forwarded_from_the_active_peer()
+    {
+        var harness = new Harness();
+        Assert.Null(harness.Subscriber.NegotiatedVideoCodec);
+
+        await harness.OfferAsync(Guid.NewGuid());
+        var peer = harness.Peers.Created!;
+        Assert.Null(harness.Subscriber.NegotiatedVideoCodec);
+
+        peer.NegotiatedVideoCodec = VideoCodec.Av1;
+
+        Assert.Equal(VideoCodec.Av1, harness.Subscriber.NegotiatedVideoCodec);
+    }
+
+    [Fact]
     public async Task Publisher_ready_learns_the_publisher_and_answers_viewer_ready()
     {
         var harness = new Harness();
@@ -24,6 +39,25 @@ public sealed class VideoSubscriberTests
         var sent = Assert.Single(harness.Signaling.Sent);
         Assert.Equal(SignalingMessageTypes.ViewerReady, sent.Type);
         Assert.Equal(Publisher, sent.To);
+    }
+
+    [Fact]
+    public async Task Av1_decoder_initialization_failure_requests_h264_with_current_negotiation_id_once()
+    {
+        var harness = new Harness();
+        var negotiationId = Guid.NewGuid();
+        await harness.OfferAsync(negotiationId);
+
+        harness.Pipeline.Pipeline.Submit(new EncodedVideoSample(
+            new byte[8], TimeSpan.Zero, true, 1920, 1080) { Codec = VideoCodec.Av1 });
+        harness.Pipeline.Pipeline.Submit(new EncodedVideoSample(
+            new byte[8], TimeSpan.Zero, true, 1920, 1080) { Codec = VideoCodec.Av1 });
+
+        var sent = Assert.Single(harness.Signaling.Sent,
+            x => x.Type == SignalingMessageTypes.WebRtcRenegotiate);
+        var payload = JsonSerializer.SerializeToElement(sent.Payload);
+        Assert.Equal("av1_decoder_init_failed", payload.GetProperty("reason").GetString());
+        Assert.Equal(negotiationId, payload.GetProperty("negotiationId").GetGuid());
     }
 
     [Fact]
@@ -526,8 +560,12 @@ public sealed class VideoSubscriberTests
     {
         public string Name => "fake";
 
-        public VideoFrame? Decode(EncodedVideoSample sample) =>
-            new(sample.Width, sample.Height, new byte[16], sample.Timestamp);
+        public VideoFrame? Decode(EncodedVideoSample sample)
+        {
+            if (sample.Codec == VideoCodec.Av1)
+                throw new InvalidOperationException("Injected AV1 decoder initialization failure.");
+            return new(sample.Width, sample.Height, new byte[16], sample.Timestamp);
+        }
 
         public void Dispose()
         {
@@ -590,6 +628,8 @@ public sealed class VideoSubscriberTests
 
     private sealed class FakeViewerPeer(Exception? answerFailure) : IViewerPeerConnection
     {
+        public VideoCodec? NegotiatedVideoCodec { get; set; }
+
         public string? ReceivedOffer { get; private set; }
 
         public List<string> RemoteCandidates { get; } = [];

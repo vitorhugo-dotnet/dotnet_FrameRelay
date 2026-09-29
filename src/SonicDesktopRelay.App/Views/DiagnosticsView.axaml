@@ -74,6 +74,16 @@
             </Border>
 
             <Border Classes="card">
+                <StackPanel Spacing="{StaticResource SpaceSm}">
+                    <TextBlock Text="Codec negotiation" FontSize="{StaticResource FontSizeLg}"
+                               FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" />
+                    <SelectableTextBlock Text="{Binding CodecDiagnosticsText}" TextWrapping="Wrap"
+                                         FontFamily="Consolas, monospace" FontSize="{StaticResource FontSizeSm}"
+                                         Foreground="{StaticResource TextSecondaryBrush}" />
+                </StackPanel>
+            </Border>
+
+            <Border Classes="card">
                 <StackPanel Spacing="{StaticResource SpaceMd}">
                     <TextBlock Text="Connection health"
                                FontSize="{StaticResource FontSizeLg}" FontWeight="SemiBold"

@@ -12,18 +12,28 @@ public sealed class SipSorceryPeerConnection : IPeerConnection
 {
     /// <summary>H.264 over WebRTC is a dynamic payload type; 96 is the conventional first one.</summary>
     private const int H264PayloadId = 96;
+    private const int Av1PayloadId = 97;
 
     private readonly RTCPeerConnection _connection;
     private readonly uint _audioSsrc;
     private readonly uint _videoSsrc;
+    private readonly MediaStreamTrack _videoTrack;
+    private readonly VideoCodecCapabilities? _localVideoCapabilities;
     private readonly object _gate = new();
     private RtcTransportDiagnostics? _transportDiagnostics;
     private bool _negotiated;
+    private VideoCodec? _negotiatedVideoCodec;
+    private VideoCodecConstraints? _negotiatedVideoConstraints;
+    private int? _negotiatedVideoPayloadId;
     private bool _closed;
 
-    public SipSorceryPeerConnection(Guid participantId, IceServerSettings ice)
+    public SipSorceryPeerConnection(
+        Guid participantId,
+        IceServerSettings ice,
+        VideoCodecCapabilities? localVideoCapabilities = null)
     {
         ParticipantId = participantId;
+        _localVideoCapabilities = localVideoCapabilities;
 
         var configuration = new RTCConfiguration
         {
@@ -46,11 +56,9 @@ public sealed class SipSorceryPeerConnection : IPeerConnection
         // packetization-mode=1 is what every browser and native decoder expects for H.264 over
         // WebRTC; without it a viewer negotiates single-NAL mode and chokes on the first frame
         // larger than an MTU.
-        var videoTrack = new MediaStreamTrack(
-            new VideoFormat(VideoCodecsEnum.H264, H264PayloadId, 90_000, "packetization-mode=1"),
-            MediaStreamStatusEnum.SendOnly);
-        _videoSsrc = videoTrack.Ssrc;
-        _connection.addTrack(videoTrack);
+        _videoTrack = new MediaStreamTrack(CreateLocalVideoFormats(), MediaStreamStatusEnum.SendOnly);
+        _videoSsrc = _videoTrack.Ssrc;
+        _connection.addTrack(_videoTrack);
 
         _connection.onicecandidate += candidate =>
         {
@@ -98,6 +106,16 @@ public sealed class SipSorceryPeerConnection : IPeerConnection
         }
     }
 
+    public VideoCodec? NegotiatedVideoCodec
+    {
+        get { lock (_gate) return _negotiatedVideoCodec; }
+    }
+
+    public VideoCodecConstraints? NegotiatedVideoConstraints
+    {
+        get { lock (_gate) return _negotiatedVideoConstraints; }
+    }
+
     public async Task<string> CreateOfferAsync(CancellationToken ct)
     {
         var offer = _connection.createOffer();
@@ -105,14 +123,51 @@ public sealed class SipSorceryPeerConnection : IPeerConnection
         return offer.sdp;
     }
 
+    public async Task<string> CreateH264OfferAsync(CancellationToken ct)
+    {
+        lock (_gate)
+        {
+            if (_closed) throw new ObjectDisposedException(nameof(SipSorceryPeerConnection));
+            if (!_videoTrack.RestrictCapabilities(new VideoFormat(
+                    VideoCodecsEnum.H264, H264PayloadId, 90_000, "packetization-mode=1")))
+                throw new InvalidOperationException("H.264 was not present in the existing video track capabilities.");
+            _negotiatedVideoCodec = null;
+            _negotiatedVideoConstraints = null;
+            _negotiatedVideoPayloadId = null;
+        }
+
+        var offer = _connection.createOffer();
+        await _connection.setLocalDescription(offer).WaitAsync(ct);
+        return offer.sdp;
+    }
+
     public Task ApplyAnswerAsync(string sdp, CancellationToken ct)
     {
+        lock (_gate)
+        {
+            _negotiatedVideoCodec = null;
+            _negotiatedVideoPayloadId = null;
+        }
         var result = _connection.setRemoteDescription(
             new RTCSessionDescriptionInit { type = RTCSdpType.answer, sdp = sdp });
         if (result != SetDescriptionResultEnum.OK)
             throw new InvalidOperationException($"The viewer's answer was rejected: {result}.");
 
-        lock (_gate) _negotiated = true;
+        var negotiatedFormat = _connection.VideoStream?.GetSendingFormat().ToVideoFormat()
+                               ?? throw new InvalidOperationException("The answer did not negotiate a video format.");
+        var negotiatedCodec = MapCodec(negotiatedFormat.Codec);
+        if (negotiatedCodec is null)
+            throw new InvalidOperationException("The answer negotiated an unsupported video format.");
+        lock (_gate)
+        {
+            _negotiatedVideoCodec = negotiatedCodec;
+            _negotiatedVideoConstraints = negotiatedCodec == VideoCodec.Av1
+                && TryParseAv1Constraints(negotiatedFormat.Parameters, out var constraints)
+                    ? constraints
+                    : null;
+            _negotiatedVideoPayloadId = negotiatedFormat.FormatID;
+            _negotiated = true;
+        }
         return Task.CompletedTask;
     }
 
@@ -129,7 +184,7 @@ public sealed class SipSorceryPeerConnection : IPeerConnection
 
     public void SendVideo(EncodedVideoSample sample)
     {
-        if (!CanSendMedia()) return;
+        if (!CanSendMedia(sample.Codec)) return;
 
         try
         {
@@ -157,14 +212,70 @@ public sealed class SipSorceryPeerConnection : IPeerConnection
         }
     }
 
-    private bool CanSendMedia()
+    private bool CanSendMedia(VideoCodec? sampleCodec = null)
     {
         lock (_gate)
         {
             if (_closed || !_negotiated) return false;
+            if (sampleCodec is { } codec && (_negotiatedVideoCodec != codec || _negotiatedVideoPayloadId is null))
+                return false;
         }
 
         return _connection.connectionState == RTCPeerConnectionState.connected;
+    }
+
+    private List<VideoFormat> CreateLocalVideoFormats()
+    {
+        var formats = new List<VideoFormat>();
+        if (CanAdvertiseAv1(_localVideoCapabilities?.Encoders, _localVideoCapabilities?.EncoderConstraints)
+            && _localVideoCapabilities!.EncoderConstraints.TryGetValue(VideoCodec.Av1, out var av1))
+            formats.Add(CreateAv1Format(av1));
+        formats.Add(new VideoFormat(VideoCodecsEnum.H264, H264PayloadId, 90_000, "packetization-mode=1"));
+        return formats;
+    }
+
+    private static bool CanAdvertiseAv1(
+        IReadOnlySet<VideoCodec>? codecs,
+        IReadOnlyDictionary<VideoCodec, VideoCodecConstraints>? constraints) =>
+        codecs?.Contains(VideoCodec.Av1) == true
+        && constraints?.TryGetValue(VideoCodec.Av1, out var av1) == true
+        && av1.MaxLevel > 0
+        && string.Equals(av1.Profile, "0", StringComparison.Ordinal);
+
+    private static VideoCodec? MapCodec(VideoCodecsEnum codec) => codec switch
+    {
+        VideoCodecsEnum.H264 => VideoCodec.H264,
+        VideoCodecsEnum.AV1 => VideoCodec.Av1,
+        _ => null
+    };
+
+    private static VideoFormat CreateAv1Format(VideoCodecConstraints constraints) =>
+        new(VideoCodecsEnum.AV1, Av1PayloadId, 90_000,
+            $"profile={constraints.Profile};level-idx={constraints.MaxLevel};tier=0");
+
+    private static bool TryParseAv1Constraints(string? parameters, out VideoCodecConstraints constraints)
+    {
+        constraints = null!;
+        if (string.IsNullOrWhiteSpace(parameters)) return false;
+        var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var item in parameters.Split(';', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
+        {
+            var separator = item.IndexOf('=');
+            if (separator <= 0 || separator == item.Length - 1) return false;
+            var key = item[..separator].Trim();
+            var value = item[(separator + 1)..].Trim();
+            if (!values.TryAdd(key, value)) return false;
+        }
+        if (!values.TryGetValue("profile", out var profileText)
+            || !int.TryParse(profileText, out var profile) || profile is < 0 or > 2
+            || !values.TryGetValue("level-idx", out var levelText)
+            || !int.TryParse(levelText, out var level) || level is < 0 or > 31
+            || !values.TryGetValue("tier", out var tierText)
+            || !int.TryParse(tierText, out var tier) || tier is < 0 or > 1)
+            return false;
+
+        constraints = new VideoCodecConstraints(profile.ToString(), level);
+        return true;
     }
 
     private static bool IsExpectedTransportFailure(Exception e) =>
@@ -236,8 +347,13 @@ public sealed class SipSorceryPeerConnection : IPeerConnection
     }
 }
 
-public sealed class SipSorceryPeerConnectionFactory(IceServerSettings ice) : IPeerConnectionFactory
+public sealed class SipSorceryPeerConnectionFactory(
+    IceServerSettings ice,
+    VideoCodecCapabilities? localVideoCapabilities = null) : IPeerConnectionFactory
 {
     public IPeerConnection Create(Guid participantId, bool? forceRelay = null) =>
-        new SipSorceryPeerConnection(participantId, forceRelay is { } relay ? ice with { ForceRelay = relay } : ice);
+        new SipSorceryPeerConnection(
+            participantId,
+            forceRelay is { } relay ? ice with { ForceRelay = relay } : ice,
+            localVideoCapabilities);
 }

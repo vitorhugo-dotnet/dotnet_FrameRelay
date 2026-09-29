@@ -57,6 +57,15 @@ internal sealed class MediaFoundationAsyncMftPump(IMediaFoundationAsyncEventSour
         return true;
     }
 
+    internal bool TryTakeInputWhileDrainingOutputs(Action onOutputCredit)
+    {
+        ArgumentNullException.ThrowIfNull(onOutputCredit);
+        DrainAvailable();
+        while (TryTakeOutput())
+            onOutputCredit();
+        return TryTakeInput();
+    }
+
     internal bool TryTakeOutput()
     {
         ObjectDisposedException.ThrowIf(_disposed, this);

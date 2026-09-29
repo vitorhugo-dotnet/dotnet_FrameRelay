@@ -37,9 +37,26 @@ public sealed class MediaFoundationAsyncMftPumpTests
         Assert.False(pump.TryTakeOutput());
     }
 
+    [Fact]
+    public void Output_credit_is_serviced_while_waiting_for_a_later_input_credit()
+    {
+        var source = new FakeSource(MftAsyncSignal.HaveOutput);
+        using var pump = new MediaFoundationAsyncMftPump(source);
+        var servicedOutputs = 0;
+
+        Assert.False(pump.TryTakeInputWhileDrainingOutputs(() => servicedOutputs++));
+        Assert.Equal(1, servicedOutputs);
+
+        source.Enqueue(MftAsyncSignal.NeedInput);
+        Assert.True(pump.TryTakeInputWhileDrainingOutputs(() => servicedOutputs++));
+        Assert.Equal(1, servicedOutputs);
+    }
+
     private sealed class FakeSource(params MftAsyncSignal[] signals) : IMediaFoundationAsyncEventSource
     {
         private readonly Queue<MftAsyncSignal> _signals = new(signals);
+
+        internal void Enqueue(MftAsyncSignal signal) => _signals.Enqueue(signal);
 
         public bool TryRead(out MftAsyncSignal signal)
         {

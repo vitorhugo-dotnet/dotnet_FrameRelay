@@ -33,7 +33,15 @@ public interface IPeerConnection : IAsyncDisposable
 
     RtcTransportDiagnostics? TransportDiagnostics { get; }
 
+    /// <summary>The first compatible video format selected by the completed SDP exchange.</summary>
+    VideoCodec? NegotiatedVideoCodec => null;
+
+    VideoCodecConstraints? NegotiatedVideoConstraints => null;
+
     Task<string> CreateOfferAsync(CancellationToken ct);
+
+    Task<string> CreateH264OfferAsync(CancellationToken ct) =>
+        throw new NotSupportedException("This peer does not support same-connection H.264 renegotiation.");
 
     Task ApplyAnswerAsync(string sdp, CancellationToken ct);
 

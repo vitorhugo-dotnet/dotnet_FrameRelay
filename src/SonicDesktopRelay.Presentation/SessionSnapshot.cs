@@ -58,7 +58,17 @@ public sealed record SessionMediaMetrics(
     string? Codec = null,
     string? Transport = null,
     double? TargetVideoBitrateBitsPerSecond = null,
-    double? TargetVideoFramesPerSecond = null);
+    double? TargetVideoFramesPerSecond = null,
+    string? LocalSupportedCodecs = null,
+    string? ViewerSupportedCodecs = null,
+    string? CommonSupportedCodecs = null,
+    string? NegotiatedCodec = null,
+    string? CodecProfileLevel = null,
+    string? VideoImplementation = null,
+    string? VideoAcceleration = null,
+    string? CodecFallbackReason = null,
+    double? EncodeDurationMilliseconds = null,
+    double? DecodeDurationMilliseconds = null);
 
 public sealed record CreatedSession(Guid SessionId, string Code);
 

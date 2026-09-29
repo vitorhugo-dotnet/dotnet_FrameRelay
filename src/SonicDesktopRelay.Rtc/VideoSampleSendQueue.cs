@@ -99,6 +99,18 @@ internal sealed class VideoSampleSendQueue : IAsyncDisposable
         if (signal) SignalWorker();
     }
 
+    public void ResetForCodecTransition(bool requestKeyFrame = true)
+    {
+        lock (_gate)
+        {
+            if (_disposed) return;
+            if (_pending is not null) Interlocked.Increment(ref _dropped);
+            _pending = null;
+            _awaitingKeyFrame = true;
+        }
+        if (requestKeyFrame) _requestKeyFrame();
+    }
+
     private async Task RunAsync()
     {
         try

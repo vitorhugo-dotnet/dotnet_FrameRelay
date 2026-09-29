@@ -13,6 +13,7 @@ public sealed class SipSorceryViewerPeerConnection : IViewerPeerConnection
 {
     /// <summary>H.264 over WebRTC is a dynamic payload type; 96 is the conventional first one.</summary>
     private const int H264PayloadId = 96;
+    private const int Av1PayloadId = 97;
 
     /// <summary>The RTP clock for video is 90 kHz, fixed by RFC 3551.</summary>
     private const uint VideoClockRate = 90_000;
@@ -23,17 +24,25 @@ public sealed class SipSorceryViewerPeerConnection : IViewerPeerConnection
     private static readonly TimeSpan RecoveryPliInterval = TimeSpan.FromSeconds(1);
 
     private readonly RTCPeerConnection _connection;
+    private readonly VideoCodecCapabilities? _localVideoCapabilities;
     private readonly ReceivedAudioTimeline _audioTimeline = new();
     private readonly H264RtpAccessUnitAssembler _videoAssembler = new();
+    private readonly Av1RtpAccessUnitAssembler _av1VideoAssembler = new();
     private readonly ViewerVideoRecoveryGate _videoRecovery = new(RecoveryPliInterval);
     private readonly Lock _gate = new();
 
     private RtcTransportDiagnostics? _transportDiagnostics;
     private long _pliSent;
+    private VideoCodec? _negotiatedVideoCodec;
+    private int? _negotiatedVideoPayloadId;
+    private bool _negotiated;
     private bool _closed;
 
-    public SipSorceryViewerPeerConnection(IceServerSettings ice)
+    public SipSorceryViewerPeerConnection(
+        IceServerSettings ice,
+        VideoCodecCapabilities? localVideoCapabilities = null)
     {
+        _localVideoCapabilities = localVideoCapabilities;
         var configuration = new RTCConfiguration
         {
             iceServers = ice.Servers
@@ -53,9 +62,7 @@ public sealed class SipSorceryViewerPeerConnection : IViewerPeerConnection
 
         // The same format the publisher offers. packetization-mode=1 is not optional: without
         // it the answer negotiates single-NAL mode and the first frame over an MTU is lost.
-        var videoTrack = new MediaStreamTrack(
-            new VideoFormat(VideoCodecsEnum.H264, H264PayloadId, (int)VideoClockRate, "packetization-mode=1"),
-            MediaStreamStatusEnum.RecvOnly);
+        var videoTrack = new MediaStreamTrack(CreateLocalVideoFormats(), MediaStreamStatusEnum.RecvOnly);
         _connection.addTrack(videoTrack);
 
         // Use SIPSorcery's supported reorder buffer first. The integrity guard below remains
@@ -64,6 +71,7 @@ public sealed class SipSorceryViewerPeerConnection : IViewerPeerConnection
         _connection.VideoStream?.AddBuffer(VideoReorderWindow);
         _videoAssembler.AccessUnitDropped += OnAccessUnitDropped;
         _videoAssembler.RtpGapDetected += OnRtpGapDetected;
+        _av1VideoAssembler.AccessUnitDropped += OnAv1AccessUnitDropped;
 
         _connection.onicecandidate += candidate =>
         {
@@ -98,14 +106,43 @@ public sealed class SipSorceryViewerPeerConnection : IViewerPeerConnection
         {
             if (mediaType != SDPMediaTypesEnum.video || packet is null) return;
 
-            var payload = packet.GetPayloadBytes();
-            var accessUnit = _videoAssembler.Push(
-                packet.Header.SequenceNumber,
-                packet.Header.Timestamp,
-                packet.Header.MarkerBit != 0,
-                payload);
+            VideoCodec? negotiatedCodec;
+            int? negotiatedPayloadId;
+            lock (_gate)
+            {
+                if (_closed || !_negotiated) return;
+                negotiatedCodec = _negotiatedVideoCodec;
+                negotiatedPayloadId = _negotiatedVideoPayloadId;
+            }
+            if (negotiatedCodec is null || packet.Header.PayloadType != negotiatedPayloadId)
+                return;
 
-            if (accessUnit is not { } complete)
+            var payload = packet.GetPayloadBytes();
+            ReceivedVideoAccessUnit? assembled;
+            if (negotiatedCodec == VideoCodec.Av1)
+            {
+                var av1 = _av1VideoAssembler.Push(
+                    packet.Header.SequenceNumber,
+                    packet.Header.Timestamp,
+                    packet.Header.MarkerBit != 0,
+                    payload);
+                assembled = av1 is { } av1Complete
+                    ? new ReceivedVideoAccessUnit(av1Complete.Data, av1Complete.Timestamp, av1Complete.IsKeyFrame, av1Complete.HasVcl, VideoCodec.Av1)
+                    : null;
+            }
+            else
+            {
+                var h264 = _videoAssembler.Push(
+                    packet.Header.SequenceNumber,
+                    packet.Header.Timestamp,
+                    packet.Header.MarkerBit != 0,
+                    payload);
+                assembled = h264 is { } h264Complete
+                    ? new ReceivedVideoAccessUnit(h264Complete.Data, h264Complete.Timestamp, h264Complete.IsIdr, h264Complete.HasVcl, VideoCodec.H264)
+                    : null;
+            }
+
+            if (assembled is not { } complete)
                 return;
 
             bool recoveryWasActive;
@@ -114,7 +151,7 @@ public sealed class SipSorceryViewerPeerConnection : IViewerPeerConnection
             {
                 if (_closed) return;
                 recoveryWasActive = _videoRecovery.Active;
-                deliver = _videoRecovery.ShouldDeliver(complete.IsIdr, complete.HasVcl);
+                deliver = _videoRecovery.ShouldDeliver(complete.IsKeyFrame, complete.HasVcl);
             }
 
             if (!deliver)
@@ -127,7 +164,7 @@ public sealed class SipSorceryViewerPeerConnection : IViewerPeerConnection
                 return;
             }
 
-            if (recoveryWasActive && complete.IsIdr)
+            if (recoveryWasActive && complete.IsKeyFrame)
             {
                 EmitDiagnostic(
                     "viewer.video.recovery.completed",
@@ -141,9 +178,12 @@ public sealed class SipSorceryViewerPeerConnection : IViewerPeerConnection
             VideoSampleReceived?.Invoke(new EncodedVideoSample(
                 complete.Data,
                 TimeSpan.FromSeconds(complete.Timestamp / (double)VideoClockRate),
-                complete.IsIdr,
+                complete.IsKeyFrame,
                 Width: 0,
-                Height: 0));
+                Height: 0)
+            {
+                Codec = complete.Codec
+            });
         };
 
         _connection.onconnectionstatechange += state =>
@@ -183,10 +223,38 @@ public sealed class SipSorceryViewerPeerConnection : IViewerPeerConnection
         }
     }
 
-    public VideoReceptionSnapshot ReceptionSnapshot => _videoAssembler.TakeReceptionSnapshot();
+    public VideoCodec? NegotiatedVideoCodec
+    {
+        get { lock (_gate) return _negotiatedVideoCodec; }
+    }
+
+    public VideoReceptionSnapshot ReceptionSnapshot
+    {
+        get
+        {
+            lock (_gate)
+            {
+                if (_negotiatedVideoCodec == VideoCodec.Av1)
+                {
+                    return new VideoReceptionSnapshot(
+                        _av1VideoAssembler.RtpPacketsReceived,
+                        _av1VideoAssembler.RtpPacketsLost,
+                        _av1VideoAssembler.AccessUnitsReceived,
+                        _av1VideoAssembler.IncompleteAccessUnitsDropped);
+                }
+            }
+            return _videoAssembler.TakeReceptionSnapshot();
+        }
+    }
 
     public async Task<string> CreateAnswerAsync(string offerSdp, CancellationToken ct)
     {
+        lock (_gate)
+        {
+            _negotiated = false;
+            _negotiatedVideoCodec = null;
+            _negotiatedVideoPayloadId = null;
+        }
         EmitDiagnostic("viewer.remote_description.begin");
 
         SetDescriptionResultEnum result;
@@ -240,6 +308,17 @@ public sealed class SipSorceryViewerPeerConnection : IViewerPeerConnection
         try
         {
             await _connection.setLocalDescription(answer).WaitAsync(ct);
+            var negotiatedFormat = _connection.VideoStream?.GetSendingFormat().ToVideoFormat()
+                                   ?? throw new InvalidOperationException("The offer did not negotiate a video format.");
+            var negotiatedCodec = MapCodec(negotiatedFormat.Codec);
+            if (negotiatedCodec is null)
+                throw new InvalidOperationException("The offer negotiated an unsupported video format.");
+            lock (_gate)
+            {
+                _negotiatedVideoCodec = negotiatedCodec;
+                _negotiatedVideoPayloadId = negotiatedFormat.FormatID;
+                _negotiated = true;
+            }
             EmitDiagnostic("viewer.local_description.ok");
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -346,6 +425,45 @@ public sealed class SipSorceryViewerPeerConnection : IViewerPeerConnection
         RequestRecoveryKeyFrame($"rtp-{drop.Reason}");
     }
 
+    private void OnAv1AccessUnitDropped(Av1AccessUnitDrop drop)
+    {
+        EmitDiagnostic("viewer.rtp_access_unit.dropped", message: $"codec=av1 reason={drop.Reason} timestamp={drop.Timestamp}");
+        RequestRecoveryKeyFrame($"av1-rtp-{drop.Reason}");
+    }
+
+    private List<VideoFormat> CreateLocalVideoFormats()
+    {
+        var formats = new List<VideoFormat>();
+        if (CanAdvertiseAv1(_localVideoCapabilities?.Decoders, _localVideoCapabilities?.DecoderConstraints)
+            && _localVideoCapabilities!.DecoderConstraints.TryGetValue(VideoCodec.Av1, out var av1))
+            formats.Add(new VideoFormat(VideoCodecsEnum.AV1, Av1PayloadId, (int)VideoClockRate,
+                $"profile={av1.Profile};level-idx={av1.MaxLevel};tier=0"));
+        formats.Add(new VideoFormat(VideoCodecsEnum.H264, H264PayloadId, (int)VideoClockRate, "packetization-mode=1"));
+        return formats;
+    }
+
+    private static bool CanAdvertiseAv1(
+        IReadOnlySet<VideoCodec>? codecs,
+        IReadOnlyDictionary<VideoCodec, VideoCodecConstraints>? constraints) =>
+        codecs?.Contains(VideoCodec.Av1) == true
+        && constraints?.TryGetValue(VideoCodec.Av1, out var av1) == true
+        && av1.MaxLevel > 0
+        && string.Equals(av1.Profile, "0", StringComparison.Ordinal);
+
+    private static VideoCodec? MapCodec(VideoCodecsEnum codec) => codec switch
+    {
+        VideoCodecsEnum.H264 => VideoCodec.H264,
+        VideoCodecsEnum.AV1 => VideoCodec.Av1,
+        _ => null
+    };
+
+    private readonly record struct ReceivedVideoAccessUnit(
+        byte[] Data,
+        uint Timestamp,
+        bool IsKeyFrame,
+        bool HasVcl,
+        VideoCodec Codec);
+
     private void RequestRecoveryKeyFrame(string reason)
     {
         var now = DateTimeOffset.UtcNow;
@@ -447,8 +565,12 @@ public sealed class SipSorceryViewerPeerConnection : IViewerPeerConnection
     }
 }
 
-public sealed class SipSorceryViewerPeerConnectionFactory(IceServerSettings ice) : IViewerPeerConnectionFactory
+public sealed class SipSorceryViewerPeerConnectionFactory(
+    IceServerSettings ice,
+    VideoCodecCapabilities? localVideoCapabilities = null) : IViewerPeerConnectionFactory
 {
     public IViewerPeerConnection Create(bool? forceRelay = null) =>
-        new SipSorceryViewerPeerConnection(forceRelay is { } relay ? ice with { ForceRelay = relay } : ice);
+        new SipSorceryViewerPeerConnection(
+            forceRelay is { } relay ? ice with { ForceRelay = relay } : ice,
+            localVideoCapabilities);
 }

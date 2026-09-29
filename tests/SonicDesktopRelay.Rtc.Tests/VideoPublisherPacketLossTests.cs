@@ -211,6 +211,7 @@ public sealed class VideoPublisherPacketLossTests
         public RtcTransportDiagnostics? TransportDiagnostics => null;
 
         public Task<string> CreateOfferAsync(CancellationToken ct) => Task.FromResult("offer");
+        public Task<string> CreateH264OfferAsync(CancellationToken ct) => Task.FromResult("h264-offer");
         public Task ApplyAnswerAsync(string sdp, CancellationToken ct) => Task.CompletedTask;
         public Task AddIceCandidateAsync(string candidate, string? sdpMid, int? sdpMLineIndex, CancellationToken ct) => Task.CompletedTask;
         public void SendVideo(EncodedVideoSample sample) { }

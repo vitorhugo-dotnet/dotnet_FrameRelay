@@ -11,7 +11,8 @@ namespace SonicDesktopRelay.Media;
 public sealed class ScreenPublishPipeline : IAsyncDisposable
 {
     private readonly IScreenCaptureSource _capture;
-    private readonly IVideoEncoder _encoder;
+    private IVideoEncoder _encoder;
+    private readonly object _encoderGate = new();
     private readonly MediaSessionClock? _clock;
     private readonly TimeProvider _time;
     private readonly ILogger<ScreenPublishPipeline> _logger;
@@ -33,7 +34,8 @@ public sealed class ScreenPublishPipeline : IAsyncDisposable
     private readonly Dictionary<Guid, ReceptionEvidence> _receptionBySource = [];
     private readonly VideoFrameEncodeQueue _encodeQueue;
 
-    private bool _running;
+    private volatile bool _running;
+    private bool _captureStarted;
     private long _framesCaptured;
     private long _encodedAccessUnits;
     private long _keyframesProduced;
@@ -76,7 +78,23 @@ public sealed class ScreenPublishPipeline : IAsyncDisposable
 
     public VideoQuality Quality { get; private set; }
 
-    public string EncoderName => _encoder.Name;
+    /// <summary>The configured upper bound used when reception recovers.</summary>
+    public VideoQuality MaximumQuality => VideoQuality.InitialFor(_profile);
+
+    public string EncoderName { get { lock (_encoderGate) return _encoder.Name; } }
+
+    /// <summary>Atomically replaces the encoder at the serial encode boundary.</summary>
+    public void ReplaceEncoder(IVideoEncoder encoder)
+    {
+        ArgumentNullException.ThrowIfNull(encoder);
+        lock (_encoderGate)
+        {
+            var old = _encoder;
+            _encoder = encoder;
+            old.Dispose();
+            encoder.RequestKeyFrame();
+        }
+    }
 
     public long FramesCaptured => Interlocked.Read(ref _framesCaptured);
 
@@ -113,17 +131,41 @@ public sealed class ScreenPublishPipeline : IAsyncDisposable
     {
         if (_running) return;
         _capture.FrameCaptured += OnFrame;
-        await _capture.StartAsync(target, Quality, ct);
+        if (!_captureStarted)
+        {
+            try
+            {
+                await _capture.StartAsync(target, Quality, ct);
+                _captureStarted = true;
+            }
+            catch
+            {
+                _capture.FrameCaptured -= OnFrame;
+                throw;
+            }
+        }
         _running = true;
+    }
+
+    /// <summary>Reattaches frame processing after the encoder has been replaced.</summary>
+    public void ResumeAfterEncoderReplacement()
+    {
+        if (_running) return;
+        if (!_captureStarted)
+            throw new InvalidOperationException("Capture must be started before the pipeline can resume.");
+
+        _capture.FrameCaptured += OnFrame;
+        _running = true;
+        RequestKeyFrame(KeyFrameRequestReason.QualityChange);
     }
 
     public async Task StopAsync()
     {
-        var wasRunning = _running;
         _running = false;
-        if (wasRunning)
+        _capture.FrameCaptured -= OnFrame;
+        if (_captureStarted)
         {
-            _capture.FrameCaptured -= OnFrame;
+            _captureStarted = false;
             await _capture.StopAsync();
         }
 
@@ -167,7 +209,7 @@ public sealed class ScreenPublishPipeline : IAsyncDisposable
                 KeyFrameRequestSignals,
                 PliReceived,
                 EncodedAccessUnits);
-            _encoder.RequestKeyFrame();
+            lock (_encoderGate) _encoder.RequestKeyFrame();
         }
         catch
         {
@@ -504,7 +546,7 @@ public sealed class ScreenPublishPipeline : IAsyncDisposable
             var stampedFrame = _clock is null
                 ? frame
                 : new VideoFrame(frame.Width, frame.Height, frame.Bgra, _clock.Now);
-            sample = _encoder.Encode(stampedFrame, Quality);
+            lock (_encoderGate) sample = _encoder.Encode(stampedFrame, Quality);
         }
         catch (Exception e)
         {
@@ -641,6 +683,6 @@ public sealed class ScreenPublishPipeline : IAsyncDisposable
     {
         await StopAsync();
         await _capture.DisposeAsync();
-        _encoder.Dispose();
+        lock (_encoderGate) _encoder.Dispose();
     }
 }

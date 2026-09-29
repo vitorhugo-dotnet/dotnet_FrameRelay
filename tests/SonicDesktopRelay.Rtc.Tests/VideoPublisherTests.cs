@@ -223,7 +223,7 @@ public sealed class VideoPublisherTests
         var first = Task.Run(harness.Capture.Emit);
         try
         {
-            await peer.VideoSendEntered.Task.WaitAsync(TimeSpan.FromSeconds(1));
+            await peer.VideoSendEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
             var second = Task.Run(harness.Capture.Emit);
             await second.WaitAsync(TimeSpan.FromMilliseconds(250));

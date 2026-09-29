@@ -55,7 +55,7 @@ public sealed class NativeVideoDiagnosticsTests
     }
 
     [Fact]
-    public async Task Publish_host_metrics_project_the_instantiated_encoder_without_transport_secrets()
+    public async Task Publish_host_metrics_report_only_negotiated_codecs_without_transport_secrets()
     {
         if (!MediaFoundationH264Encoder.IsSupported) return;
 
@@ -70,8 +70,8 @@ public sealed class NativeVideoDiagnosticsTests
 
         var metrics = Assert.IsType<SonicDesktopRelay.Presentation.SessionMediaMetrics>(host.CurrentMetrics);
 
-        Assert.Equal("H264", metrics.Codec);
-        Assert.Equal("H264", metrics.NegotiatedCodec);
+        Assert.Null(metrics.Codec);
+        Assert.Null(metrics.NegotiatedCodec);
         Assert.Equal("H264", metrics.LocalSupportedCodecs);
         Assert.Equal(encoder.Diagnostics.TransformName, metrics.VideoImplementation);
         Assert.Equal(encoder.Diagnostics.Acceleration, metrics.VideoAcceleration);

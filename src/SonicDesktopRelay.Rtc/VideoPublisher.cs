@@ -246,6 +246,16 @@ public sealed class VideoPublisher(
             _codecFallbackReason = selection.Codec == VideoCodec.H264 ? selection.FallbackReason : null;
             if (_sessionCodec == VideoCodec.Av1 && selection.Codec == VideoCodec.H264)
                 await SwitchSessionToH264Async(ct);
+
+            if (_sessionCodec == VideoCodec.H264
+                && _peers.TryGetValue(participantId, out var answeredPeer)
+                && answeredPeer.NegotiatedVideoCodec == VideoCodec.H264)
+            {
+                if (_videoQueues.TryGetValue(participantId, out var videoQueue))
+                    videoQueue.ResetForCodecTransition();
+                else
+                    pipeline.RequestKeyFrame(KeyFrameRequestReason.QualityChange);
+            }
         }
         finally { _sessionGate.Release(); }
     }

@@ -52,6 +52,7 @@ public sealed class VideoPublisherTests
         await pipeline.StartAsync(Monitor, CancellationToken.None);
         await publisher.AddViewerAsync(ViewerA, CancellationToken.None);
         var peer = peers.Created.Single();
+        peer.GateVideoDuringH264Renegotiation = true;
         peer.NegotiatedVideoCodec = VideoCodec.Av1;
         peer.NegotiatedVideoConstraints = new VideoCodecConstraints("0", 4);
         var negotiationId = ReadNegotiationId(signaling.Sent.Last().Payload);
@@ -77,6 +78,18 @@ public sealed class VideoPublisherTests
         await recoveryTask.WaitAsync(TimeSpan.FromSeconds(1));
         capture.Emit();
         Assert.True(SpinWait.SpinUntil(() => h264.EncodeCalls == 1, TimeSpan.FromSeconds(1)));
+        await peer.VideoSendCompleted.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        Assert.Equal(1, peer.DroppedVideoSamples);
+        var keyFrameRequestsBeforeAnswer = h264.KeyFrameRequests;
+
+        peer.NegotiatedVideoCodec = VideoCodec.H264;
+        var h264NegotiationId = ReadNegotiationId(signaling.Sent.Last().Payload);
+        await publisher.HandleAsync(Frame(SignalingMessageTypes.WebRtcAnswer, ViewerA,
+            $$"""{"type":"answer","sdp":"h264-answer","negotiationId":"{{h264NegotiationId}}"}"""),
+            CancellationToken.None);
+        Assert.Equal(keyFrameRequestsBeforeAnswer + 1, h264.KeyFrameRequests);
+        Assert.Equal(1, publisher.ViewersAwaitingKeyFrame);
+        Assert.Equal("av1-runtime-encoder-failure", publisher.CodecDiagnostics.FallbackReason);
 
         audioCapture.Emit();
         Assert.True(SpinWait.SpinUntil(() => peer.SentAudioSamples.Count == 1, TimeSpan.FromSeconds(1)));
@@ -840,8 +853,11 @@ public sealed class VideoPublisherTests
         public string? AppliedAnswer { get; private set; }
         public bool Disposed { get; private set; }
         public int H264OfferCalls { get; private set; }
+        public int DroppedVideoSamples { get; private set; }
+        public bool GateVideoDuringH264Renegotiation { get; set; }
         public VideoCodec? NegotiatedVideoCodec { get; set; }
         public VideoCodecConstraints? NegotiatedVideoConstraints { get; set; }
+        private bool VideoNegotiated { get; set; } = true;
         public bool BlockApplyAnswer { get; set; }
         public List<string> OperationOrder { get; } = [];
         public TaskCompletionSource ApplyAnswerEntered { get; } =
@@ -877,6 +893,8 @@ public sealed class VideoPublisherTests
         public Task<string> CreateH264OfferAsync(CancellationToken ct)
         {
             H264OfferCalls++;
+            if (GateVideoDuringH264Renegotiation)
+                VideoNegotiated = false;
             OperationOrder.Add("create-h264-offer");
             return Task.FromResult("h264-offer-sdp");
         }
@@ -890,6 +908,7 @@ public sealed class VideoPublisherTests
                 await ApplyAnswerRelease.Task.WaitAsync(ct);
             }
             AppliedAnswer = sdp;
+            VideoNegotiated = true;
             OperationOrder.Add("apply-answer-complete");
         }
 
@@ -904,6 +923,12 @@ public sealed class VideoPublisherTests
         public void SendVideo(EncodedVideoSample sample)
         {
             DuringVideoSend?.Invoke();
+            if (!VideoNegotiated)
+            {
+                DroppedVideoSamples++;
+                VideoSendCompleted.TrySetResult();
+                return;
+            }
             if (BlockVideoSends)
             {
                 VideoSendEntered.TrySetResult();

@@ -131,7 +131,6 @@ public sealed class SipSorceryPeerConnection : IPeerConnection
             if (!_videoTrack.RestrictCapabilities(new VideoFormat(
                     VideoCodecsEnum.H264, H264PayloadId, 90_000, "packetization-mode=1")))
                 throw new InvalidOperationException("H.264 was not present in the existing video track capabilities.");
-            _negotiated = false;
             _negotiatedVideoCodec = null;
             _negotiatedVideoConstraints = null;
             _negotiatedVideoPayloadId = null;

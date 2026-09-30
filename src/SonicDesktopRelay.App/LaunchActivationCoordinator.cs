@@ -10,6 +10,7 @@ internal sealed class LaunchActivationCoordinator : IDisposable
 {
     private const string MutexPrefix = "Local\\FrameRelay.Activation.";
     private const string PipePrefix = "FrameRelay.Activation.";
+    private static readonly Encoding PipeEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
     private readonly Mutex _mutex;
     private readonly CancellationTokenSource _shutdown = new();
     private readonly ILogger _logger;
@@ -83,9 +84,11 @@ internal sealed class LaunchActivationCoordinator : IDisposable
                     NamedPipeServerStream.MaxAllowedServerInstances, PipeTransmissionMode.Byte,
                     PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
                 await pipe.WaitForConnectionAsync(ct);
-                using var reader = new StreamReader(pipe, Encoding.UTF8, false, 1024, leaveOpen: true);
-                await using var writer = new StreamWriter(pipe, Encoding.UTF8, 1024, leaveOpen: true) { AutoFlush = true };
+                using var reader = new StreamReader(pipe, PipeEncoding, true, 1024, leaveOpen: true);
+                // Read the request before creating an auto-flushing writer: flushing a UTF-8
+                // preamble on both ends before either reads can deadlock an unbuffered pipe.
                 var line = await reader.ReadLineAsync(ct);
+                await using var writer = new StreamWriter(pipe, PipeEncoding, 1024, leaveOpen: true) { AutoFlush = true };
                 if (LaunchActivationParser.TryParse(line, out var activation))
                 {
                     Dispatch(activation!);
@@ -126,8 +129,8 @@ internal sealed class LaunchActivationCoordinator : IDisposable
         try
         {
             await pipe.ConnectAsync(4000, ct);
-            using var reader = new StreamReader(pipe, Encoding.UTF8, false, 1024, leaveOpen: true);
-            await using var writer = new StreamWriter(pipe, Encoding.UTF8, 1024, leaveOpen: true) { AutoFlush = true };
+            using var reader = new StreamReader(pipe, PipeEncoding, true, 1024, leaveOpen: true);
+            await using var writer = new StreamWriter(pipe, PipeEncoding, 1024, leaveOpen: true) { AutoFlush = true };
             var mode = activation.Kind == LaunchActivationKind.Share ? "share" : "watch";
             await writer.WriteLineAsync($"framerelay://open/{mode}/{activation.Token}");
             return await reader.ReadLineAsync(ct) == "OK";

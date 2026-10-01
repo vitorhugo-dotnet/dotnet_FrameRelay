@@ -549,10 +549,10 @@ public sealed class ScreenPublishPipelineTests
 
         capture.Emit();
         time.Advance(TimeSpan.FromMilliseconds(40));
-        Assert.True(SpinWait.SpinUntil(() => pipeline.EncodedAccessUnits == 1, TimeSpan.FromSeconds(1)));
+        await WaitUntilAsync(() => pipeline.EncodedAccessUnits == 1);
         capture.Emit();
 
-        Assert.True(SpinWait.SpinUntil(() => pipeline.EncodedAccessUnits == 2, TimeSpan.FromSeconds(1)));
+        await WaitUntilAsync(() => pipeline.EncodedAccessUnits == 2);
         Assert.Equal(2, pipeline.FramesCaptured);
         Assert.Equal(2, pipeline.EncodedAccessUnits);
         Assert.Equal(2, pipeline.KeyframesProduced);
@@ -611,6 +611,17 @@ public sealed class ScreenPublishPipelineTests
         Assert.Equal(2, pipeline.KeyFrameRequestSignals);
         Assert.Equal(1, pipeline.CoalescedKeyFrameRequests);
         Assert.Equal(1, pipeline.PliReceived);
+    }
+
+    private static async Task WaitUntilAsync(Func<bool> condition)
+    {
+        var startedAt = TimeProvider.System.GetTimestamp();
+        var timeout = TimeSpan.FromSeconds(5);
+
+        while (!condition() && TimeProvider.System.GetElapsedTime(startedAt) < timeout)
+            await Task.Delay(10);
+
+        Assert.True(condition(), "Condition was not reached within 5 seconds.");
     }
 
     private sealed class FakeCapture : IScreenCaptureSource

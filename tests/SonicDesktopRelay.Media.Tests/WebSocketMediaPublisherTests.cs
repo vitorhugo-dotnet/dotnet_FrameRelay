@@ -60,10 +60,11 @@ public sealed class WebSocketMediaPublisherTests
     [Fact]
     public async Task Publisher_uploads_config_fresh_keyframe_and_opus_over_real_socket()
     {
-        using var budget = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var budget = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         using var listener = new TcpListener(IPAddress.Loopback, 0); listener.Start();
         var endpoint = (IPEndPoint)listener.LocalEndpoint;
         var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var firstKeyRequest = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var keyRequests = 0;
         var server = Task.Run(async () =>
         {
@@ -81,12 +82,13 @@ public sealed class WebSocketMediaPublisherTests
             var buffer = new byte[8192]; var authentication = await socket.ReceiveAsync(buffer.AsMemory(), budget.Token);
             Assert.Equal(WebSocketMessageType.Text, authentication.MessageType);
             using var grant = JsonDocument.Parse(buffer.AsMemory(0, authentication.Count)); Assert.Equal("test-grant", grant.RootElement.GetProperty("grant").GetString());
-            await Task.Delay(1100, budget.Token);
+            await firstKeyRequest.Task.WaitAsync(budget.Token);
+            await Task.Delay(1250, budget.Token);
             var request = MediaWireCodec.Encode(new MediaMessage(4, 0, 1, 0, 0, 0, ReadOnlyMemory<byte>.Empty));
             await socket.SendAsync(request.AsMemory(0, 20), WebSocketMessageType.Binary, false, budget.Token);
             await socket.SendAsync(request.AsMemory(20), WebSocketMessageType.Binary, true, budget.Token);
             var messages = new List<MediaMessage>();
-            for (var i = 0; i < 3; i++)
+            for (var i = 0; i < 4; i++)
             {
                 using var complete = new MemoryStream(); ValueWebSocketReceiveResult receive;
                 do { receive = await socket.ReceiveAsync(buffer.AsMemory(), budget.Token); complete.Write(buffer, 0, receive.Count); } while (!receive.EndOfMessage);
@@ -94,16 +96,27 @@ public sealed class WebSocketMediaPublisherTests
             }
             return messages;
         });
-        await using var publisher = new WebSocketMediaPublisher((_, _) => Task.FromResult(new MediaUploadGrant("test-grant", $"ws://127.0.0.1:{endpoint.Port}/ws/media")), () => { if (Interlocked.Increment(ref keyRequests) >= 2) ready.TrySetResult(); }, true);
+        await using var publisher = new WebSocketMediaPublisher((_, _) => Task.FromResult(new MediaUploadGrant("test-grant", $"ws://127.0.0.1:{endpoint.Port}/ws/media")), () =>
+        {
+            if (Interlocked.Increment(ref keyRequests) == 1) firstKeyRequest.TrySetResult();
+            else ready.TrySetResult();
+        }, true);
         await publisher.StartAsync(Guid.NewGuid(), budget.Token); await ready.Task.WaitAsync(budget.Token);
-        publisher.PublishVideo(new EncodedVideoSample(new byte[] { 0, 0, 0, 1, 0x67, 0x42, 0xe0, 0x1f, 0, 0, 0, 1, 0x68, 1, 0, 0, 0, 1, 0x65, 1 }, TimeSpan.FromSeconds(1), true, 640, 360, TimeSpan.FromMilliseconds(16.667)));
+        var keyframe = new byte[] { 0, 0, 0, 1, 0x09, 0xf0, 0, 0, 0, 1, 0x67, 0x42, 0xe0, 0x1f,
+            0, 0, 0, 1, 0x68, 1, 0, 0, 0, 1, 0x65, 1 };
+        publisher.PublishVideo(new EncodedVideoSample(keyframe, TimeSpan.FromSeconds(1), true, 640, 360, TimeSpan.FromMilliseconds(16.667)));
         publisher.PublishAudio(new EncodedAudioSample(new byte[] { 0xf8, 0xff, 0xfe }, 960, TimeSpan.FromMilliseconds(20), TimeSpan.FromSeconds(1)));
+        var keyframeWithoutParameterSets = new byte[] { 0, 0, 0, 1, 0x09, 0xf0, 0, 0, 0, 1, 0x65, 1 };
+        publisher.PublishVideo(new EncodedVideoSample(keyframeWithoutParameterSets, TimeSpan.FromSeconds(2), true, 640, 360, TimeSpan.FromMilliseconds(16.667)));
         var messages = await server.WaitAsync(budget.Token);
-        Assert.Equal(new byte[] { 1, 2, 3 }, messages.Select(x => x.Type).ToArray());
-        Assert.Equal(new uint[] { 0, 1, 2 }, messages.Select(x => x.Sequence).ToArray());
+        Assert.Equal(new byte[] { 1, 2, 3, 2 }, messages.Select(x => x.Type).ToArray());
+        Assert.Equal(new uint[] { 0, 1, 2, 3 }, messages.Select(x => x.Sequence).ToArray());
         using var config = JsonDocument.Parse(messages[0].Payload); Assert.Equal("avc1.42e01f", config.RootElement.GetProperty("video").GetProperty("codec").GetString());
         Assert.Equal(1, messages[1].Flags); Assert.Equal(1000000, messages[1].TimestampUs);
+        Assert.Equal(keyframe, messages[1].Payload.ToArray());
         Assert.Equal(new byte[] { 0xf8, 0xff, 0xfe }, messages[2].Payload.ToArray());
+        Assert.Equal(new byte[] { 0, 0, 0, 1, 0x09, 0xf0, 0, 0, 0, 1, 0x67, 0x42, 0xe0, 0x1f,
+            0, 0, 0, 1, 0x68, 1, 0, 0, 0, 1, 0x65, 1 }, messages[3].Payload.ToArray());
     }
     private static async Task AcceptGrantThenCloseAsync(TcpListener listener, CancellationToken ct)
     {

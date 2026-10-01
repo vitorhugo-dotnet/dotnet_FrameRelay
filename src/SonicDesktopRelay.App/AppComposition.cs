@@ -49,7 +49,7 @@ public sealed class AppComposition
         var connectionLogger = loggerFactory?.CreateLogger<SignalingConnection>();
         var runtimeLogger = loggerFactory?.CreateLogger<SessionRuntime>();
         PublishHost = new RtcVideoPublishHost(iceApi, () => current, loggerFactory,
-            new MediaRelayApiClient(sessionHttp), () => runtime?.Snapshot.SessionId,
+            new MediaRelayApiClient(sessionHttp),
             WebSocketMediaOptions.FromEnvironment(Environment.GetEnvironmentVariable));
         WatchHost = new RtcVideoWatchHost(iceApi, () => current, loggerFactory);
 

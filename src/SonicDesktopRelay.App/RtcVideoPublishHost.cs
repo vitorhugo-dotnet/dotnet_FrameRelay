@@ -21,7 +21,7 @@ public sealed class RtcVideoPublishHost(
     IceApiClient iceApi,
     Func<ISignalingConnection?> signaling,
     ILoggerFactory? loggerFactory = null,
-    MediaRelayApiClient? mediaApi = null, Func<Guid?>? mediaSession = null, WebSocketMediaOptions? mediaOptions = null) : IVideoPublishHost
+    MediaRelayApiClient? mediaApi = null, WebSocketMediaOptions? mediaOptions = null) : IVideoPublishHost
 {
     private readonly ILogger<RtcVideoPublishHost> _logger =
         loggerFactory?.CreateLogger<RtcVideoPublishHost>() ?? NullLogger<RtcVideoPublishHost>.Instance;
@@ -211,13 +211,10 @@ public sealed class RtcVideoPublishHost(
 
     public event Action<string>? CaptureTargetClosed;
 
-    public Task StartAsync(CaptureTarget target, VideoPublishProfile profile, CancellationToken ct) =>
-        StartCoreAsync(target, profile, ct);
+    public Task StartAsync(Guid sessionId, CaptureTarget target, VideoPublishProfile profile, CancellationToken ct) =>
+        StartCoreAsync(sessionId, target, profile, ct);
 
-    public async Task StartAsync(MonitorInfo monitor, VideoPublishProfile profile, CancellationToken ct)
-        => await StartCoreAsync(new CaptureTarget.Monitor(monitor), profile, ct);
-
-    private async Task StartCoreAsync(CaptureTarget target, VideoPublishProfile profile, CancellationToken ct)
+    private async Task StartCoreAsync(Guid sessionId, CaptureTarget target, VideoPublishProfile profile, CancellationToken ct)
     {
         await _gate.WaitAsync(ct);
         try
@@ -351,7 +348,7 @@ public sealed class RtcVideoPublishHost(
                 _ => VideoDiagnosticsChanged?.Invoke(), null,
                 TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
 
-            if (mediaOptions?.Enabled == true && mediaApi is not null && mediaSession?.Invoke() is { } mediaSessionId)
+            if (mediaOptions?.Enabled == true && mediaApi is not null)
             {
                 try
                 {
@@ -373,7 +370,7 @@ public sealed class RtcVideoPublishHost(
                         _activityH264.SampleEncoded += OnMediaVideo;
                         _activityH264.Failed += OnActivityEncodeFailed;
                     }
-                    await _mediaUpload.StartAsync(mediaSessionId, ct);
+                    await _mediaUpload.StartAsync(sessionId, ct);
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {

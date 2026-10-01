@@ -1,3 +1,4 @@
+using SonicDesktopRelay.Media.WebSocket;
 using System.Runtime.Versioning;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -19,7 +20,8 @@ namespace SonicDesktopRelay.App;
 public sealed class RtcVideoPublishHost(
     IceApiClient iceApi,
     Func<ISignalingConnection?> signaling,
-    ILoggerFactory? loggerFactory = null) : IVideoPublishHost
+    ILoggerFactory? loggerFactory = null,
+    MediaRelayApiClient? mediaApi = null, Func<Guid?>? mediaSession = null, WebSocketMediaOptions? mediaOptions = null) : IVideoPublishHost
 {
     private readonly ILogger<RtcVideoPublishHost> _logger =
         loggerFactory?.CreateLogger<RtcVideoPublishHost>() ?? NullLogger<RtcVideoPublishHost>.Instance;
@@ -29,6 +31,8 @@ public sealed class RtcVideoPublishHost(
     private static readonly IReadOnlyDictionary<Guid, RtcTransportDiagnostics> EmptyTransportDiagnostics =
         new Dictionary<Guid, RtcTransportDiagnostics>();
 
+    private WebSocketMediaPublisher? _mediaUpload;
+    private ActivityH264Output? _activityH264;
     private ScreenPublishPipeline? _pipeline;
     private IVideoEncoder? _encoder;
     private VideoCodecCapabilities? _publisherVideoCapabilities;
@@ -347,6 +351,36 @@ public sealed class RtcVideoPublishHost(
                 _ => VideoDiagnosticsChanged?.Invoke(), null,
                 TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
 
+            if (mediaOptions?.Enabled == true && mediaApi is not null && mediaSession?.Invoke() is { } mediaSessionId)
+            {
+                try
+                {
+                    _mediaUpload = new WebSocketMediaPublisher(async (id, token) =>
+                    {
+                        var grant = await mediaApi.CreateUploadGrantAsync(id, token);
+                        return new MediaUploadGrant(grant.Grant, grant.MediaUrl);
+                    }, () =>
+                    {
+                        if (_encoder is MediaFoundationH264Encoder) pipeline.RequestKeyFrame(KeyFrameRequestReason.Manual);
+                        else _activityH264?.RequestKeyFrame();
+                    }, audioPipeline is not null, loggerFactory?.CreateLogger<WebSocketMediaPublisher>());
+                    pipeline.SampleEncoded += OnMediaVideo;
+                    if (audioPipeline is not null) audioPipeline.SampleEncoded += OnMediaAudio;
+                    if (encoder is MediaFoundationAv1Encoder)
+                    {
+                        _activityH264 = new ActivityH264Output(capture, new MediaFoundationH264Encoder(), clock,
+                            () => pipeline.Quality, () => _encoder is not MediaFoundationH264Encoder);
+                        _activityH264.SampleEncoded += OnMediaVideo;
+                        _activityH264.Failed += OnActivityEncodeFailed;
+                    }
+                    await _mediaUpload.StartAsync(mediaSessionId, ct);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    _logger.LogWarning("Optional Discord media output failed to initialize: {ErrorType}", ex.GetType().Name);
+                    await DisposeMediaUploadAsync();
+                }
+            }
             // Install the publisher failure path before capture can emit the first frame.
             await pipeline.StartAsync(target, ct);
 
@@ -561,8 +595,24 @@ public sealed class RtcVideoPublishHost(
         return new IceServerSettings(servers, ForceRelay: false);
     }
 
+    private void OnMediaVideo(EncodedVideoSample sample) => _mediaUpload?.PublishVideo(sample);
+    private void OnMediaAudio(EncodedAudioSample sample) => _mediaUpload?.PublishAudio(sample);
+    private void OnActivityEncodeFailed(Exception error) => _logger.LogWarning("Independent Activity encoder stopped: {ErrorType}", error.GetType().Name);
+    private async Task DisposeMediaUploadAsync()
+    {
+        if (_pipeline is not null) _pipeline.SampleEncoded -= OnMediaVideo;
+        if (_audioPipeline is not null) _audioPipeline.SampleEncoded -= OnMediaAudio;
+        var upload = _mediaUpload; _mediaUpload = null;
+        if (upload is not null) await upload.DisposeAsync();
+        if (_activityH264 is not null)
+        {
+            _activityH264.SampleEncoded -= OnMediaVideo; _activityH264.Failed -= OnActivityEncodeFailed;
+            await _activityH264.DisposeAsync(); _activityH264 = null;
+        }
+    }
     private async Task DisposeStackAsync()
     {
+        await DisposeMediaUploadAsync();
         if (_diagnosticsTimer is not null)
         {
             await _diagnosticsTimer.DisposeAsync();

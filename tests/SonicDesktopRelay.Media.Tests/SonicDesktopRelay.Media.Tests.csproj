@@ -23,4 +23,5 @@
     <ProjectReference Include="..\..\src\SonicDesktopRelay.Media\SonicDesktopRelay.Media.csproj" />
   </ItemGroup>
 
+  <ItemGroup><Content Include="../../docs/protocol/discord-media-v1-vectors.json" Link="discord-media-v1-vectors.json" CopyToOutputDirectory="PreserveNewest" /></ItemGroup>
 </Project>

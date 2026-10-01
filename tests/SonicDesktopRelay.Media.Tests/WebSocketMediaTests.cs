@@ -5,8 +5,9 @@ namespace SonicDesktopRelay.Media.Tests;
 public sealed class WebSocketMediaTests
 {
     [Theory]
-    [InlineData(null, false)] [InlineData("false", false)] [InlineData("1", false)] [InlineData("true", true)]
-    public void Publisher_is_explicit_opt_in(string? value, bool expected) =>
+    [InlineData(null, true)] [InlineData("false", false)] [InlineData("1", false)]
+    [InlineData("", false)] [InlineData("true", true)] [InlineData("TRUE", true)]
+    public void Publisher_defaults_on_and_respects_environment_override(string? value, bool expected) =>
         Assert.Equal(expected, WebSocketMediaOptions.FromEnvironment(_ => value).Enabled);
 
     [Fact]

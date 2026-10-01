@@ -167,10 +167,10 @@ FrameRelay registers `framerelay://open/share/{token}` and `framerelay://open/wa
 
 ### Discord Activity media option
 
-`FRAMERELAY_WEBSOCKET_MEDIA_ENABLED` is a process environment variable, disabled unless its value parses as `true`. Set it before launching FrameRelay and restart the app. It is independent of preferences and does not load a desktop `.env` file.
+WebSocket media publishing is enabled by default when `FRAMERELAY_WEBSOCKET_MEDIA_ENABLED` is not set. Set this process environment variable to `false` to disable it, or `true` to enable it explicitly, then restart FrameRelay. Invalid values disable publishing. It is independent of preferences and does not load a desktop `.env` file.
 
 The optional upload sends existing encoded H.264/Opus samples to a separate WebSocket forwarding service using a short-lived, source-bound RelayControl grant. When RTC uses AV1, an independent H.264 branch owns copied capture buffers; it does not downgrade RTC. Upload failures retry with bounded backoff and do not stop the existing RTC media stack.
 
 RelayControl must enable `FeatureManagement__DiscordWebSocketMedia` (false by default), deploy its isolated `media-relay` container and set `MediaRelay__PublicBaseUrl` plus a distinct internal `MediaRelay__ServiceToken`. The bot does not need that service secret. Discord Activity URL Mapping must include `/media` to the relay and `/relay` to the API. See [wire protocol](docs/protocol/discord-media-v1.md).
 
-Local validation checks copies, queue bounds, default-off configuration and RTC pipeline regressions. Browser fixtures in the Activity/API repositories verify actual decoded pixels and PCM over the forwarding service. A live Discord/Windows publisher test is still required before rollout.
+Local validation checks copies, queue bounds, default-on configuration and explicit disable overrides and RTC pipeline regressions. Browser fixtures in the Activity/API repositories verify actual decoded pixels and PCM over the forwarding service. A live Discord/Windows publisher test is still required before rollout.

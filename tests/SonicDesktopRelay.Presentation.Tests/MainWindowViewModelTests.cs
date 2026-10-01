@@ -144,7 +144,7 @@ public sealed class MainWindowViewModelTests
         Assert.Equal("---", viewModel.VideoFrameRateText);
         Assert.Equal("---", viewModel.LatencyText);
         Assert.Equal("---", viewModel.CodecText);
-        Assert.Equal("---", viewModel.TransportText);
+        Assert.Equal("Waiting for viewer", viewModel.TransportText);
 
         viewModel.Apply(SessionSnapshot.Idle);
         Assert.False(viewModel.HasViewerCount);

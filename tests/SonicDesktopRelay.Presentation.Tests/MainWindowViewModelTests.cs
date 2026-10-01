@@ -190,6 +190,31 @@ public sealed class MainWindowViewModelTests
     }
 
     [Fact]
+    public void Sharing_summary_uses_effective_resolution_and_encoder_when_live_metrics_are_partial()
+    {
+        var viewModel = new MainWindowViewModel();
+        viewModel.Apply(new SessionSnapshot(SessionPhase.Sharing, "AB12CD", Guid.NewGuid(), 0,
+            SignalingState.Connected, null, EncoderName: "h264_nvenc", VideoHeight: 1080,
+            Metrics: new SessionMediaMetrics(TargetVideoBitrateBitsPerSecond: 4_000_000,
+                TargetVideoFramesPerSecond: 30)));
+
+        Assert.Equal("1080p", viewModel.ResolutionText);
+        Assert.Equal("h264_nvenc", viewModel.CodecText);
+        Assert.Equal("Waiting for viewer", viewModel.TransportText);
+        Assert.Equal("---", viewModel.LatencyText);
+    }
+
+    [Fact]
+    public void Sharing_transport_reports_connecting_when_viewers_are_present_without_transport_metrics()
+    {
+        var viewModel = new MainWindowViewModel();
+        viewModel.Apply(new SessionSnapshot(SessionPhase.Sharing, "AB12CD", Guid.NewGuid(), 1,
+            SignalingState.Connected, null));
+
+        Assert.Equal("Connecting", viewModel.TransportText);
+    }
+
+    [Fact]
     public void A_viewer_negotiation_failure_replaces_the_generic_waiting_message()
     {
         var viewModel = new MainWindowViewModel();

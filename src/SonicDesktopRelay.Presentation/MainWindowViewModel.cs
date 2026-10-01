@@ -55,7 +55,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         HasViewerCount ? _snapshot.ViewerCount.ToString() : "---";
 
     public string ResolutionText => _snapshot.Metrics is { Width: > 0, Height: > 0 } metrics
-        ? $"{metrics.Width} × {metrics.Height}" : "---";
+        ? $"{metrics.Width} × {metrics.Height}"
+        : _snapshot.Phase == SessionPhase.Sharing && _snapshot.VideoHeight > 0
+            ? $"{_snapshot.VideoHeight}p" : "---";
 
     public string VideoBitrateText => _snapshot.Metrics?.VideoBitrateBitsPerSecond is { } bitrate
         ? FormatBitrate(bitrate)
@@ -71,11 +73,14 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         && double.IsFinite(latency) && latency >= 0
             ? $"{latency.ToString("0", CultureInfo.InvariantCulture)} ms" : "---";
 
-    public string CodecText => string.IsNullOrWhiteSpace(_snapshot.Metrics?.Codec)
-        ? "---" : _snapshot.Metrics.Codec;
+    public string CodecText => FirstAvailable(_snapshot.Metrics?.Codec,
+        _snapshot.EncoderName, _snapshot.DecoderName) ?? "---";
 
     public string TransportText => string.IsNullOrWhiteSpace(_snapshot.Metrics?.Transport)
-        ? "---" : _snapshot.Metrics.Transport;
+        ? _snapshot.Phase == SessionPhase.Sharing
+            ? _snapshot.ViewerCount == 0 ? "Waiting for viewer" : "Connecting"
+            : "---"
+        : _snapshot.Metrics.Transport;
 
     public string StatusText => _snapshot.Phase switch
     {
@@ -146,6 +151,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     private static string FormatFrameRate(double value, string suffix = "") =>
         !double.IsFinite(value) || value < 0 ? "---"
         : $"{value.ToString("0.0", CultureInfo.InvariantCulture)} fps{suffix}";
+
+    private static string? FirstAvailable(params string?[] values) =>
+        values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
 
     private void Raise([CallerMemberName] string? property = null) =>
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(property));

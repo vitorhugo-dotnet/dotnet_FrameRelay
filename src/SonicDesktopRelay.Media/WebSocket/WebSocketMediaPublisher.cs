@@ -60,12 +60,7 @@ public sealed class WebSocketMediaPublisher(Func<Guid, CancellationToken, Task<M
                 }
                 var data = sample.Data;
                 if (sample.IsKeyFrame && sps is not null && pps is not null)
-                {
-                    var complete = new byte[8 + sps.Length + pps.Length + data.Length];
-                    new byte[] { 0, 0, 0, 1 }.CopyTo(complete, 0); sps.CopyTo(complete, 4);
-                    new byte[] { 0, 0, 0, 1 }.CopyTo(complete, 4 + sps.Length); pps.CopyTo(complete, 8 + sps.Length);
-                    data.Span.CopyTo(complete.AsSpan(8 + sps.Length + pps.Length)); data = complete;
-                }
+                    data = EnsureParameterSets(data, sps, pps);
                 Enqueue(2, sample.IsKeyFrame ? (ushort)1 : (ushort)0, sample.Timestamp, sample.Duration, data);
             }
         }
@@ -166,6 +161,57 @@ public sealed class WebSocketMediaPublisher(Func<Guid, CancellationToken, Task<M
         }
         if (start >= 0 && start < data.Length && (data[start] & 31) is 7 or 8) output.Add(data[start..].ToArray());
         return output;
+    }
+
+    private static ReadOnlyMemory<byte> EnsureParameterSets(ReadOnlyMemory<byte> accessUnit, byte[] sps, byte[] pps)
+    {
+        var data = accessUnit.Span;
+        var hasSps = false; var hasPps = false;
+        var firstPpsStart = -1; var lastSpsEnd = -1; var firstAudEnd = -1;
+        var nalStart = -1; var nalStartCode = -1; var offset = 0;
+        while (TryFindStartCode(data, offset, out var start, out var startSize))
+        {
+            if (nalStart >= 0 && nalStart < start)
+            {
+                var type = data[nalStart] & 31;
+                if (type == 7) { hasSps = true; lastSpsEnd = start; }
+                else if (type == 8) { hasPps = true; if (firstPpsStart < 0) firstPpsStart = nalStartCode; }
+                else if (type == 9 && firstAudEnd < 0) firstAudEnd = start;
+            }
+            nalStartCode = start; nalStart = start + startSize; offset = nalStart;
+        }
+        if (nalStart >= 0 && nalStart < data.Length)
+        {
+            var type = data[nalStart] & 31;
+            if (type == 7) { hasSps = true; lastSpsEnd = data.Length; }
+            else if (type == 8) { hasPps = true; if (firstPpsStart < 0) firstPpsStart = nalStartCode; }
+            else if (type == 9 && firstAudEnd < 0) firstAudEnd = data.Length;
+        }
+        if (hasSps && hasPps) return accessUnit;
+
+        var insertAt = !hasSps && hasPps && firstPpsStart >= 0 ? firstPpsStart
+            : hasSps && !hasPps && lastSpsEnd >= 0 ? lastSpsEnd
+            : firstAudEnd >= 0 ? firstAudEnd : 0;
+        var spsPrefix = hasSps ? 0 : 4 + sps.Length;
+        var ppsPrefix = hasPps ? 0 : 4 + pps.Length;
+        var complete = new byte[data.Length + spsPrefix + ppsPrefix];
+        data[..insertAt].CopyTo(complete);
+        var writeAt = insertAt;
+        if (!hasSps) { new byte[] { 0, 0, 0, 1 }.CopyTo(complete, writeAt); sps.CopyTo(complete, writeAt + 4); writeAt += spsPrefix; }
+        if (!hasPps) { new byte[] { 0, 0, 0, 1 }.CopyTo(complete, writeAt); pps.CopyTo(complete, writeAt + 4); writeAt += ppsPrefix; }
+        data[insertAt..].CopyTo(complete.AsSpan(writeAt));
+        return complete;
+    }
+
+    private static bool TryFindStartCode(ReadOnlySpan<byte> data, int offset, out int start, out int size)
+    {
+        for (var i = offset; i + 3 <= data.Length; i++)
+        {
+            if (data[i] != 0 || data[i + 1] != 0) continue;
+            if (data[i + 2] == 1) { start = i; size = 3; return true; }
+            if (i + 4 <= data.Length && data[i + 2] == 0 && data[i + 3] == 1) { start = i; size = 4; return true; }
+        }
+        start = size = 0; return false;
     }
     public async ValueTask DisposeAsync()
     {

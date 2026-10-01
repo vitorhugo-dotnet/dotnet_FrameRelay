@@ -297,6 +297,7 @@ public sealed class SessionRuntimeTests
 
         await runtime.StartSharingAsync(monitor, 3, CancellationToken.None);
 
+        Assert.Equal(SessionId, host.StartedSessionId);
         Assert.Equal(monitor, host.StartedOn);
         Assert.Equal(SessionPhase.Sharing, runtime.Snapshot.Phase);
     }
@@ -733,6 +734,8 @@ public sealed class SessionRuntimeTests
 
         public VideoPublishProfile? StartedProfile { get; private set; }
 
+        public Guid? StartedSessionId { get; private set; }
+
         public bool Stopped { get; private set; }
 
         public string? EncoderName { get; init; }
@@ -756,9 +759,10 @@ public sealed class SessionRuntimeTests
             return Task.CompletedTask;
         }
 
-        public Task StartAsync(CaptureTarget target, VideoPublishProfile profile, CancellationToken ct)
+        public Task StartAsync(Guid sessionId, CaptureTarget target, VideoPublishProfile profile, CancellationToken ct)
         {
             if (StartFailure is not null) throw new InvalidOperationException(StartFailure);
+            StartedSessionId = sessionId;
             StartedTarget = target;
             if (target is CaptureTarget.Monitor monitor) StartedOn = monitor.Info;
             StartedProfile = profile;

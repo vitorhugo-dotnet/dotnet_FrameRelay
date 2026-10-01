@@ -106,7 +106,7 @@ public sealed class SessionRuntime(
 
                 try
                 {
-                    await publishHost.StartAsync(target, profile, ct);
+                    await publishHost.StartAsync(created.SessionId, target, profile, ct);
                 }
                 catch (Exception e) when (e is InvalidOperationException or PlatformNotSupportedException)
                 {

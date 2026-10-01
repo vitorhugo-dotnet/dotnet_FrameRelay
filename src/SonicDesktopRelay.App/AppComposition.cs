@@ -1,3 +1,4 @@
+using SonicDesktopRelay.Media.WebSocket;
 using System.Net;
 using System.Runtime.Versioning;
 using Microsoft.Extensions.Logging;
@@ -47,7 +48,9 @@ public sealed class AppComposition
         var loggerFactory = FrameRelayLogging.Current?.LoggerFactory;
         var connectionLogger = loggerFactory?.CreateLogger<SignalingConnection>();
         var runtimeLogger = loggerFactory?.CreateLogger<SessionRuntime>();
-        PublishHost = new RtcVideoPublishHost(iceApi, () => current, loggerFactory);
+        PublishHost = new RtcVideoPublishHost(iceApi, () => current, loggerFactory,
+            new MediaRelayApiClient(sessionHttp),
+            WebSocketMediaOptions.FromEnvironment(Environment.GetEnvironmentVariable));
         WatchHost = new RtcVideoWatchHost(iceApi, () => current, loggerFactory);
 
         Runtime = new SessionRuntime(

@@ -102,7 +102,7 @@ public interface IVideoPublishHost : IAsyncDisposable
 
     string? EncoderName { get; }
 
-    Task StartAsync(CaptureTarget target, VideoPublishProfile profile, CancellationToken ct);
+    Task StartAsync(Guid sessionId, CaptureTarget target, VideoPublishProfile profile, CancellationToken ct);
 
     Task StopAsync();
 

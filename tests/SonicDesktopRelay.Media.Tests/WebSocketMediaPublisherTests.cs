@@ -11,6 +11,53 @@ namespace SonicDesktopRelay.Media.Tests;
 public sealed class WebSocketMediaPublisherTests
 {
     [Fact]
+    public async Task Publisher_keeps_exponential_backoff_when_socket_closes_before_media_transfer()
+    {
+        using var budget = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var endpoint = (IPEndPoint)listener.LocalEndpoint;
+        var waits = new List<TimeSpan>();
+        var waitsGate = new object();
+        var threeRetries = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var server = Task.Run(async () =>
+        {
+            for (var i = 0; i < 3; i++)
+                await AcceptGrantThenCloseAsync(listener, budget.Token);
+        });
+
+        await using var publisher = new WebSocketMediaPublisher(
+            (_, _) => Task.FromResult(new MediaUploadGrant(
+                "test-grant", $"ws://127.0.0.1:{endpoint.Port}/ws/media")),
+            () => { },
+            false,
+            retryWait: (delay, ct) =>
+            {
+                lock (waitsGate)
+                {
+                    waits.Add(delay);
+                    if (waits.Count >= 3)
+                    {
+                        threeRetries.TrySetResult();
+                        return Task.Delay(Timeout.InfiniteTimeSpan, ct);
+                    }
+                }
+
+                return Task.CompletedTask;
+            });
+
+        await publisher.StartAsync(Guid.NewGuid(), budget.Token);
+        await threeRetries.Task.WaitAsync(budget.Token);
+        await server.WaitAsync(budget.Token);
+
+        lock (waitsGate)
+            Assert.Equal(
+                new[] { TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(4) },
+                waits.Take(3).ToArray());
+    }
+
+    [Fact]
     public async Task Publisher_uploads_config_fresh_keyframe_and_opus_over_real_socket()
     {
         using var budget = new CancellationTokenSource(TimeSpan.FromSeconds(5));
@@ -58,4 +105,37 @@ public sealed class WebSocketMediaPublisherTests
         Assert.Equal(1, messages[1].Flags); Assert.Equal(1000000, messages[1].TimestampUs);
         Assert.Equal(new byte[] { 0xf8, 0xff, 0xfe }, messages[2].Payload.ToArray());
     }
+    private static async Task AcceptGrantThenCloseAsync(TcpListener listener, CancellationToken ct)
+    {
+        using var tcp = await listener.AcceptTcpClientAsync(ct);
+        using var stream = tcp.GetStream();
+        var header = new StringBuilder();
+        var one = new byte[1];
+        while (!header.ToString().EndsWith("\r\n\r\n", StringComparison.Ordinal))
+        {
+            Assert.True(header.Length < 8192);
+            Assert.Equal(1, await stream.ReadAsync(one, ct));
+            header.Append((char)one[0]);
+        }
+
+        var key = header.ToString().Split("\r\n")
+            .Single(x => x.StartsWith("Sec-WebSocket-Key:", StringComparison.OrdinalIgnoreCase))
+            .Split(':', 2)[1].Trim();
+        var accept = Convert.ToBase64String(SHA1.HashData(
+            Encoding.ASCII.GetBytes(key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11")));
+        await stream.WriteAsync(Encoding.ASCII.GetBytes(
+            $"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\nSec-WebSocket-Protocol: framerelay-media-v1\r\n\r\n"), ct);
+
+        using var socket = System.Net.WebSockets.WebSocket.CreateFromStream(
+            stream, true, "framerelay-media-v1", TimeSpan.FromSeconds(30));
+        var buffer = new byte[1024];
+        var authentication = await socket.ReceiveAsync(buffer.AsMemory(), ct);
+        Assert.Equal(WebSocketMessageType.Text, authentication.MessageType);
+        using var grant = JsonDocument.Parse(buffer.AsMemory(0, authentication.Count));
+        Assert.Equal("test-grant", grant.RootElement.GetProperty("grant").GetString());
+
+        await socket.CloseOutputAsync(
+            WebSocketCloseStatus.PolicyViolation, "grant rejected", ct);
+    }
+
 }

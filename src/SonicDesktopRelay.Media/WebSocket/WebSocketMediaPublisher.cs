@@ -8,9 +8,11 @@ namespace SonicDesktopRelay.Media.WebSocket;
 public sealed record MediaUploadGrant(string Grant, string MediaUrl);
 
 public sealed class WebSocketMediaPublisher(Func<Guid, CancellationToken, Task<MediaUploadGrant>> grants,
-    Action requestKeyFrame, bool hasAudio, ILogger<WebSocketMediaPublisher>? logger = null) : IAsyncDisposable
+    Action requestKeyFrame, bool hasAudio, ILogger<WebSocketMediaPublisher>? logger = null,
+    Func<TimeSpan, CancellationToken, Task>? retryWait = null) : IAsyncDisposable
 {
     private readonly ILogger log = logger ?? NullLogger<WebSocketMediaPublisher>.Instance;
+    private readonly Func<TimeSpan, CancellationToken, Task> waitBeforeRetry = retryWait ?? Task.Delay;
     private readonly object gate = new();
     private readonly CancellationTokenSource stop = new();
     private Task? worker;
@@ -94,6 +96,7 @@ public sealed class WebSocketMediaPublisher(Func<Guid, CancellationToken, Task<M
         var delay = 1;
         while (!ct.IsCancellationRequested)
         {
+            var transferredMedia = 0;
             using var socket = new ClientWebSocket(); using var connection = CancellationTokenSource.CreateLinkedTokenSource(ct);
             try
             {
@@ -105,24 +108,31 @@ public sealed class WebSocketMediaPublisher(Func<Guid, CancellationToken, Task<M
                 await socket.ConnectAsync(url.Uri, connect.Token);
                 await socket.SendAsync(JsonSerializer.SerializeToUtf8Bytes(new { grant = grant.Grant }).AsMemory(), WebSocketMessageType.Text, true, connect.Token);
                 var owned = new OwnedMediaQueue(); lock (gate) { queue = owned; Recover(); }
-                delay = 1;
-                var sending = SendAsync(socket, owned, connection.Token); var receiving = ReceiveAsync(socket, connection.Token);
+                var sending = SendAsync(socket, owned, connection.Token,
+                    () => Interlocked.Exchange(ref transferredMedia, 1));
+                var receiving = ReceiveAsync(socket, connection.Token);
                 await Task.WhenAny(sending, receiving); connection.Cancel(); socket.Abort();
                 try { await Task.WhenAll(sending, receiving); } catch (Exception ex) when (ex is OperationCanceledException or WebSocketException or InvalidDataException) { }
             }
             catch (Exception ex) when (!ct.IsCancellationRequested) { log.LogWarning("Discord media upload unavailable: {ErrorType}; retrying", ex.GetType().Name); }
             finally { connection.Cancel(); socket.Abort(); lock (gate) { queue?.Clear(); queue = null; recovery = true; } }
-            try { await Task.Delay(TimeSpan.FromSeconds(delay), ct); } catch (OperationCanceledException) { break; }
+            if (Volatile.Read(ref transferredMedia) != 0) delay = 1;
+            try { await waitBeforeRetry(TimeSpan.FromSeconds(delay), ct); } catch (OperationCanceledException) { break; }
             delay = Math.Min(30, delay * 2);
         }
     }
-    private static async Task SendAsync(ClientWebSocket socket, OwnedMediaQueue owned, CancellationToken ct)
+    private static async Task SendAsync(
+        ClientWebSocket socket,
+        OwnedMediaQueue owned,
+        CancellationToken ct,
+        Action mediaTransferred)
     {
         while (true)
         {
             var sample = await owned.ReadAsync(ct);
             using var send = CancellationTokenSource.CreateLinkedTokenSource(ct); send.CancelAfter(TimeSpan.FromSeconds(5));
             await socket.SendAsync(MediaWireCodec.Encode(sample).AsMemory(), WebSocketMessageType.Binary, true, send.Token);
+            if (sample.Type is 2 or 3) mediaTransferred();
         }
     }
     private async Task ReceiveAsync(ClientWebSocket socket, CancellationToken ct)
